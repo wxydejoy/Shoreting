@@ -23,6 +23,7 @@ datas = [
     (str(ASSETS / "icon.png"), "."),
     (str(ASSETS / "icon.ico"), "."),
     (str(ASSETS / "setup.html"), "."),
+    (str(ASSETS / "chats.html"), "."),
     (str(ROOT / "hub.yaml.example"), "."),
 ]
 binaries = [*hm_binaries, *pn_binaries, *pystray_binaries]
@@ -40,6 +41,8 @@ hiddenimports = [
     "yaml",
     "psutil",
     "pynvml",
+    "dock_hub.media",
+    "dock_hub.reporter",
 ]
 
 a = Analysis(

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>守岸人 · 对话</title>
+  <style>
+    :root { --bg:#0c1016; --panel:#141b24; --line:#243044; --text:#e8eef7; --muted:#8fa3bd; --you:#1e3a5f; --her:#1a2332; --accent:#7dd3fc; --bad:#fca5a5; }
+    * { box-sizing: border-box; }
+    html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:15px/1.55 "Segoe UI", "PingFang SC", system-ui, sans-serif; }
+    body { display:flex; flex-direction:column; }
+    header { padding:18px 22px 12px; border-bottom:1px solid var(--line); background:var(--bg); position:sticky; top:0; z-index:2; }
+    h1 { margin:0; font-size:20px; font-weight:650; letter-spacing:.02em; }
+    .sub { color:var(--muted); font-size:13px; margin-top:4px; }
+    .bar { display:flex; gap:10px; margin-top:12px; }
+    input[type=search], input[type=password] { flex:1; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#0d1218; color:var(--text); }
+    button { cursor:pointer; border:0; border-radius:10px; padding:10px 14px; font-weight:600; background:#243044; color:var(--text); }
+    button.primary { background:#1d4ed8; color:#fff; }
+    main { flex:1; overflow:auto; padding:18px 22px 40px; }
+    .day { color:var(--muted); font-size:12px; letter-spacing:.08em; text-transform:uppercase; margin:22px 0 10px; }
+    .row { display:flex; margin:8px 0; }
+    .row.you { justify-content:flex-end; }
+    .bubble { max-width:min(640px, 86%); padding:10px 14px; border-radius:14px; border:1px solid var(--line); }
+    .you .bubble { background:var(--you); }
+    .her .bubble { background:var(--her); }
+    .who { font-size:11px; color:var(--muted); margin-bottom:4px; }
+    .meta { font-size:11px; color:var(--muted); margin-top:6px; }
+    .pill { display:inline-block; margin:6px 6px 0 0; padding:2px 8px; border-radius:999px; font-size:11px; background:#243044; color:var(--muted); }
+    .pill.bad { background:#3f1d1d; color:var(--bad); }
+    .err { color:var(--bad); font-size:13px; margin-top:6px; }
+    .empty, .gate { max-width:520px; margin:48px auto; color:var(--muted); }
+    .gate { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:22px; }
+    .gate h2 { margin:0 0 8px; font-size:16px; color:var(--text); }
+    .gate .bar { margin-top:14px; }
+    .hide { display:none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>守岸人</h1>
+    <div class="sub">只从今晚起记下原文。更早的对话 Hub 只留了字数。</div>
+    <div class="bar" id="searchBar">
+      <input type="search" id="q" placeholder="搜索她或你说过的话" autocomplete="off" />
+    </div>
+  </header>
+  <main id="feed"></main>
+  <div id="gate" class="gate hide">
+    <h2>局域网查看</h2>
+    <p>填手机设置里同一枚 Hub Token。本机打开不用填。</p>
+    <div class="bar">
+      <input type="password" id="token" placeholder="Token" autocomplete="off" />
+      <button class="primary" id="login" type="button">进入</button>
+    </div>
+    <p id="gateErr" class="err"></p>
+  </div>
+  <script>
+    const feed = document.getElementById("feed");
+    const gate = document.getElementById("gate");
+    const q = document.getElementById("q");
+    const tokenBox = document.getElementById("token");
+    let timer = null;
+
+    function authHeaders() {
+      const t = sessionStorage.getItem("helm_chats_token") || "";
+      return t ? { Authorization: "Bearer " + t } : {};
+    }
+
+    function skillLabel(s) {
+      const name = s.name || s.id;
+      const verb = s.on === false ? "关" : (s.id && /wegame|douyin|steam|cursor/i.test(s.id) ? "启动" : "开");
+      const ok = s.ok === false ? "失败" : "";
+      return verb + name + (ok ? " · " + ok : "");
+    }
+
+    function dayLabel(ts) {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return ts || "";
+      return d.toLocaleDateString("zh-CN", { weekday: "short", month: "numeric", day: "numeric" });
+    }
+
+    function timeLabel(ts) {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function bubble(side, who, text, rec) {
+      const row = document.createElement("div");
+      row.className = "row " + side;
+      const b = document.createElement("div");
+      b.className = "bubble";
+      const w = document.createElement("div");
+      w.className = "who";
+      w.textContent = who;
+      b.appendChild(w);
+      const p = document.createElement("div");
+      p.textContent = text || "（无原文）";
+      b.appendChild(p);
+      if (rec && rec.skills && rec.skills.length) {
+        rec.skills.forEach((s) => {
+          const pill = document.createElement("span");
+          pill.className = "pill" + (s.ok === false ? " bad" : "");
+          pill.textContent = skillLabel(s);
+          b.appendChild(pill);
+        });
+      }
+      if (rec && rec.error) {
+        const e = document.createElement("div");
+        e.className = "err";
+        e.textContent = rec.error;
+        b.appendChild(e);
+      }
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = timeLabel(rec && rec.ts) + (rec && rec.ms ? " · " + rec.ms + "ms" : "");
+      b.appendChild(meta);
+      row.appendChild(b);
+      return row;
+    }
+
+    function render(items) {
+      feed.innerHTML = "";
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "还没有记下原文。对脸说一句之后会出现在这里。";
+        feed.appendChild(empty);
+        return;
+      }
+      let lastDay = "";
+      items.forEach((rec) => {
+        const day = dayLabel(rec.ts);
+        if (day !== lastDay) {
+          const h = document.createElement("div");
+          h.className = "day";
+          h.textContent = day;
+          feed.appendChild(h);
+          lastDay = day;
+        }
+        feed.appendChild(bubble("you", "你", rec.user, rec));
+        feed.appendChild(bubble("her", "守岸人", rec.reply, rec));
+      });
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    async function load() {
+      const query = encodeURIComponent(q.value.trim());
+      const resp = await fetch("/v1/companion/chats?limit=400&q=" + query, {
+        headers: { Accept: "application/json", ...authHeaders() },
+        credentials: "include",
+      });
+      if (resp.status === 401) {
+        gate.classList.remove("hide");
+        document.getElementById("searchBar").classList.add("hide");
+        feed.innerHTML = "";
+        return;
+      }
+      gate.classList.add("hide");
+      document.getElementById("searchBar").classList.remove("hide");
+      const body = await resp.json();
+      render(body.items || []);
+    }
+
+    document.getElementById("login").onclick = async () => {
+      const token = tokenBox.value.trim();
+      document.getElementById("gateErr").textContent = "";
+      const resp = await fetch("/chats/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ token }),
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        document.getElementById("gateErr").textContent = (body.error && body.error.message) || "Token 不对";
+        return;
+      }
+      sessionStorage.setItem("helm_chats_token", token);
+      tokenBox.value = "";
+      load();
+    };
+    q.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(load, 200);
+    });
+    load();
+    setInterval(() => { if (document.visibilityState === "visible") load(); }, 4000);
+  </script>
+</body>
+</html>

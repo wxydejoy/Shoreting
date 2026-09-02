@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
+from dock_hub.chat_log import chats_page_html
 from dock_hub.errors import HubError
 from dock_hub.service import DockHub
+from dock_hub.setup_ui import is_local_client
 
 MAX_BODY = 64 * 1024
 
@@ -66,8 +69,23 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 if path == "/health":
                     self._json(200, hub.health())
                     return
+                if path == "/chats":
+                    self._html(200, chats_page_html(), "text/html; charset=utf-8")
+                    return
+                if path == "/v1/companion/chats":
+                    if not self._chats_ok():
+                        raise HubError("unauthorized", "Token 不正确")
+                    query = parse_qs(parsed.query)
+                    try:
+                        limit = int((query.get("limit") or ["200"])[0] or 200)
+                    except ValueError:
+                        limit = 200
+                    q = unquote((query.get("q") or [""])[0])
+                    self._json(200, hub.companion_chats(limit=limit, query=q))
+                    return
                 if path == "/v1/snapshot":
                     self._require_auth()
+                    hub.note_presence()
                     self._json(200, hub.snapshot())
                     return
                 if path.startswith("/v1/companion/audio/"):
@@ -93,13 +111,37 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     raise HubError("not_found", "未知接口")
                 if path == "/v1/companion/chat":
                     self._require_auth()
+                    hub.note_presence()
                     body = self._read_json()
                     self._json(200, hub.companion_chat(body))
+                    return
+                if path == "/chats/login":
+                    body = self._read_json()
+                    token = str(body.get("token") or "").strip()
+                    expected = hub.config.token
+                    if not token or not hmac.compare_digest(token, expected):
+                        raise HubError("unauthorized", "Token 不正确")
+                    data = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header(
+                        "Set-Cookie",
+                        "helm_chats=" + token + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000",
+                    )
+                    self.end_headers()
+                    self.wfile.write(data)
                     return
                 if path == "/v1/companion/stop":
                     self._require_auth()
                     self._read_json()
                     self._json(200, hub.companion_stop())
+                    return
+                if path == "/v1/companion/announce":
+                    self._require_auth()
+                    body = self._read_json()
+                    self._json(200, hub.companion_announce(body))
                     return
                 prefix = "/v1/devices/"
                 suffix = "/command"
@@ -113,6 +155,29 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 self._json(200, hub.command(device_id, body))
             except HubError as exc:
                 self._json(exc.status, exc.body())
+
+        def _cookie(self, name: str) -> str:
+            raw = self.headers.get("Cookie") or ""
+            for part in raw.split(";"):
+                if "=" not in part:
+                    continue
+                key, value = part.split("=", 1)
+                if key.strip() == name:
+                    return unquote(value.strip())
+            return ""
+
+        def _chats_ok(self) -> bool:
+            if is_local_client(self.client_address):
+                return True
+            expected = hub.config.token
+            header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
+            bearer = header.strip()
+            if bearer.lower().startswith("bearer "):
+                got = bearer[7:].strip()
+                if got and hmac.compare_digest(got, expected):
+                    return True
+            cookie = self._cookie("helm_chats")
+            return bool(cookie) and hmac.compare_digest(cookie, expected)
 
         def _require_auth(self) -> None:
             header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
@@ -170,6 +235,7 @@ def serve(hub: DockHub, *, blocking: bool = True) -> ThreadingHTTPServer:
     for extra in ips[1:]:
         print(f"             http://{extra}:{hub.config.port}", flush=True)
     print(f"配置向导     http://127.0.0.1:{hub.config.port}/setup  （仅本机）", flush=True)
+    print(f"聊天记录     http://127.0.0.1:{hub.config.port}/chats  （本机直接开；局域网要 Token）", flush=True)
     if hub.config.path:
         print(f"配置         {hub.config.path}", flush=True)
     print("Windows 防火墙请放行入站 TCP 17890：", flush=True)

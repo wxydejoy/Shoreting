@@ -33,6 +33,20 @@ class PcConfig:
 
 
 @dataclass
+class MediaConfig:
+    enabled: bool = True
+
+
+@dataclass
+class MiniLinkConfig:
+    enabled: bool = True
+    base_url: str = "http://10.83.22.121:17891"
+    token: str = "helm-mini-weiekko"
+    pc_ms: int = 1000
+    mijia_ms: int = 15000
+
+
+@dataclass
 class DeviceConfig:
     id: str
     name: str
@@ -58,10 +72,26 @@ class DeviceConfig:
 
 
 @dataclass
+class TethysConfig:
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:8642/v1"
+    model: str = "hermes-agent"
+    api_key: str | None = None
+    timeout_sec: float = 120.0
+    polish: bool = True
+    speak: bool = True
+    ack: str | None = "好。"
+    weixin_notify: bool = True
+    session_key: str = "tethys:wanderer"
+    notify_url: str | None = None
+
+
+@dataclass
 class CompanionConfig:
     enabled: bool = False
     llm_base_url: str = "http://127.0.0.1:11434"
     llm_model: str = "qwen3.5:4b"
+    llm_api_key: str | None = None
     timeout_sec: float = 30.0
     num_ctx: int = 4096
     num_predict: int = 256
@@ -69,6 +99,7 @@ class CompanionConfig:
     tts_timeout_sec: float = 20.0
     tts_deliver: bool = False
     persona: str | None = None
+    tethys: TethysConfig | None = None
 
 
 @dataclass
@@ -79,8 +110,10 @@ class HubConfig:
     port: int = DEFAULT_PORT
     temperature: TemperatureConfig | None = None
     pc: PcConfig | None = None
+    media: MediaConfig | None = None
     devices: list[DeviceConfig] = field(default_factory=list)
     companion: CompanionConfig | None = None
+    mini: MiniLinkConfig | None = None
     path: Path | None = None
 
     def device(self, device_id: str) -> DeviceConfig:
@@ -157,7 +190,9 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     if raw.get("temperature"):
         temperature = _parse_temperature(raw["temperature"])
     pc = _parse_pc(raw.get("pc"))
+    media = _parse_media(raw.get("media"))
     companion = _parse_companion(raw.get("companion"))
+    mini = _parse_mini(raw.get("mini"))
 
     devices: list[DeviceConfig] = []
     seen: set[str] = set()
@@ -175,8 +210,10 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         port=port,
         temperature=temperature,
         pc=pc,
+        media=media,
         devices=devices,
         companion=companion,
+        mini=mini,
         path=path,
     )
 
@@ -206,6 +243,8 @@ def _parse_device(raw: dict[str, Any]) -> DeviceConfig:
     if not ident or not name or not dtype:
         raise ValueError("devices[] 需要 id、name、type")
     _check_id(ident)
+    if ident == "media":
+        raise ValueError("media 是保留 id，不能放进 devices[]")
     if dtype not in DEVICE_TYPES:
         raise ValueError(f"不支持的 type：{dtype}（{ident}）")
 
@@ -262,6 +301,37 @@ def _parse_pc(raw: Any) -> PcConfig | None:
     )
 
 
+def _parse_media(raw: Any) -> MediaConfig:
+    if raw is None:
+        return MediaConfig(enabled=True)
+    if raw is False:
+        return MediaConfig(enabled=False)
+    if not isinstance(raw, dict):
+        raise ValueError("media 必须是对象，或 enabled: false")
+    if raw.get("enabled") is False:
+        return MediaConfig(enabled=False)
+    return MediaConfig(enabled=True)
+
+
+def _parse_mini(raw: Any) -> MiniLinkConfig:
+    if raw is False:
+        return MiniLinkConfig(enabled=False)
+    if raw is None:
+        return MiniLinkConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("mini 必须是对象，或 enabled: false")
+    if raw.get("enabled") is False:
+        return MiniLinkConfig(enabled=False)
+    token = str(raw.get("token") or "helm-mini-weiekko").strip() or "helm-mini-weiekko"
+    return MiniLinkConfig(
+        enabled=True,
+        base_url=str(raw.get("base_url") or "http://10.83.22.121:17891").strip(),
+        token=token,
+        pc_ms=max(400, int(raw.get("pc_ms") or 1000)),
+        mijia_ms=max(5000, int(raw.get("mijia_ms") or 15000)),
+    )
+
+
 def _parse_companion(raw: Any) -> CompanionConfig | None:
     if raw is None or raw is False:
         return None
@@ -274,10 +344,35 @@ def _parse_companion(raw: Any) -> CompanionConfig | None:
     tts = raw.get("tts") if isinstance(raw.get("tts"), dict) else {}
     persona = str(raw["persona"]).strip() if raw.get("persona") else None
     tts_url = str(tts.get("base_url") or "").strip() or None
+    api_key = str(llm.get("api_key") or "").strip() or None
+    tethys_raw = raw.get("tethys") if isinstance(raw.get("tethys"), dict) else None
+    tethys: TethysConfig | None = None
+    if tethys_raw is not None:
+        tethys_enabled = tethys_raw.get("enabled", True)
+        if tethys_enabled is not False:
+            ack_raw = tethys_raw.get("ack", "好。")
+            ack = None if ack_raw is False or ack_raw is None else str(ack_raw).strip() or None
+            tethys_key = str(tethys_raw.get("api_key") or "").strip() or None
+            session_key = str(tethys_raw.get("session_key") or "tethys:wanderer").strip() or "tethys:wanderer"
+            notify_url = str(tethys_raw.get("notify_url") or "").strip() or None
+            tethys = TethysConfig(
+                enabled=True,
+                base_url=str(tethys_raw.get("base_url") or "http://127.0.0.1:8642/v1").strip(),
+                model=str(tethys_raw.get("model") or "hermes-agent").strip(),
+                api_key=tethys_key,
+                timeout_sec=float(tethys_raw.get("timeout_sec") or 120),
+                polish=bool(tethys_raw.get("polish", True)),
+                speak=bool(tethys_raw.get("speak", True)),
+                ack=ack,
+                weixin_notify=bool(tethys_raw.get("weixin_notify", True)),
+                session_key=session_key,
+                notify_url=notify_url,
+            )
     return CompanionConfig(
         enabled=True,
         llm_base_url=str(llm.get("base_url") or "http://127.0.0.1:11434").strip(),
         llm_model=str(llm.get("model") or "qwen3.5:4b").strip(),
+        llm_api_key=api_key,
         timeout_sec=float(llm.get("timeout_sec") or 30),
         num_ctx=int(llm.get("num_ctx") or 4096),
         num_predict=int(llm.get("num_predict") or 256),
@@ -285,6 +380,7 @@ def _parse_companion(raw: Any) -> CompanionConfig | None:
         tts_timeout_sec=float(tts.get("timeout_sec") or 20),
         tts_deliver=bool(tts.get("deliver", False)),
         persona=persona or None,
+        tethys=tethys,
     )
 
 
@@ -397,6 +493,8 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             "cpu_temp": config.pc.cpu_temp,
             "gpu": config.pc.gpu,
         }
+    if config.media is not None:
+        raw["media"] = {"enabled": config.media.enabled}
     if config.companion is not None:
         companion: dict[str, Any] = {"enabled": config.companion.enabled}
         if config.companion.enabled:
@@ -405,6 +503,8 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
                 "model": config.companion.llm_model,
                 "timeout_sec": config.companion.timeout_sec,
             }
+            if config.companion.llm_api_key:
+                llm["api_key"] = config.companion.llm_api_key
             if config.companion.num_ctx != 4096:
                 llm["num_ctx"] = config.companion.num_ctx
             if config.companion.num_predict != 256:
@@ -419,7 +519,39 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
                 companion["tts"] = tts
             if config.companion.persona:
                 companion["persona"] = config.companion.persona
+            if config.companion.tethys and config.companion.tethys.enabled:
+                tethys: dict[str, Any] = {
+                    "enabled": True,
+                    "base_url": config.companion.tethys.base_url,
+                    "model": config.companion.tethys.model,
+                    "timeout_sec": config.companion.tethys.timeout_sec,
+                    "polish": config.companion.tethys.polish,
+                    "speak": config.companion.tethys.speak,
+                }
+                if config.companion.tethys.api_key:
+                    tethys["api_key"] = config.companion.tethys.api_key
+                if config.companion.tethys.ack is None:
+                    tethys["ack"] = False
+                elif config.companion.tethys.ack != "好。":
+                    tethys["ack"] = config.companion.tethys.ack
+                if not config.companion.tethys.weixin_notify:
+                    tethys["weixin_notify"] = False
+                if config.companion.tethys.session_key != "tethys:wanderer":
+                    tethys["session_key"] = config.companion.tethys.session_key
+                if config.companion.tethys.notify_url:
+                    tethys["notify_url"] = config.companion.tethys.notify_url
+                companion["tethys"] = tethys
         raw["companion"] = companion
+    if config.mini is not None:
+        mini: dict[str, Any] = {"enabled": config.mini.enabled}
+        if config.mini.enabled:
+            mini["base_url"] = config.mini.base_url
+            mini["token"] = config.mini.token
+            if config.mini.pc_ms != 1000:
+                mini["pc_ms"] = config.mini.pc_ms
+            if config.mini.mijia_ms != 15000:
+                mini["mijia_ms"] = config.mini.mijia_ms
+        raw["mini"] = mini
     return raw
 
 

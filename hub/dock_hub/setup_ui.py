@@ -193,6 +193,8 @@ def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
         raw["temperature"] = dumped["temperature"]
     if dumped.get("companion") is not None:
         raw["companion"] = dumped["companion"]
+    if dumped.get("mini") is not None:
+        raw["mini"] = dumped["mini"]
     return raw
 
 

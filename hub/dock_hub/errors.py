@@ -9,6 +9,7 @@ STATUS_BY_CODE = {
     "mijia_error": 502,
     "action_error": 502,
     "companion_unavailable": 502,
+    "media_error": 502,
 }
 
 

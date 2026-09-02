@@ -1,6 +1,6 @@
 # 岸亭 Mini
 
-Mac Mini 上的**本机监控**：CPU / 内存 / GPU，给岸亭主屏 CPU 块的**第二行**用。
+Mac Mini 上的**本机监控**：CPU / 内存 / GPU，给岸亭主屏 CPU 块的**第二行**用。也接收 Windows Hub 的书桌上报，落盘到 `~/.config/helm-mini/`。
 
 这不是 Hub，也不是 TTS / Ollama。
 
@@ -27,9 +27,11 @@ uv run helm-mini
 curl -s http://127.0.0.1:17891/health
 curl -s http://127.0.0.1:17891/v1/snapshot \
   -H "Authorization: Bearer helm-mini-weiekko"
+curl -s http://127.0.0.1:17891/v1/desk \
+  -H "Authorization: Bearer helm-mini-weiekko"
 ```
 
-`/health` 应带 `"service":"helm-mini"`。
+`/health` 应带 `"service":"helm-mini"`。`GET /v1/snapshot` 形状不变。Hub 用 `POST /v1/telemetry` 上报 Windows / 米家；最新一份在 `desk-state.json`，按日 jsonl 在 `log/`（留两天）。电脑约 1 秒一条，米家由 Hub 侧放慢到十几秒。
 
 登录项（当前用户，开机自启）：
 

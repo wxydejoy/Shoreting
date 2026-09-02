@@ -65,6 +65,7 @@ class SetupWizardTest(unittest.TestCase):
         )
         self.assertEqual(raw["companion"]["llm"]["model"], "qwen3.5:4b")
         self.assertEqual(raw["companion"]["tts"]["base_url"], "http://127.0.0.1:18100")
+        self.assertEqual(raw["mini"]["base_url"], "http://10.83.22.121:17891")
 
     def test_setup_api_localhost_only(self) -> None:
         cfg = parse_config(
@@ -74,10 +75,12 @@ class SetupWizardTest(unittest.TestCase):
                 "host": "127.0.0.1",
                 "port": 0,
                 "devices": [],
+                "mini": False,
             }
         )
         hub = DockHub(cfg)
         self.addCleanup(hub.pc.stop)
+        self.addCleanup(hub.reporter.stop)
         server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(hub))
         port = server.server_address[1]
         thread = threading.Thread(target=server.serve_forever, daemon=True)

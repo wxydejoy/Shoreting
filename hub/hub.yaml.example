@@ -14,10 +14,23 @@ pc:
   cpu_temp: true
   gpu: true
 
+# 系统媒体。整段删掉则默认开启；enabled: false → snapshot.media = null
+media:
+  enabled: true
+
+# 把 Windows / 米家状态报到 Mini 落盘。对话时 Hub 只读内存，不再现拉。
+# 整段删掉则用下面默认值；enabled: false 关闭上报
+mini:
+  enabled: true
+  base_url: "http://10.83.22.121:17891"
+  token: helm-mini-weiekko
+  pc_ms: 1000          # 电脑约 1 秒一次
+  mijia_ms: 15000      # 米家约 15 秒一次
+
 # 桌面伴侣（本地 LLM + Mini TTS）。整段删掉或 enabled: false → snapshot.companion = null
 # Hub 在 Windows 时填 Mini 局域网 IP，不要填 127.0.0.1
 # 默认 tts.deliver 为 false：Mini 本机出声；Hub 按句 cue，chat 仍等全文
-# 灯/温度/电脑由 Hub 写入 system「后台状态」，不要指望手机传
+# 灯/温度由 Hub 定时上报 Mini；对话只读缓存，没问不要提
 # companion:
 #   enabled: true
 #   llm:
@@ -28,6 +41,19 @@ pc:
 #     base_url: "http://10.83.22.121:18100"
 #     timeout_sec: 20
 #     # deliver: true   # 才把 wav 交给手机。默认 false：Mini 本机出声
+#   # 泰缇斯：Mini 上 Hermes API（复杂任务）。见 companion/tethys/README.md
+#   tethys:
+#     enabled: true
+#     base_url: "http://10.83.22.121:8642/v1"
+#     model: hermes-agent
+#     api_key: "与 Hermes API_SERVER_KEY 相同"
+#     timeout_sec: 120
+#     polish: true
+#     speak: true
+#     ack: "好。"
+#     weixin_notify: true          # 复杂任务全文同步微信；false 关闭
+#     session_key: tethys:wanderer # Hermes 记忆范围，不要和微信 session 混用
+#     # notify_url: "http://10.83.22.121:8643/v1/weixin"  # 默认从 base_url 推 :8643
 
 # 主屏那一个温度源（只允许一个；不要就整段删掉）
 temperature:
@@ -52,6 +78,14 @@ devices:
     mijia_name: 显示器插座
     on_prop: "on"
 
+  # 口头「开空调」不必再写这条：登录米家后，账号里带开关的设备会自动进口头技能
+  # 主屏要显示时才加进 devices
+  # - id: ac
+  #   name: 空调
+  #   type: switch
+  #   mijia_name: 客厅空调
+  #   on_prop: "on"
+
   # action：点 logo 在本机启动。program 只留在电脑上，不会发给手机
   - id: steam
     name: Steam
@@ -67,3 +101,11 @@ devices:
       # 可选：用来判断是否在运行的进程名（默认用 exe 文件名）
       # 启动器用 launcher.exe 时，要写真正的游戏进程，否则磁贴会一直亮或一直灭
       # process: ["steam.exe"]
+
+  # 口头「启动无畏契约 / 打瓦」。用 WeGame 协议，不要直接跑 launcher.exe（会要管理员）
+  # - id: wegame
+  #   name: 无畏契约
+  #   type: action
+  #   run:
+  #     program: "wegame://action=StartFor&game_id=2001715"
+  #     process: ["VALORANT-Win64-Shipping.exe"]

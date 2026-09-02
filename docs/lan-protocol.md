@@ -71,6 +71,7 @@ v1 不轮换 token。局域网 + 长 token 足够。
 | `POST /v1/devices/{id}/command` | 10 秒 |
 | `POST /v1/companion/chat` | 30 秒 |
 | `POST /v1/companion/stop` | 2 秒 |
+| `POST /v1/companion/announce` | 8 秒 |
 | `GET /v1/companion/audio/{id}` | 30 秒 |
 
 Hub 应在超时前返回。米家过慢则 `502` + `mijia_error`。
@@ -102,7 +103,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 
 ## 4. 接口一览
 
-一共 6 个（companion 可关）：
+一共 8 个（companion 可关）：
 
 | 方法 | 路径 | 鉴权 | 用途 |
 |---|---|---|---|
@@ -111,7 +112,9 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `POST` | `/v1/devices/{id}/command` | 是 | 控制一个设备，或触发一个 logo 动作 |
 | `POST` | `/v1/companion/chat` | 是 | 桌面伴侣一轮对话（配置关闭则 404） |
 | `POST` | `/v1/companion/stop` | 是 | 打断当前说话，立刻停 Mini 喇叭 |
+| `POST` | `/v1/companion/announce` | 是 | 让守岸人说一句（微信侧路；安卓不用打） |
 | `GET` | `/v1/companion/audio/{id}` | 是 | 伴侣 wav（`audio_id` 为空或关闭则不要打） |
+| `GET` | `/v1/companion/chats` | 是（本机可免） | 对话原文列表。浏览器页是 `GET /chats` |
 
 没有单独的「读温度」「读电脑性能」「跑脚本」「读正在播放」接口。米家温度、logo、电脑监控、正在播放、伴侣是否就绪都在 snapshot 里；点击 logo 和播放键走同一个 command；说话走 companion/chat，再喊唤醒词打断走 companion/stop，声音走 companion/audio。
 
@@ -240,7 +243,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 - 配置关闭或整段删掉 → snapshot 的 `companion` 为 `null`（键保留，值为 `null`）
 - 不依赖米家。`hub.mijia` 为 `login_required` 时，`companion` 仍应照常返回
 - 禁止把模型路径、prompt、API key、参考音频路径放进 snapshot
-- 安卓只发用户这句话；室温 / 灯 / pc 由 Hub 写成 system 里的「后台状态」，不要拼进用户消息，也不要让手机拼人设
+- 安卓只发用户这句话。Hub **不要**为 chat 先打 snapshot。灯/开关若要口头操作：模型写 `ACTION: {id}.on|off`，启动项写 `ACTION: {id}.run`，或用户话里带「关灯 / 开空调 / 关掉加湿器 / 启动无畏契约」时 Hub 兜底。米家登录后，账号里带 on 类属性的设备都会进口头技能，不必写进主屏 `hub.yaml`。口令可绑到这些 id，持久化到 `companion-aliases.yaml`。不要把当前开没开写进提示词。
 
 ---
 
@@ -545,7 +548,7 @@ Content-Type: application/json
 
 Hub 应在超时前返回。4B 关思考仍慢则 `502`，不要让安卓一直转。默认 `tts.deliver` 为 false：Hub 流式读 Ollama，**每写出一句（。！？）就 cue Mini TTS**，chat 仍等全文再 `200`。TTS 侧同轮各句接到同一播放队列，不要互相打断；只有 `POST /v1/companion/stop` 才停喇叭。TTS 失败**不要**把整段打成 502。安卓再喊「岸宝」时打 stop，不要等这一轮 chat 结束。
 
-一期不根据回复去开灯或开程序。
+对方明确要开关灯/空调/其它带开关的米家设备，或启动白名单程序时，Hub 可执行 on/off 或 `run`（模型 `ACTION:` 行或口语兜底）。米家账号里能开关的设备在登录后自动可口头操作，不必出现在主屏。不要执行未绑定的 id，闲聊不要当命令。
 
 ### 6.5 `GET /v1/companion/audio/{id}`
 
@@ -580,6 +583,22 @@ Authorization: Bearer <token>
 ```
 
 TTS 没配或 Mini 暂时连不上仍 `200`（字幕和唤醒不受影响）。进行中的 `chat` 若大脑还没返回，回来后不要再 cue TTS。
+
+### 6.7 `POST /v1/companion/announce`
+
+需要 token。配置未开启 companion → `404` `not_found`。
+
+给**微信 Hermes** 用：让守岸人在书桌喇叭说 1～3 句，**不走**对话调度、不调泰缇斯。安卓不要打这个接口。
+
+```http
+POST /v1/companion/announce
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"text": "灯已经关了。"}
+```
+
+**200** 形状与 `chat` 相同（`text` + `audio_id`）。空 `text` → `400`。
 
 ---
 
@@ -757,7 +776,7 @@ devices:
 
 **Windows**
 
-- GUI 程序（`.exe`）必须 `wait: false`。建议 `creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`（或 `CREATE_NEW_CONSOLE`），避免子进程挂在 Hub 上、Hub 退出时被杀掉。
+- GUI 程序（`.exe`）必须 `wait: false`。Windows 上走 `os.startfile`（ShellExecute），才能启动需要提权的程序；`CreateProcess`/`DETACHED_PROCESS` 会报 WinError 740。协议链接（`steam://`、`wegame://`）同样 startfile。脚本仍可用 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`。
 - `.ps1` 必须走 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <绝对路径>`，不要把脚本路径当成 `program` 直接 Popen。
 - `.bat` / `.cmd` 走 `program: C:\Windows\System32\cmd.exe`，`args: ["/c", "C:\\dock\\scripts\\foo.bat"]`。
 - `program` / `args` 用配置里的字面量。禁止 `shell=True`，禁止拼接请求 JSON。
@@ -810,7 +829,7 @@ devices:
 - 不要新增安卓还没实现的接口而不改本文档
 - 不要返回配置外的设备
 - 不要接受安卓传来的可执行路径、参数或脚本正文
-- 不要为电脑监控或播放控制再开未写进本文档的 HTTP 接口（一律走 snapshot / 现有 command）。伴侣对话是 `/v1/companion/chat`，打断是 `/v1/companion/stop`，声音是 `/v1/companion/audio/{id}`
+- 不要为电脑监控或播放控制再开未写进本文档的 HTTP 接口（一律走 snapshot / 现有 command）。伴侣对话是 `/v1/companion/chat`，打断是 `/v1/companion/stop`，微信侧路出声是 `/v1/companion/announce`，声音是 `/v1/companion/audio/{id}`
 - 不要在 `pc` 里返回进程列表或可执行路径
 - 不要把 `media` 当成 `devices[]` 里的一项；也不要用 `media` 做设备 id
 - 不要提供图标文件接口；`icon` 只发短名，由安卓用 Remix Icon 渲染
@@ -880,6 +899,12 @@ curl -s http://HOST:17890/v1/companion/stop \
   -H "Authorization: Bearer TOKEN" \
   -X POST
 
+# 微信侧路：让守岸人说一句（安卓不用）
+curl -s http://HOST:17890/v1/companion/announce \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"灯已经关了。"}'
+
 # 有 audio_id 时拉 wav（安卓只连 Hub，不要直连 Mini :18100）
 curl -s http://HOST:17890/v1/companion/audio/AUDIO_ID \
   -H "Authorization: Bearer TOKEN" \
@@ -915,16 +940,22 @@ Windows Hub 继续报 Win 的 CPU / 内存 / GPU。Mac Mini 另开一个小服�
 |---|---|---|---|
 | `GET` | `/health` | 否 | `service` 必须是 `helm-mini` |
 | `GET` | `/v1/snapshot` | Token 非空时要 | `{ "protocol": 1, "service": "helm-mini", "pc": { … } }` |
+| `GET` | `/v1/desk` | Token 非空时要 | `{ "protocol": 1, "service": "helm-mini", "desk": { windows, mini, updated_at } }` |
+| `POST` | `/v1/telemetry` | Token 非空时要 | Hub 上报 Windows `pc` / `media` / `devices` / `temperature`；响应 `desk` 为合并后的最新一份 |
 
-`pc` 字段与 **5.3** 相同（`online` / `cpu` / `memory` / `gpu`）。Mini 没有 FPS、没有米家。GPU 名如 `M4`。安卓约 3 秒拉一次。
+`GET /v1/snapshot` **不要改形状**（安卓 CPU 第二行只认 `pc`）。书桌落盘是另一条口：Hub 约 **1 秒** POST 一次电脑状态，米家缓存约 **15 秒** 才刷新；Mini 把最新一份写到 `~/.config/helm-mini/desk-state.json`，按日 jsonl 留两天。守岸人对话读 Hub 内存里的 `desk`，不要在 chat 路径再 GET 米家或 Mini。
+
+`pc` 字段与 **5.3** 相同（`online` / `cpu` / `memory` / `gpu`）。Mini 没有 FPS、没有米家。GPU 名如 `M4`。安卓约 3 秒拉一次 snapshot。
 
 ```bash
 curl -s http://MINI:17891/health
 curl -s http://MINI:17891/v1/snapshot \
   -H "Authorization: Bearer helm-mini-weiekko"
+curl -s http://MINI:17891/v1/desk \
+  -H "Authorization: Bearer helm-mini-weiekko"
 ```
 
-通过标准：health 的 `service` 为 `helm-mini`；snapshot 有 `pc.cpu.percent`、`pc.memory.percent`；读得到则有 `pc.gpu`。
+通过标准：health 的 `service` 为 `helm-mini`；snapshot 有 `pc.cpu.percent`、`pc.memory.percent`；读得到则有 `pc.gpu`。`POST /v1/telemetry` 后 `GET /v1/desk` 能看到 `desk.windows` 与 `desk.mini`。
 
 ---
 

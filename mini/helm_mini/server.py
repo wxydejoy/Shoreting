@@ -8,9 +8,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from helm_mini.sampler import MiniSampler
+from helm_mini.telemetry import TelemetryStore
 
 PROTOCOL = 1
 SERVICE = "helm-mini"
+MAX_BODY = 128 * 1024
 
 
 def lan_ips() -> list[str]:
@@ -43,7 +45,12 @@ def lan_ips() -> list[str]:
     return found or ["127.0.0.1"]
 
 
-def make_handler(sampler: MiniSampler, token: str, name: str) -> type[BaseHTTPRequestHandler]:
+def make_handler(
+    sampler: MiniSampler,
+    token: str,
+    name: str,
+    store: TelemetryStore | None = None,
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -76,9 +83,55 @@ def make_handler(sampler: MiniSampler, token: str, name: str) -> type[BaseHTTPRe
                         },
                     )
                     return
+                if path == "/v1/desk":
+                    self._require_auth()
+                    body = (store.latest() if store else {}) or {}
+                    self._json(
+                        200,
+                        {
+                            "protocol": PROTOCOL,
+                            "service": SERVICE,
+                            "desk": body,
+                        },
+                    )
+                    return
                 self._error(404, "not_found", "未知接口")
             except AuthError as exc:
                 self._error(exc.status, exc.code, exc.message)
+
+        def do_POST(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path.rstrip("/") or "/"
+            try:
+                if path != "/v1/telemetry":
+                    self._error(404, "not_found", "未知接口")
+                    return
+                self._require_auth()
+                if store is None:
+                    self._error(503, "unavailable", "未开启落盘")
+                    return
+                body = self._read_json()
+                latest = store.ingest_windows(body, sampler.snapshot())
+                self._json(200, {"ok": True, "service": SERVICE, "desk": latest})
+            except AuthError as exc:
+                self._error(exc.status, exc.code, exc.message)
+            except ValueError as exc:
+                self._error(400, "bad_request", str(exc))
+
+        def _read_json(self) -> dict[str, Any]:
+            try:
+                length = int(self.headers.get("Content-Length") or "0")
+            except ValueError:
+                length = 0
+            if length < 0 or length > MAX_BODY:
+                raise ValueError("请求体太大")
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                parsed = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("JSON 无法解析") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError("JSON 必须是对象")
+            return parsed
 
         def _require_auth(self) -> None:
             if not token:
@@ -110,6 +163,13 @@ class AuthError(Exception):
         self.message = message
 
 
-def serve(host: str, port: int, sampler: MiniSampler, token: str, name: str) -> ThreadingHTTPServer:
-    httpd = ThreadingHTTPServer((host, port), make_handler(sampler, token, name))
+def serve(
+    host: str,
+    port: int,
+    sampler: MiniSampler,
+    token: str,
+    name: str,
+    store: TelemetryStore | None = None,
+) -> ThreadingHTTPServer:
+    httpd = ThreadingHTTPServer((host, port), make_handler(sampler, token, name, store))
     return httpd

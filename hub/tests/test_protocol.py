@@ -42,6 +42,7 @@ class ProtocolTest(unittest.TestCase):
                         "path": str(root / "gone.exe"),
                     },
                 ],
+                "mini": False,
             }
         )
         self.hub = DockHub(cfg)
@@ -96,6 +97,10 @@ class ProtocolTest(unittest.TestCase):
         self.assertFalse(body["devices"][1]["online"])
         self.assertIn("pc", body)
         self.assertIsNone(body["pc"])
+        self.assertIn("media", body)
+        self.assertIsNotNone(body["media"])
+        self.assertTrue(body["media"]["online"])
+        self.assertIn("playing", body["media"])
         self.assertIn("companion", body)
         self.assertIsNone(body["companion"])
 
@@ -133,6 +138,38 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body["error"]["code"], "unsupported")
 
+    def test_media_toggle(self) -> None:
+        status, body = self._request("POST", "/v1/devices/media/command", {"media": "toggle"})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["online"])
+        self.assertTrue(body["playing"])
+        status, body = self._request("POST", "/v1/devices/media/command", {"media": "toggle"})
+        self.assertEqual(status, 200)
+        self.assertFalse(body["playing"])
+
+    def test_media_rejects_on(self) -> None:
+        status, body = self._request("POST", "/v1/devices/media/command", {"on": True})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"]["code"], "unsupported")
+
+    def test_action_rejects_media(self) -> None:
+        status, body = self._request("POST", "/v1/devices/steam/command", {"media": "toggle"})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"]["code"], "unsupported")
+
+    def test_companion_chats_page(self) -> None:
+        status, body = self._request("GET", "/v1/companion/chats", token=None)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["items"], [])
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/chats")
+        resp = conn.getresponse()
+        html = resp.read().decode("utf-8")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("text/html", resp.getheader("Content-Type") or "")
+        self.assertIn("守岸人", html)
+        conn.close()
+
     def test_companion_disabled_is_404(self) -> None:
         status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 404)
@@ -141,6 +178,9 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(body["error"]["code"], "not_found")
         status, body = self._request("POST", "/v1/companion/stop", {})
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error"]["code"], "not_found")
+        status, body = self._request("POST", "/v1/companion/announce", {"text": "灯关了。"})
         self.assertEqual(status, 404)
         self.assertEqual(body["error"]["code"], "not_found")
 
@@ -178,6 +218,33 @@ devices:
                 }
             )
 
+    def test_rejects_reserved_media_id(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_config(
+                {
+                    "name": "x",
+                    "token": "ok-token",
+                    "devices": [
+                        {"id": "media", "name": "媒体", "type": "action", "path": "/bin/true"}
+                    ],
+                }
+            )
+
+    def test_media_disabled_is_null(self) -> None:
+        cfg = parse_config(
+            {
+                "name": "study",
+                "token": "secret-token-value",
+                "media": {"enabled": False},
+                "devices": [],
+                "mini": False,
+            }
+        )
+        hub = DockHub(cfg)
+        snap = hub.snapshot()
+        self.assertIn("media", snap)
+        self.assertIsNone(snap["media"])
+
     def test_pc_enabled_in_snapshot(self) -> None:
         cfg = parse_config(
             {
@@ -185,6 +252,7 @@ devices:
                 "token": "secret-token-value",
                 "pc": {"enabled": True, "sample_ms": 1000, "gpu": False, "cpu_temp": False},
                 "devices": [],
+                "mini": False,
             }
         )
         hub = DockHub(cfg)

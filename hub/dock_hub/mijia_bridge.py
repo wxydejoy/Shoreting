@@ -4,11 +4,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import re
 
 from mijiaAPI import mijiaAPI, get_device_info
 from mijiaAPI.errors import ERROR_CODE, GetDeviceInfoError
 
-from dock_hub.config import DeviceConfig, TemperatureConfig
+from dock_hub.config import DeviceConfig, TemperatureConfig, ID_RE
 
 OFFLINE_CODES = {
     -10007,
@@ -37,6 +38,7 @@ class BoundDevice:
     last_on: bool | None = None
     last_brightness: int | None = None
     missing: str | None = None
+    voice_only: bool = False
 
 
 @dataclass
@@ -130,6 +132,9 @@ def login_or_qr(
     return client
 
 
+ON_PROP_CANDIDATES = ("on", "switch-status", "power", "switch")
+
+
 def bind_from_config(
     api: mijiaAPI,
     devices: list[DeviceConfig],
@@ -143,6 +148,12 @@ def bind_from_config(
         session.devices[cfg.id] = _bind_device(cfg, listed)
     if temperature is not None:
         session.temperature = _bind_temperature(temperature, listed)
+    taken_names = {cfg.mijia_name for cfg in devices if cfg.is_mijia and cfg.mijia_name}
+    if temperature is not None:
+        taken_names.add(temperature.mijia_name)
+    taken_ids = set(session.devices)
+    for extra in discover_switchable(listed, taken_names=taken_names, taken_ids=taken_ids):
+        session.devices[extra.cfg.id] = extra
     return session
 
 
@@ -180,6 +191,68 @@ def _bind_device(cfg: DeviceConfig, listed: dict[str, dict[str, Any]]) -> BoundD
         on_prop=on_prop,
         brightness_prop=brightness_prop,
     )
+
+
+def discover_switchable(
+    listed: dict[str, dict[str, Any]],
+    *,
+    taken_names: set[str],
+    taken_ids: set[str],
+) -> list[BoundDevice]:
+    """Bind every Mijia device that has an on-like property, except those already on the dock."""
+    extras: list[BoundDevice] = []
+    used = set(taken_ids)
+    for name, raw in listed.items():
+        if not name or name in taken_names:
+            continue
+        did = str(raw.get("did") or "").strip()
+        model = raw.get("model")
+        if not did or not isinstance(model, str):
+            continue
+        try:
+            info = get_device_info(model, cache_path=_spec_cache())
+        except GetDeviceInfoError:
+            continue
+        props = _alias_props(info.get("properties", []))
+        on_prop = None
+        for candidate in ON_PROP_CANDIDATES:
+            on_prop = _find_prop(props, candidate)
+            if on_prop:
+                break
+        if on_prop is None:
+            continue
+        ident = _voice_device_id(did, used)
+        used.add(ident)
+        cfg = DeviceConfig(
+            id=ident,
+            name=name,
+            type="switch",
+            mijia_name=name,
+            on_prop=on_prop.name,
+        )
+        extras.append(
+            BoundDevice(
+                cfg=cfg,
+                did=did,
+                model=model,
+                on_prop=on_prop,
+                voice_only=True,
+            )
+        )
+    return extras
+
+
+def _voice_device_id(did: str, used: set[str]) -> str:
+    base = "m" + re.sub(r"[^A-Za-z0-9._-]", "-", did).strip("-._")
+    if not base or base == "m" or not ID_RE.match(base):
+        base = "m-dev"
+    ident = base[:64]
+    n = 2
+    while ident in used or not ID_RE.match(ident):
+        suffix = f"-{n}"
+        ident = (base[: 64 - len(suffix)] + suffix)
+        n += 1
+    return ident
 
 
 def _bind_temperature(
@@ -256,7 +329,7 @@ def query_params(session: MijiaSession) -> list[dict[str, Any]]:
         if temp.humidity_prop:
             params.append(_param(temp.did, temp.humidity_prop))
     for bound in session.devices.values():
-        if not bound.did:
+        if bound.voice_only or not bound.did:
             continue
         if bound.on_prop:
             params.append(_param(bound.did, bound.on_prop))
