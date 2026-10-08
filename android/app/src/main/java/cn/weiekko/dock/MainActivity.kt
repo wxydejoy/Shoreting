@@ -47,8 +47,8 @@ import cn.weiekko.dock.voice.WakeWordService
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
     private val viewModel: DockViewModel by viewModels()
-    private var powerReceiverRegistered = false
     private var transcriptReceiverRegistered = false
     private val requestMic = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -57,17 +57,6 @@ class MainActivity : ComponentActivity() {
             WakeWordService.start(this)
         } else if (!granted) {
             viewModel.setWakeWord(false)
-        }
-    }
-    private val powerReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (!viewModel.ui.value.powerScreen) return
-            when (intent?.action) {
-                Intent.ACTION_POWER_CONNECTED -> {
-                    if (!viewModel.ui.value.hubSleeping) DockPower.wake(this@MainActivity)
-                }
-                Intent.ACTION_POWER_DISCONNECTED -> DockPower.sleep(this@MainActivity)
-            }
         }
     }
     private val transcriptReceiver = object : BroadcastReceiver() {
@@ -203,6 +192,7 @@ class MainActivity : ComponentActivity() {
                                     onSetWeatherEnabled = viewModel::setWeatherEnabled,
                                     onSetWeatherCity = viewModel::setWeatherCity,
                                     onSetWakeWord = viewModel::setWakeWord,
+                                    onSetHubEnabled = viewModel::setHubEnabled,
                                     onEditLayout = viewModel::enterEdit,
                                     onSetModuleVisible = viewModel::setModuleVisible,
                                     onSetModuleChrome = viewModel::setModuleChrome,
@@ -234,28 +224,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (!powerReceiverRegistered) {
-            val filter = IntentFilter().apply {
-                addAction(Intent.ACTION_POWER_CONNECTED)
-                addAction(Intent.ACTION_POWER_DISCONNECTED)
-            }
-            ContextCompat.registerReceiver(
-                this,
-                powerReceiver,
-                filter,
-                ContextCompat.RECEIVER_EXPORTED,
-            )
-            powerReceiverRegistered = true
-        }
         applyPowerState()
-    }
-
-    override fun onStop() {
-        if (powerReceiverRegistered) {
-            unregisterReceiver(powerReceiver)
-            powerReceiverRegistered = false
-        }
-        super.onStop()
     }
 
     override fun onResume() {
@@ -275,11 +244,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         DockPower.dimForHubSleep(this, false)
-        if (DockPower.isPlugged(this)) {
-            DockPower.wake(this)
-        } else {
-            DockPower.keepScreenOn(this, false)
-        }
+        DockPower.keepScreenOn(this, true)
     }
 
     private fun enterHubSleep() {

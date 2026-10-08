@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -45,7 +47,6 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,9 +58,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -73,7 +71,6 @@ import cn.weiekko.dock.data.HubPreferences
 import cn.weiekko.dock.data.TileLook
 import cn.weiekko.dock.data.TileStyle
 import cn.weiekko.dock.data.TypeLook
-import cn.weiekko.dock.power.DockPower
 import kotlin.math.roundToInt
 
 @Composable
@@ -93,6 +90,7 @@ fun SettingsScreen(
     onSetWeatherEnabled: (Boolean) -> Unit = {},
     onSetWeatherCity: (String) -> Unit = {},
     onSetWakeWord: (Boolean) -> Unit = {},
+    onSetHubEnabled: (Boolean) -> Unit = {},
     onEditLayout: () -> Unit = {},
     onSetModuleVisible: (DockModule, Boolean) -> Unit = { _, _ -> },
     onSetModuleChrome: (DockModule, Boolean) -> Unit = { _, _ -> },
@@ -109,22 +107,6 @@ fun SettingsScreen(
     var miniToken by rememberSaveable { mutableStateOf(state.miniConnection.token.ifBlank { MiniConnection.DEFAULT_TOKEN }) }
     var weatherCity by rememberSaveable { mutableStateOf(state.weatherCity) }
     val context = LocalContext.current
-    var adminGranted by remember { mutableStateOf(DockPower.isAdmin(context)) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                adminGranted = DockPower.isAdmin(context)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    val requestAdmin = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) {
-        adminGranted = DockPower.isAdmin(context)
-    }
     val pickVideo = rememberLauncherForActivityResult(
         object : ActivityResultContracts.OpenDocument() {
             override fun createIntent(
@@ -169,11 +151,17 @@ fun SettingsScreen(
         }
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
-            .imePadding()
+            .imePadding(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+    Column(
+        modifier = Modifier
+            .widthIn(max = 780.dp)
+            .fillMaxHeight()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.Top,
@@ -203,18 +191,51 @@ fun SettingsScreen(
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "Hub 填 Windows ${HubConnection.DEFAULT_HOST}:${HubConnection.DEFAULT_PORT}，Mini 填 ${MiniConnection.DEFAULT_HOST}:${MiniConnection.DEFAULT_PORT}，不要填反。",
+            "Hub = 运行岸亭 Hub 的那台机器（现在 ${HubConnection.DEFAULT_HOST}:${HubConnection.DEFAULT_PORT}）。Mac 本机监控会自动跟随这个地址。",
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(18.dp))
+        Text(
+            "连接",
+            style = MaterialTheme.typography.labelLarge,
+            color = colors.primary,
+            modifier = Modifier.padding(start = 6.dp),
+        )
+        Spacer(Modifier.height(6.dp))
         Surface(
             modifier = Modifier.fillMaxWidth(),
             color = colors.surface,
             shape = MaterialTheme.shapes.large,
         ) {
             Column(Modifier.padding(20.dp)) {
-                Text("Windows Hub", style = MaterialTheme.typography.titleMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("连接 Hub", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (state.hubEnabled) {
+                                "已开。主屏跟这台 Hub 同步。"
+                            } else {
+                                "已关。主屏只用手机上的时钟、媒体和天气。地址仍留在下面。"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    Switch(
+                        checked = state.hubEnabled,
+                        onCheckedChange = onSetHubEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.onPrimary,
+                            checkedTrackColor = colors.primary,
+                        ),
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("岸亭 Hub", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = host,
@@ -252,7 +273,7 @@ fun SettingsScreen(
                 )
             }
         }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(10.dp))
         Button(
             onClick = { onTest(host, port, token) },
             enabled = !state.testing,
@@ -280,82 +301,6 @@ fun SettingsScreen(
             }
         }
         Spacer(Modifier.height(20.dp))
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = colors.surface,
-            shape = MaterialTheme.shapes.large,
-        ) {
-            Column(Modifier.padding(20.dp)) {
-                Text("Mac Mini", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "本机 CPU / 内存 / GPU，显示在主屏 CPU 块第二行。默认地址与 Token 已填好。",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = miniHost,
-                    onValueChange = { miniHost = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("地址") },
-                    placeholder = { Text(MiniConnection.DEFAULT_HOST) },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.small,
-                    colors = fieldColors,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                )
-                Spacer(Modifier.height(14.dp))
-                OutlinedTextField(
-                    value = miniPort,
-                    onValueChange = { miniPort = it.filter { ch -> ch.isDigit() }.take(5) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("端口") },
-                    placeholder = { Text("17891") },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.small,
-                    colors = fieldColors,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                )
-                Spacer(Modifier.height(14.dp))
-                OutlinedTextField(
-                    value = miniToken,
-                    onValueChange = { miniToken = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Token") },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.small,
-                    colors = fieldColors,
-                    visualTransformation = PasswordVisualTransformation(),
-                )
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-        Button(
-            onClick = { onTestMini(miniHost, miniPort, miniToken) },
-            enabled = !state.testing,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-            shape = MaterialTheme.shapes.medium,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colors.primary,
-                contentColor = colors.onPrimary,
-                disabledContainerColor = colors.primary.copy(alpha = 0.4f),
-                disabledContentColor = colors.onPrimary,
-            ),
-        ) {
-            if (state.testing) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    strokeWidth = 2.dp,
-                    color = colors.onPrimary,
-                )
-                Spacer(Modifier.width(10.dp))
-                Text("正在连接…")
-            } else {
-                Text("测试 Mini")
-            }
-        }
         state.settingsStatus?.let { status ->
             Spacer(Modifier.height(16.dp))
             Surface(
@@ -528,7 +473,7 @@ fun SettingsScreen(
         ) {
             Column(Modifier.padding(20.dp)) {
                 Text(
-                    "方块样式",
+                    "外观与字体",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Spacer(Modifier.height(6.dp))
@@ -897,14 +842,13 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("插电亮屏 / 拔电熄屏", style = MaterialTheme.typography.titleMedium)
+                        Text("电脑关机后熄屏", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(4.dp))
                         Text(
                             if (state.powerScreen) {
-                                if (adminGranted) "已开。插电亮屏，拔电立刻熄屏。Hub 长时间连不上会压黑屏幕（应用继续跑），连上后自动亮屏。"
-                                else "已开。插电会亮屏；拔电立刻熄屏需要先授权设备管理员。"
+                                "已开。插拔电源不会熄屏。Windows 关机一段时间后会压暗，网络恢复后自动亮起。"
                             } else {
-                                "已关。屏幕按系统超时处理。"
+                                "已关。屏幕按系统超时处理，插拔电源也不会锁屏。"
                             },
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -920,7 +864,7 @@ fun SettingsScreen(
                 }
                 if (state.powerScreen) {
                     Spacer(Modifier.height(16.dp))
-                    Text("Hub 断连后熄屏", style = MaterialTheme.typography.titleSmall)
+                    Text("电脑关机后多久熄屏", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -941,7 +885,7 @@ fun SettingsScreen(
                         }
                     }
                     Spacer(Modifier.height(14.dp))
-                    Text("定时探测间隔", style = MaterialTheme.typography.titleSmall)
+                    Text("离线判定间隔", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -962,19 +906,10 @@ fun SettingsScreen(
                         }
                     }
                 }
-                if (state.powerScreen && !adminGranted) {
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = { requestAdmin.launch(DockPower.requestAdminIntent(context)) },
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                        shape = MaterialTheme.shapes.medium,
-                    ) {
-                        Text("授权设备管理员（熄屏）")
-                    }
-                }
             }
         }
         Spacer(Modifier.height(24.dp))
+    }
     }
 }
 

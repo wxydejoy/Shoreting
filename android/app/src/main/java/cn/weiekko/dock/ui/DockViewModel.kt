@@ -1,4 +1,5 @@
 package cn.weiekko.dock.ui
+import cn.weiekko.dock.data.logConnection
 
 import android.app.Application
 import android.content.Intent
@@ -6,7 +7,9 @@ import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import cn.weiekko.dock.data.DeskLink
 import cn.weiekko.dock.data.DemoSnapshot
+import cn.weiekko.dock.data.deskLink
 import cn.weiekko.dock.data.DeviceType
 import cn.weiekko.dock.data.DockLayout
 import cn.weiekko.dock.data.DockModule
@@ -61,6 +64,7 @@ import java.io.File
 data class DockUiState(
     val prefsReady: Boolean = false,
     val connection: HubConnection = HubConnection(),
+    val hubEnabled: Boolean = true,
     val miniConnection: MiniConnection = MiniConnection(),
     val snapshot: Snapshot? = null,
     val miniPc: PcStatus? = null,
@@ -163,13 +167,13 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             prefs.powerScreen.collect { enabled ->
                 _ui.update { it.copy(powerScreen = enabled) }
                 if (!enabled) cancelHubSleep(wake = false)
-                else if (disconnectedAt != null) scheduleHubSleep()
+                else noteDeskPc(_ui.value.snapshot?.pc?.online)
             }
         }
         viewModelScope.launch {
             prefs.hubSleepDelaySec.collect { sec ->
                 _ui.update { it.copy(hubSleepDelaySec = sec) }
-                if (disconnectedAt != null && !_ui.value.hubSleeping) scheduleHubSleep()
+                if (!_ui.value.hubSleeping) noteDeskPc(_ui.value.snapshot?.pc?.online)
             }
         }
         viewModelScope.launch {
@@ -214,42 +218,16 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 }
         }
         viewModelScope.launch {
-            prefs.connection.collect { connection ->
-                if (connection.isConfigured) {
-                    _ui.update {
-                        it.copy(
-                            prefsReady = true,
-                            connection = connection,
-                            preview = false,
-                            // 真连接时不要沿用预览假数据
-                            snapshot = if (it.preview) null else it.snapshot,
-                            winApps = emptyList(),
-                            banner = null,
-                        )
-                    }
-                    restartPolling(connection)
-                } else {
-                    pollJob?.cancel()
-                    cancelHubSleep(wake = _ui.value.hubSleeping)
-                    _ui.update {
-                        it.copy(
-                            prefsReady = true,
-                            connection = connection,
-                            preview = true,
-                            stale = false,
-                            banner = null,
-                            loading = false,
-                            snapshot = DemoSnapshot.create(),
-                            winApps = DemoSnapshot.winApps,
-                        )
-                    }
-                }
+            combine(prefs.hubEnabled, prefs.connection) { enabled, connection ->
+                enabled to connection
+            }.collect { (enabled, connection) ->
+                applyDesk(enabled, connection)
             }
         }
         viewModelScope.launch {
             prefs.miniConnection.collect { mini ->
                 _ui.update { it.copy(miniConnection = mini) }
-                restartMiniPolling(mini)
+                if (_ui.value.hubEnabled) restartMiniPolling(mini)
             }
         }
     }
@@ -257,7 +235,17 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun saveDraft(host: String, portText: String, token: String) {
         val port = portText.toIntOrNull() ?: HubConnection.DEFAULT_PORT
         viewModelScope.launch {
+            logConnection("SAVE_OK host=$host port=$port")
             prefs.save(HubConnection(host = host, port = port, token = token))
+            // Mac 本机监控（:17891）和 Hub 跑在同一台机器上：地址直接跟随 Hub，
+            // 设置页就不再单独提供一个 IP 输入框了。
+            prefs.saveMini(
+                MiniConnection(
+                    host = host.ifBlank { MiniConnection.DEFAULT_HOST },
+                    port = MiniConnection.DEFAULT_PORT,
+                    token = MiniConnection.DEFAULT_TOKEN,
+                ),
+            )
         }
     }
 
@@ -305,7 +293,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun setPowerScreen(enabled: Boolean) {
         _ui.update { it.copy(powerScreen = enabled) }
         if (!enabled) cancelHubSleep(wake = _ui.value.hubSleeping)
-        else if (disconnectedAt != null) scheduleHubSleep()
+        else noteDeskPc(_ui.value.snapshot?.pc?.online)
         viewModelScope.launch {
             prefs.savePowerScreen(enabled)
         }
@@ -314,7 +302,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun setHubSleepDelay(sec: Int) {
         val next = sec.coerceIn(15, 600)
         _ui.update { it.copy(hubSleepDelaySec = next) }
-        if (disconnectedAt != null && !_ui.value.hubSleeping) scheduleHubSleep()
+        if (!_ui.value.hubSleeping) noteDeskPc(_ui.value.snapshot?.pc?.online)
         viewModelScope.launch {
             prefs.saveHubSleepDelaySec(next)
         }
@@ -391,7 +379,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             val current = _ui.value
             if (current.voiceListening && current.voiceText.isBlank()) {
                 _ui.update { it.copy(voiceListening = false) }
-                if (disconnectedAt != null && _ui.value.powerScreen) scheduleHubSleep()
+                if (_ui.value.powerScreen) noteDeskPc(_ui.value.snapshot?.pc?.online)
             }
         }
     }
@@ -417,7 +405,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         listeningJob = viewModelScope.launch {
             delay(hold)
             _ui.update { it.copy(voiceListening = false) }
-            if (disconnectedAt != null && _ui.value.powerScreen) scheduleHubSleep()
+            if (_ui.value.powerScreen) noteDeskPc(_ui.value.snapshot?.pc?.online)
         }
     }
 
@@ -439,10 +427,14 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         return voiceTurnId
     }
 
+    fun setHubEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.saveHubEnabled(enabled) }
+    }
+
     fun onHubReachable() {
         noteHubUp()
         val connection = _ui.value.connection
-        if (connection.isConfigured) {
+        if (currentLink().pollsHub && connection.isConfigured) {
             viewModelScope.launch { pullSnapshot(connection, showLoading = false) }
         }
     }
@@ -700,7 +692,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshNow() {
         val connection = _ui.value.connection
-        if (!connection.isConfigured) return
+        if (!currentLink().pollsHub || !connection.isConfigured) return
         viewModelScope.launch { pullSnapshot(connection, showLoading = _ui.value.snapshot == null) }
     }
 
@@ -777,6 +769,19 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         if (spoken.isEmpty()) return
         companionJob?.cancel()
         companionVoice.stop()
+        currentLink().companionBlock?.let { blocked ->
+            _ui.update {
+                it.copy(
+                    companionOpen = false,
+                    companionDraft = "",
+                    companionHeard = spoken,
+                    companionReply = null,
+                    companionBusy = false,
+                    companionError = blocked,
+                )
+            }
+            return
+        }
         val turn = ensureTurn()
         _ui.update {
             it.copy(
@@ -862,7 +867,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun cueHubStop() {
         val connection = _ui.value.connection
-        if (!connection.isConfigured || _ui.value.preview) return
+        if (!currentLink().pollsHub) return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 runCatching { client.companionStop(connection) }
@@ -934,7 +939,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private fun sendCommand(deviceId: String, block: () -> HubDevice) {
         if (deviceId in _ui.value.busyIds) return
         val connection = _ui.value.connection
-        if (!connection.isConfigured) return
+        if (!currentLink().pollsHub || !connection.isConfigured) return
         viewModelScope.launch {
             _ui.update { it.copy(busyIds = it.busyIds + deviceId, banner = null) }
             val result = withContext(Dispatchers.IO) { runCatching(block) }
@@ -959,6 +964,69 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                     _ui.update { it.copy(busyIds = it.busyIds - deviceId) }
                 },
             )
+        }
+    }
+
+    private fun currentLink(): DeskLink =
+        deskLink(_ui.value.hubEnabled, _ui.value.connection.isConfigured)
+
+    private fun applyDesk(hubEnabled: Boolean, connection: HubConnection) {
+        when (deskLink(hubEnabled, connection.isConfigured)) {
+            DeskLink.Live -> {
+                val dropPreview = _ui.value.preview || !_ui.value.hubEnabled
+                _ui.update {
+                    it.copy(
+                        prefsReady = true,
+                        hubEnabled = true,
+                        connection = connection,
+                        preview = false,
+                        snapshot = if (dropPreview) null else it.snapshot,
+                        winApps = if (dropPreview) emptyList() else it.winApps,
+                        banner = null,
+                    )
+                }
+                restartPolling(connection)
+                restartMiniPolling(_ui.value.miniConnection)
+            }
+            DeskLink.Local -> {
+                pollJob?.cancel()
+                miniPollJob?.cancel()
+                cancelHubSleep(wake = _ui.value.hubSleeping)
+                releaseDeskSleep()
+                _ui.update {
+                    it.copy(
+                        prefsReady = true,
+                        hubEnabled = false,
+                        connection = connection,
+                        preview = false,
+                        stale = false,
+                        miniStale = false,
+                        banner = null,
+                        loading = false,
+                        snapshot = null,
+                        miniPc = null,
+                        winApps = emptyList(),
+                    )
+                }
+            }
+            DeskLink.Preview -> {
+                pollJob?.cancel()
+                cancelHubSleep(wake = _ui.value.hubSleeping)
+                releaseDeskSleep()
+                _ui.update {
+                    it.copy(
+                        prefsReady = true,
+                        hubEnabled = true,
+                        connection = connection,
+                        preview = true,
+                        stale = false,
+                        banner = null,
+                        loading = false,
+                        snapshot = DemoSnapshot.create(),
+                        winApps = DemoSnapshot.winApps,
+                    )
+                }
+            }
         }
     }
 
@@ -992,7 +1060,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun restartMiniPolling(connection: MiniConnection) {
         miniPollJob?.cancel()
-        if (!connection.isConfigured) {
+        if (!_ui.value.hubEnabled || !connection.isConfigured) {
             _ui.update { it.copy(miniPc = null, miniStale = false) }
             return
         }
@@ -1023,6 +1091,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                     .filter { it.deviceType() == DeviceType.Action }
                     .map { it.toWinApp() }
                 noteHubUp()
+                noteDeskPc(snapshot.pc?.online)
                 _ui.update {
                     it.copy(
                         snapshot = snapshot,
@@ -1080,28 +1149,58 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun noteHubDown() {
-        if (_ui.value.preview || !_ui.value.connection.isConfigured) return
+        if (!currentLink().pollsHub) return
         if (disconnectedAt == null) disconnectedAt = SystemClock.elapsedRealtime()
-        scheduleHubSleep()
+        // Hub 抖动不熄屏：Mac/Hub 常开，是否「在工作」由 Windows 探针决定。
     }
 
     private fun noteHubUp() {
-        val shouldWake = _ui.value.hubSleeping || disconnectedAt != null
         disconnectedAt = null
         hubSleepJob?.cancel()
         hubSleepJob = null
-        if (_ui.value.hubSleeping) {
-            _ui.update { it.copy(hubSleeping = false) }
+        // 唤醒交给 noteDeskPc：只有 Windows 又开机了才该醒。
+    }
+
+    // ---------------- 工作判定：只看 Windows 探针的 pc.online ----------------
+    // Mac / Hub 是常开的，所以「Hub 能不能连上」不能代表「人在不在工作」。
+    // 你只在要干活时开 Windows 主机，因此 pc.online 才是真正的信号：
+    //   pc.online == true  -> 在工作 -> 保持唤醒
+    //   pc.online == false -> 主机没开 -> 等 hubSleepDelaySec 后熄屏
+    private var deskOfflineAt: Long? = null
+    private var deskSleepJob: Job? = null
+
+    private fun noteDeskPc(online: Boolean?) {
+        if (!currentLink().pollsHub) return
+        if (online != false) {
+            // PC 在线，或还没有 PC 数据 -> 保持醒着
+            deskOfflineAt = null
+            deskSleepJob?.cancel()
+            deskSleepJob = null
+            if (_ui.value.hubSleeping) {
+                _ui.update { it.copy(hubSleeping = false) }
+                if (_ui.value.powerScreen) _screenCommands.tryEmit(ScreenCommand.Wake)
+            }
+            return
         }
-        if (shouldWake && _ui.value.powerScreen) {
-            _screenCommands.tryEmit(ScreenCommand.Wake)
+        if (!_ui.value.powerScreen) return
+        if (_ui.value.hubSleeping) return
+        if (deskSleepJob?.isActive == true) return
+        deskOfflineAt = SystemClock.elapsedRealtime()
+        val waitMs = _ui.value.hubSleepDelaySec.coerceIn(15, 600) * 1000L
+        deskSleepJob = viewModelScope.launch {
+            delay(waitMs)
+            if (deskOfflineAt == null) return@launch
+            if (!_ui.value.powerScreen) return@launch
+            if (_ui.value.hubSleeping) return@launch
+            _ui.update { it.copy(hubSleeping = true) }
+            _screenCommands.tryEmit(ScreenCommand.Sleep)
         }
     }
 
     private fun scheduleHubSleep() {
         hubSleepJob?.cancel()
         if (!_ui.value.powerScreen) return
-        if (_ui.value.preview || !_ui.value.connection.isConfigured) return
+        if (!currentLink().pollsHub) return
         if (_ui.value.hubSleeping) return
         val started = disconnectedAt ?: return
         val waitMs = _ui.value.hubSleepDelaySec.coerceIn(15, 600) * 1000L
@@ -1113,6 +1212,12 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             _ui.update { it.copy(hubSleeping = true) }
             _screenCommands.tryEmit(ScreenCommand.Sleep)
         }
+    }
+
+    private fun releaseDeskSleep() {
+        deskOfflineAt = null
+        deskSleepJob?.cancel()
+        deskSleepJob = null
     }
 
     private fun cancelHubSleep(wake: Boolean) {
@@ -1151,7 +1256,17 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun refreshWeather(city: String): Boolean {
         return try {
-            val info = withContext(Dispatchers.IO) { weatherClient.fetch(city) }
+            val info = withContext(Dispatchers.IO) {
+                // 优先让 Hub 代取：手机可能连在「只有局域网、没有外网」的 Wi-Fi 上。
+                // Hub 不可用（没配 / 出错）时再退回手机直连，保留原本的多源兜底。
+                val connection = _ui.value.connection
+                val viaHub = if (currentLink().pollsHub && connection.isConfigured) {
+                    runCatching { client.weather(connection, city) }.getOrNull()
+                } else {
+                    null
+                }
+                viaHub ?: weatherClient.fetch(city)
+            }
             prefs.saveWeatherCache(info)
             _ui.update { it.copy(weather = info, weatherError = null) }
             true

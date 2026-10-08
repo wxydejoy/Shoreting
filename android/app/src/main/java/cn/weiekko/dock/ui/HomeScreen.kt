@@ -209,6 +209,7 @@ fun HomeScreen(
                                     interactionSource = remember { MutableInteractionSource() },
                                     onClick = {
                                         if (editing) onSelectModule(DockModule.Clock)
+                                        else onOpenSettings()
                                     },
                                     onLongClick = { onSelectModule(DockModule.Clock) },
                                 ),
@@ -273,18 +274,31 @@ fun HomeScreen(
                         }
                     }
 
-                    PlaceModule(DockModule.Pc, edit) {
-                        PcMonitorRow(
-                            pc = pc,
-                            stale = state.stale || pc?.online != true,
-                            mini = if (state.miniConnection.isConfigured) state.miniPc else if (state.preview) DemoSnapshot.mini else null,
-                            miniStale = state.miniStale || (state.miniPc?.online != true && state.miniConnection.isConfigured),
-                            showMini = state.miniConnection.isConfigured || state.preview,
-                            interactive = !editing,
-                            onClick = onOpenSettings,
-                            onLongPress = { onSelectModule(DockModule.Pc) },
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                    val showMini = state.hubEnabled && (state.miniConnection.isConfigured || state.preview)
+                    val showPc = pc != null || showMini
+                    if (showPc || editing) {
+                        PlaceModule(DockModule.Pc, edit) {
+                            if (showPc) {
+                                PcMonitorRow(
+                                    pc = pc,
+                                    stale = state.stale || pc?.online != true,
+                                    mini = when {
+                                        !state.hubEnabled -> null
+                                        state.miniConnection.isConfigured -> state.miniPc
+                                        state.preview -> DemoSnapshot.mini
+                                        else -> null
+                                    },
+                                    miniStale = state.miniStale || (state.miniPc?.online != true && state.miniConnection.isConfigured),
+                                    showMini = showMini,
+                                    interactive = !editing,
+                                    onClick = {},
+                                    onLongPress = { onSelectModule(DockModule.Pc) },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            } else {
+                                EmptySlot("CPU 信息")
+                            }
+                        }
                     }
 
                     val win0 = state.winApps.getOrNull(0)

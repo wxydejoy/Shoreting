@@ -1,7 +1,6 @@
 package cn.weiekko.dock.data
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -19,10 +18,10 @@ class HubConnectionTest {
     }
 
     @Test
-    fun detectsMiniIpOnHubField() {
-        val wrong = HubConnection(host = MiniConnection.DEFAULT_HOST, token = "x")
-        val right = HubConnection(host = HubConnection.DEFAULT_HOST, token = "x")
-        assertTrue(wrong.isMiniHost())
-        assertFalse(right.isMiniHost())
+    fun defaultHubHostIsMini() {
+        assertEquals(MiniConnection.DEFAULT_HOST, HubConnection.DEFAULT_HOST)
+        val hub = HubConnection(host = HubConnection.DEFAULT_HOST, token = "x")
+        assertTrue(hub.isMiniHost())
     }
+
 }

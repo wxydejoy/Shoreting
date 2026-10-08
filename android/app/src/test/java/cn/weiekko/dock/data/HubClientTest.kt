@@ -45,16 +45,16 @@ class HubClientTest {
     }
 
     @Test
-    fun healthRejectsMiniIp() {
-        val wrong = HubConnection(host = MiniConnection.DEFAULT_HOST, port = 17890, token = "secret")
-        try {
-            client.health(wrong)
-            throw AssertionError("expected HubException")
-        } catch (e: HubException) {
-            assertEquals("bad_request", e.code)
-            assertTrue(e.message!!.contains(HubConnection.DEFAULT_HOST))
-        }
-        assertEquals(0, server.requestCount)
+    fun healthAcceptsMiniHubIp() {
+        assertEquals(MiniConnection.DEFAULT_HOST, HubConnection.DEFAULT_HOST)
+        server.enqueue(
+            MockResponse().setBody(
+                """{"ok":true,"service":"dock-hub","protocol":1,"name":"study"}""",
+            ),
+        )
+        val health = client.health(connection)
+        assertEquals("study", health.name)
+        assertEquals(1, server.requestCount)
     }
 
     @Test
@@ -108,7 +108,9 @@ class HubClientTest {
                   "companion": {"ready": true, "voice": false, "speaking": false},
                   "devices": [
                     {"id":"lamp","name":"台灯","type":"light","online":true,"on":true,"brightness":60},
-                    {"id":"plug","name":"显示器","type":"switch","online":true,"on":false}
+                    {"id":"plug","name":"显示器","type":"switch","online":true,"on":false},
+                    {"id":"desk","name":"书桌","type":"sensor","online":true,"celsius":24.6,"humidity":48,
+                     "props":[{"id":"celsius","name":"温度","number":24.6,"unit":"°C"}]}
                   ]
                 }
                 """.trimIndent(),
@@ -122,9 +124,10 @@ class HubClientTest {
         assertEquals("Night Drive", snapshot.media!!.title)
         assertTrue(snapshot.media!!.playing)
         assertTrue(snapshot.companion!!.ready)
-        assertEquals(2, snapshot.devices.size)
+        assertEquals(3, snapshot.devices.size)
         assertEquals(60, snapshot.devices[0].brightness)
         assertNull(snapshot.devices[1].brightness)
+        assertEquals("sensor", snapshot.devices[2].type)
         val request = server.takeRequest()
         assertEquals("Bearer secret", request.getHeader("Authorization"))
         assertTrue(request.path!!.endsWith("/v1/snapshot"))
@@ -283,5 +286,10 @@ class HubClientTest {
         val request = server.takeRequest()
         assertEquals("Bearer ${MiniConnection.DEFAULT_TOKEN}", request.getHeader("Authorization"))
         assertTrue(request.path!!.endsWith("/v1/snapshot"))
+    }
+
+    @Test
+    fun companionTimeoutAllowsTethys() {
+        assertTrue(HubClient.COMPANION_TIMEOUT_MS >= 90_000L)
     }
 }

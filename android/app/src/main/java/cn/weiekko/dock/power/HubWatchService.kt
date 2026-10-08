@@ -58,8 +58,9 @@ class HubWatchService : Service() {
         val client = HubClient()
         while (scope.isActive) {
             val connection = prefs.connection.first()
+            val hubEnabled = prefs.hubEnabled.first()
             val intervalMs = prefs.hubReconnectSec.first().coerceIn(5, 120) * 1000L
-            if (!connection.isConfigured) {
+            if (!hubEnabled || !connection.isConfigured) {
                 delay(intervalMs)
                 continue
             }

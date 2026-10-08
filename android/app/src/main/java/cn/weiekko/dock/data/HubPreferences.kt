@@ -13,9 +13,9 @@ import kotlinx.serialization.json.Json
 private val Context.dataStore by preferencesDataStore(name = "dock_hub")
 
 data class HubConnection(
-    val host: String = "",
+    val host: String = DEFAULT_HOST,
     val port: Int = DEFAULT_PORT,
-    val token: String = "",
+    val token: String = DEFAULT_TOKEN,
 ) {
     val isConfigured: Boolean
         get() = host.isNotBlank() && token.isNotBlank() && port in 1..65535
@@ -25,8 +25,9 @@ data class HubConnection(
     fun isMiniHost(): Boolean = lanHost(host) == MiniConnection.DEFAULT_HOST
 
     companion object {
-        const val DEFAULT_HOST = "10.83.22.31"
+        const val DEFAULT_HOST = "10.83.22.121"
         const val DEFAULT_PORT = 17890
+        const val DEFAULT_TOKEN = ""
     }
 }
 
@@ -72,9 +73,9 @@ internal fun lanHost(host: String): String {
 class HubPreferences(private val context: Context) {
     val connection: Flow<HubConnection> = context.dataStore.data.map { prefs ->
         HubConnection(
-            host = prefs[KEY_HOST].orEmpty(),
+            host = prefs[KEY_HOST]?.takeIf { it.isNotBlank() } ?: HubConnection.DEFAULT_HOST,
             port = prefs[KEY_PORT] ?: HubConnection.DEFAULT_PORT,
-            token = prefs[KEY_TOKEN].orEmpty(),
+            token = prefs[KEY_TOKEN]?.takeIf { it.isNotBlank() } ?: HubConnection.DEFAULT_TOKEN,
         )
     }
 
@@ -138,6 +139,10 @@ class HubPreferences(private val context: Context) {
 
     val wakeWordEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[KEY_WAKE_WORD] ?: true
+    }
+
+    val hubEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_HUB_ENABLED] ?: true
     }
 
     suspend fun save(connection: HubConnection) {
@@ -230,6 +235,12 @@ class HubPreferences(private val context: Context) {
         }
     }
 
+    suspend fun saveHubEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_HUB_ENABLED] = enabled
+        }
+    }
+
     companion object {
         private val KEY_HOST = stringPreferencesKey("host")
         private val KEY_PORT = intPreferencesKey("port")
@@ -254,6 +265,7 @@ class HubPreferences(private val context: Context) {
         private val KEY_WEATHER_CITY = stringPreferencesKey("weather_city")
         private val KEY_WEATHER_CACHE = stringPreferencesKey("weather_cache")
         private val KEY_WAKE_WORD = booleanPreferencesKey("wake_word")
+        private val KEY_HUB_ENABLED = booleanPreferencesKey("hub_enabled")
 
         const val DEFAULT_HUB_SLEEP_DELAY_SEC = 60
         const val DEFAULT_HUB_RECONNECT_SEC = 15
