@@ -18,6 +18,7 @@ class SetupWizardTest(unittest.TestCase):
     def test_is_local_client(self) -> None:
         self.assertTrue(is_local_client(("127.0.0.1", 1234)))
         self.assertTrue(is_local_client(("::1", 1234)))
+        self.assertTrue(is_local_client(("::ffff:127.0.0.1", 1234)))
         self.assertFalse(is_local_client(("10.0.0.1", 1234)))
 
     def test_save_config_roundtrip(self) -> None:
@@ -66,6 +67,39 @@ class SetupWizardTest(unittest.TestCase):
         self.assertEqual(raw["companion"]["llm"]["model"], "qwen3.5:4b")
         self.assertEqual(raw["companion"]["tts"]["base_url"], "http://127.0.0.1:18100")
         self.assertEqual(raw["mini"]["base_url"], "http://10.83.22.121:17891")
+
+    def test_voice_save_keeps_the_rest_and_clamps(self) -> None:
+        from unittest.mock import patch
+
+        from dock_hub.setup_ui import apply_voice
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "hub.yaml"
+            raw = {
+                "name": "study",
+                "token": "secret-token-value",
+                "devices": [],
+                "companion": {
+                    "enabled": True,
+                    "llm": {"base_url": "http://127.0.0.1:11434", "model": "qwen3.5:4b"},
+                    "tts": {"base_url": "http://127.0.0.1:9"},
+                },
+            }
+            cfg = save_config_raw(raw, path)
+            hub = DockHub(cfg)
+            self.addCleanup(hub.pc.stop)
+            self.addCleanup(hub.reporter.stop)
+            with patch("dock_hub.system_volume.write_output_volume") as setter:
+                result = apply_voice(hub, {"volume": 35, "speed": 1.2})
+            setter.assert_called_once_with(35)
+            self.assertTrue(result["ok"])
+            self.assertEqual(hub.config.companion.voice_volume, 35)
+            self.assertEqual(hub.config.companion.voice_speed, 1.2)
+            kept = path.read_text(encoding="utf-8")
+            self.assertIn("qwen3.5:4b", kept)
+            self.assertIn("volume: 35", kept)
+            with self.assertRaises(ValueError):
+                apply_voice(hub, {"volume": 140, "speed": 1})
 
     def test_setup_api_localhost_only(self) -> None:
         cfg = parse_config(

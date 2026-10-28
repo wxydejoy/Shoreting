@@ -69,10 +69,13 @@ v1 不轮换 token。局域网 + 长 token 足够。
 |---|---|
 | `GET /health`、`GET /v1/snapshot` | 5 秒 |
 | `POST /v1/devices/{id}/command` | 10 秒 |
-| `POST /v1/companion/chat` | 30 秒 |
+| `POST /v1/companion/chat` | 90 秒 |
 | `POST /v1/companion/stop` | 2 秒 |
 | `POST /v1/companion/announce` | 8 秒 |
-| `GET /v1/companion/audio/{id}` | 30 秒 |
+| `POST /v1/companion/read` | 立即返回 |
+| `POST /v1/companion/read/jobs/{id}/cancel` 等 | 5 秒 |
+| `GET /v1/companion/read/jobs` | 5 秒 |
+| `GET /v1/companion/audio/{id}` | 90 秒 |
 
 Hub 应在超时前返回。米家过慢则 `502` + `mijia_error`。
 
@@ -103,7 +106,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 
 ## 4. 接口一览
 
-一共 8 个（companion 可关）：
+一共 13 个（companion 可关）：
 
 | 方法 | 路径 | 鉴权 | 用途 |
 |---|---|---|---|
@@ -111,10 +114,16 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `GET` | `/v1/snapshot` | 是 | 主屏全部状态（一次拿完） |
 | `POST` | `/v1/devices/{id}/command` | 是 | 控制一个设备，或触发一个 logo 动作 |
 | `POST` | `/v1/companion/chat` | 是 | 桌面伴侣一轮对话（配置关闭则 404） |
-| `POST` | `/v1/companion/stop` | 是 | 打断当前说话，立刻停 Mini 喇叭 |
+| `POST` | `/v1/companion/stop` | 是（本机可免） | 打断当前说话，立刻停 Mini 喇叭 |
 | `POST` | `/v1/companion/announce` | 是 | 让守岸人说一句（微信侧路；安卓不用打） |
-| `GET` | `/v1/companion/audio/{id}` | 是 | 伴侣 wav（`audio_id` 为空或关闭则不要打） |
+| `POST` | `/v1/companion/read` | 是（本机可免） | 朗读：播放或排队生成 wav。浏览器页是 `GET /read` |
+| `POST` | `/v1/companion/read/jobs/{id}/cancel` | 是（本机可免） | 取消朗读任务。**安卓不要打** |
+| `POST` | `/v1/companion/read/jobs/{id}/replay` | 是（本机可免） | 用该任务的稿再播。**安卓不要打** |
+| `POST` | `/v1/companion/read/jobs/{id}/delete` | 是（本机可免） | 删任务及 wav。**安卓不要打** |
+| `GET` | `/v1/companion/audio/{id}` | 是（本机可免） | 伴侣 wav（`audio_id` 为空或关闭则不要打） |
 | `GET` | `/v1/companion/chats` | 是（本机可免） | 对话原文列表。浏览器页是 `GET /chats` |
+| `GET`/`POST` | `/v1/companion/books` | 是（本机可免） | 睡前朗读书架。**安卓不要打** |
+| `GET` | `/v1/companion/story` | 是（本机可免） | 睡前朗读进度与定时。**安卓不要打** |
 
 没有单独的「读温度」「读电脑性能」「跑脚本」「读正在播放」接口。米家温度、logo、电脑监控、正在播放、伴侣是否就绪都在 snapshot 里；点击 logo 和播放键走同一个 command；说话走 companion/chat，再喊唤醒词打断走 companion/stop，声音走 companion/audio。
 
@@ -401,7 +410,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `devices[].on` | `switch` / `light`：开关状态。`action`：对应进程是否正在运行（默认看 exe 文件名；可用配置 `process` 覆盖） |
 | `devices[].icon` | 仅 `action`。短名；安卓 Remix Icon 映射见 §5.1。没有或不认识则画名称首字 |
 | `devices[].last_run_at` | 仅 `action`，可选。上次成功拉起的 UTC 时间 |
-| 未登录时的 `devices` | 去掉所有米家设备，**保留**全部 `action` |
+| 未登录时的 `devices` | 去掉所有米家设备，**保留**全部 `action`，以及 `ws2812` 灯带（对安卓仍报 `type: light`） |
 
 Hub 应对白名单设备**批量**读属性，不要一台一台串行请求米家。`pc` 用本机缓存，不要拖慢米家批量读。
 
@@ -552,11 +561,13 @@ Hub 应在超时前返回。4B 关思考仍慢则 `502`，不要让安卓一直�
 
 ### 6.5 `GET /v1/companion/audio/{id}`
 
-需要 token。`id` 只允许 `A-Za-z0-9._-`。仅 `tts.deliver: true` 时 Hub 才会缓存 Mini TTS 的 wav；**安卓不要直连 :18100**。默认不缓存，本接口 404。
+需要 token（本机浏览器可免，与 `/chats` 相同）。`id` 只允许 `A-Za-z0-9._-`。仅 `tts.deliver: true` 时 chat 才会把 wav 交给手机；朗读页生成的文件也会落在这里。**安卓不要直连 :18100**。默认 chat 不缓存，本接口 404。
 
-合成发生在 `POST /v1/companion/chat` 里；本接口只返回已缓存的 wav，不再向 TTS 要一遍。
+合成发生在 `POST /v1/companion/chat` 或 `POST /v1/companion/read` 里；本接口只返回已缓存或已落盘的 wav，不再向 TTS 要一遍。
 
 没有这段、或 `id` 不认识 → `404`。没配 TTS 时 chat 的 `audio_id` 为 `null`，安卓不要打这个接口。
+
+`?download=1` 时带 `Content-Disposition: attachment`，给浏览器下载。安卓不要带这个参数。
 
 ```http
 GET /v1/companion/audio/a1b2c3d4e5f6
@@ -588,7 +599,7 @@ TTS 没配或 Mini 暂时连不上仍 `200`（字幕和唤醒不受影响）。�
 
 需要 token。配置未开启 companion → `404` `not_found`。
 
-给**微信 Hermes** 用：让守岸人在书桌喇叭说 1～3 句，**不走**对话调度、不调泰缇斯。安卓不要打这个接口。
+给**外部脚本 / 微信机器人**用：让守岸人在书桌喇叭说 1～3 句，**不走**对话调度。安卓不要打这个接口。
 
 ```http
 POST /v1/companion/announce
@@ -599,6 +610,80 @@ Content-Type: application/json
 ```
 
 **200** 形状与 `chat` 相同（`text` + `audio_id`）。空 `text` → `400`。
+
+### 6.8 `POST /v1/companion/read` · `GET /v1/companion/read/jobs`
+
+给 **Hub 浏览器朗读页** 用：贴一段文字，预估时长后在 Mini 喇叭播放，或排队生成一份 24 kHz 单声道 WAV 供下载。**安卓不要打**。配置未开启 companion → `404`。本机可免 token，局域网与 `/chats` 相同。
+
+一次最多 8000 字。预估按约 4 字/秒，不调模型。`mode` 为 `play` 或 `file`，**都立刻入队**；`play` 在后台 cue Mini，`file` 后台合成、不播喇叭。短句会先合并到接近克隆参考的长度再送 TTS。
+
+```http
+POST /v1/companion/read
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"text": "今晚睡前，我读一点给你听。", "mode": "file"}
+```
+
+**200**（`file` 刚提交时常是 `queued`；短稿可能已经 `done`）
+
+```json
+{
+  "id": "a1b2c3d4e5f6",
+  "job_id": "a1b2c3d4e5f6",
+  "text": "今晚睡前，我读一点给你听。",
+  "mode": "file",
+  "status": "queued",
+  "chars": 13,
+  "estimate_sec": 3,
+  "chunks": 1,
+  "done": 0,
+  "preview": "今晚睡前，我读一点给你听。",
+  "audio_id": null,
+  "duration_sec": null,
+  "bytes": null,
+  "filename": null,
+  "error": null,
+  "format": "audio/wav"
+}
+```
+
+`status`：`queued` | `running` | `done` | `error`。`play` 完成时 `status=done`，`audio_id` 为 `null`。`file` 完成后用 `GET /v1/companion/audio/{id}?download=1` 下载。wav 写在 Hub 配置目录的 `reads/` 下。
+
+```http
+GET /v1/companion/read/jobs
+Authorization: Bearer <token>
+```
+
+**200** `{ "items": [ /* 与上同形，不含全文 text，最新在前 */ ] }`
+
+任务操作（同样本机可免，**安卓不要打**）：
+
+```http
+POST /v1/companion/read/jobs/{id}/cancel
+POST /v1/companion/read/jobs/{id}/replay
+POST /v1/companion/read/jobs/{id}/delete
+```
+
+`cancel` 停下排队或正在跑的任务；`replay` 用存下的稿再 cue Mini；`delete` 从列表拿掉并删掉对应 wav。浏览器页的「停止」走 `POST /v1/companion/stop`（本机可免 token，与 `/read` 相同）。
+
+浏览器页：`GET /read`（稿在左、任务在右，选区 / 导入 / 停止 / 再播）。
+
+### 6.9 睡前朗读
+
+书放在 Hub 配置目录的 `books/`。这些路由**安卓不要打**。鉴权与 `/read` 相同：本机免 Token，局域网要 Token。伴侣未开启时 `404`。
+
+`GET /v1/companion/books` 只返回文件名、大小、修改时间、`current_id` 和 `timer_min`，不返回正文。
+
+`POST /v1/companion/books` 的正文是 txt 原字节，文件名在请求头 `X-Filename`（百分号编码的 UTF-8）。超过 32MB 拒绝。同名覆盖。
+
+`GET /v1/companion/books/{id}` 返回章目录（`index`、`title`、`volume`、`start`、`end`）、书签、编码和 `problem_label`。`GET /v1/companion/books/{id}/chapter/{index}` 只返回这一章的正文。
+
+`POST /v1/companion/books/{id}/play` 从书签接着读；JSON 可以带 `offset` 用来跳章。正在读时再次调用是跳转，倒计时不重新给满。`POST /v1/companion/books/{id}/pause` 停喇叭并把书签留在当前段开头。`POST /v1/companion/books/{id}/bookmark` 只在没在读时移动书签。
+
+`GET /v1/companion/story` 返回是否在读、字偏移、章序号、当前句、`timer_min`、`timer_remaining_sec`、`stopped_by`。`POST /v1/companion/story/timer` 的 `minutes` 只能是 `0`、`15`、`30`、`45`、`60`。`0` 是关。默认 30 分钟。暂停会冻住剩余时间。到点或读完清掉倒计时，下一次播放才重新给满。
+
+页头停止仍是 `POST /v1/companion/stop`。故事正在读时，这次停止同时留下书签。
 
 ---
 
@@ -829,7 +914,7 @@ devices:
 - 不要新增安卓还没实现的接口而不改本文档
 - 不要返回配置外的设备
 - 不要接受安卓传来的可执行路径、参数或脚本正文
-- 不要为电脑监控或播放控制再开未写进本文档的 HTTP 接口（一律走 snapshot / 现有 command）。伴侣对话是 `/v1/companion/chat`，打断是 `/v1/companion/stop`，微信侧路出声是 `/v1/companion/announce`，声音是 `/v1/companion/audio/{id}`
+- 不要为电脑监控或播放控制再开未写进本文档的 HTTP 接口（一律走 snapshot / 现有 command）。伴侣对话是 `/v1/companion/chat`，打断是 `/v1/companion/stop`，微信侧路出声是 `/v1/companion/announce`，朗读是 `/v1/companion/read`，任务列表是 `/v1/companion/read/jobs`，声音是 `/v1/companion/audio/{id}`
 - 不要在 `pc` 里返回进程列表或可执行路径
 - 不要把 `media` 当成 `devices[]` 里的一项；也不要用 `media` 做设备 id
 - 不要提供图标文件接口；`icon` 只发短名，由安卓用 Remix Icon 渲染

@@ -1,58 +1,40 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>守岸人 · 对话</title>
-  <style>
-    :root { --bg:#0c1016; --panel:#141b24; --line:#243044; --text:#e8eef7; --muted:#8fa3bd; --you:#1e3a5f; --her:#1a2332; --accent:#7dd3fc; --bad:#fca5a5; }
-    * { box-sizing: border-box; }
-    html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:15px/1.55 "Segoe UI", "PingFang SC", system-ui, sans-serif; }
-    body { display:flex; flex-direction:column; }
-    header { padding:18px 22px 12px; border-bottom:1px solid var(--line); background:var(--bg); position:sticky; top:0; z-index:2; }
-    h1 { margin:0; font-size:20px; font-weight:650; letter-spacing:.02em; }
-    .sub { color:var(--muted); font-size:13px; margin-top:4px; }
-    .bar { display:flex; gap:10px; margin-top:12px; }
-    input[type=search], input[type=password] { flex:1; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#0d1218; color:var(--text); }
-    button { cursor:pointer; border:0; border-radius:10px; padding:10px 14px; font-weight:600; background:#243044; color:var(--text); }
-    button.primary { background:#1d4ed8; color:#fff; }
-    main { flex:1; overflow:auto; padding:18px 22px 40px; }
-    .day { color:var(--muted); font-size:12px; letter-spacing:.08em; text-transform:uppercase; margin:22px 0 10px; }
-    .row { display:flex; margin:8px 0; }
-    .row.you { justify-content:flex-end; }
-    .bubble { max-width:min(640px, 86%); padding:10px 14px; border-radius:14px; border:1px solid var(--line); }
-    .you .bubble { background:var(--you); }
-    .her .bubble { background:var(--her); }
-    .who { font-size:11px; color:var(--muted); margin-bottom:4px; }
-    .meta { font-size:11px; color:var(--muted); margin-top:6px; }
-    .pill { display:inline-block; margin:6px 6px 0 0; padding:2px 8px; border-radius:999px; font-size:11px; background:#243044; color:var(--muted); }
-    .pill.bad { background:#3f1d1d; color:var(--bad); }
-    .err { color:var(--bad); font-size:13px; margin-top:6px; }
-    .empty, .gate { max-width:520px; margin:48px auto; color:var(--muted); }
-    .gate { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:22px; }
-    .gate h2 { margin:0 0 8px; font-size:16px; color:var(--text); }
-    .gate .bar { margin-top:14px; }
-    .hide { display:none; }
-  </style>
+    <link rel="stylesheet" href="/assets/pico.min.css" />
+  <link rel="stylesheet" href="/assets/shell.css" />
+
 </head>
-<body>
-  <header>
-    <h1>守岸人</h1>
-    <div class="sub">只从今晚起记下原文。更早的对话 Hub 只留了字数。</div>
+<body class="talk">
+  <nav class="container-fluid">
+    <ul>
+      <li><strong>守岸人</strong></li>
+    </ul>
+    <ul>
+      <li><a href="/read" role="button" class="secondary">朗读</a></li>
+      <li><a href="/chats" role="button" aria-current="page">对话</a></li>
+      <li><a href="/setup" role="button" class="secondary">配置</a></li>
+    </ul>
+  </nav>
+  <header class="container">
+    <p class="sub">只从今晚起记下原文。更早的对话只留了字数。</p>
     <div class="bar" id="searchBar">
       <input type="search" id="q" placeholder="搜索她或你说过的话" autocomplete="off" />
     </div>
   </header>
   <main id="feed"></main>
-  <div id="gate" class="gate hide">
-    <h2>局域网查看</h2>
-    <p>填手机设置里同一枚 Hub Token。本机打开不用填。</p>
+  <article id="gate" class="gate hide">
+    <h2>局域网登录</h2>
+    <p>填手机设置里同一枚 Hub Token。登录后会进入配置向导。本机打开不用填。</p>
     <div class="bar">
       <input type="password" id="token" placeholder="Token" autocomplete="off" />
       <button class="primary" id="login" type="button">进入</button>
     </div>
     <p id="gateErr" class="err"></p>
-  </div>
+  </article>
   <script>
     const feed = document.getElementById("feed");
     const gate = document.getElementById("gate");
@@ -67,6 +49,7 @@
 
     function skillLabel(s) {
       const name = s.name || s.id;
+      if (!name) return s.route || "";
       const verb = s.on === false ? "关" : (s.id && /wegame|douyin|steam|cursor/i.test(s.id) ? "启动" : "开");
       const ok = s.ok === false ? "失败" : "";
       return verb + name + (ok ? " · " + ok : "");
@@ -87,7 +70,7 @@
     function bubble(side, who, text, rec) {
       const row = document.createElement("div");
       row.className = "row " + side;
-      const b = document.createElement("div");
+      const b = document.createElement("article");
       b.className = "bubble";
       const w = document.createElement("div");
       w.className = "who";
@@ -143,6 +126,23 @@
       feed.scrollTop = feed.scrollHeight;
     }
 
+    function nextPath() {
+      const next = new URLSearchParams(location.search).get("next") || "";
+      if (!next.startsWith("/") || next.startsWith("//") || next.includes("://") || next.includes("\\")) {
+        return "";
+      }
+      return next;
+    }
+
+    function goNextOrLoad() {
+      const next = nextPath();
+      if (next) {
+        location.replace(next);
+        return;
+      }
+      load();
+    }
+
     async function load() {
       const query = encodeURIComponent(q.value.trim());
       const resp = await fetch("/v1/companion/chats?limit=400&q=" + query, {
@@ -153,6 +153,11 @@
         gate.classList.remove("hide");
         document.getElementById("searchBar").classList.add("hide");
         feed.innerHTML = "";
+        return;
+      }
+      const next = nextPath();
+      if (next) {
+        location.replace(next);
         return;
       }
       gate.classList.add("hide");
@@ -177,12 +182,18 @@
       }
       sessionStorage.setItem("helm_chats_token", token);
       tokenBox.value = "";
-      load();
+      goNextOrLoad();
     };
     q.addEventListener("input", () => {
       clearTimeout(timer);
       timer = setTimeout(load, 200);
     });
+    if (nextPath() === "/setup") {
+      const h = document.querySelector(".gate h2");
+      const p = document.querySelector(".gate p");
+      if (h) h.textContent = "打开配置向导";
+      if (p) p.textContent = "填手机设置里同一枚 Hub Token，登录后跳到配置页。";
+    }
     load();
     setInterval(() => { if (document.visibilityState === "visible") load(); }, 4000);
   </script>

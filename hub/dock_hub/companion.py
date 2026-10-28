@@ -7,11 +7,13 @@ LLM 可以是本机/局域网 Ollama，或 OpenAI 兼容网关（如阿里云 Ma
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import threading
 import time
 import uuid
+import wave
 import urllib.error
 import urllib.request
 from collections import OrderedDict, deque
@@ -24,34 +26,35 @@ from urllib.parse import urlparse
 import yaml
 
 from dock_hub.chat_log import ChatLog
-from dock_hub.config import CompanionConfig, ID_RE, TethysConfig
+from dock_hub.config import CompanionConfig, ID_RE
 from dock_hub.errors import HubError
-from dock_hub.tethys import (
-    Route,
-    build_polish_messages,
-    build_route_messages,
-    build_tethys_messages,
-    default_notify_url,
-    parse_route,
-    route_bypass,
-    strip_tethys_invoke,
-)
 
 MAX_CLIPS = 8
+MAX_READ_CHARS = 8000
+MAX_READ_JOBS = 24
+READ_CHARS_PER_SEC = 4.0
+READ_TTS_TIMEOUT_SEC = 90.0
 
 DEFAULT_PERSONA = """你是守岸人，正在漂泊者的书桌上值班。锚点：静、守、留白。说话慢、短、轻，偏诗意，不卖萌，不喊口号，不讲游戏剧情。
-每次只回 1～3 句。可以叫对方「漂泊者」。不知道就说不知道，不要编造。
+每次只回 1～3 句。可以叫对方「漂泊者」。
+问候、闲聊、常识用你自己的话答。书桌状态已写在提示里：对方问占用、温度、灯、哪台机器时，直接用那些数字，不要说不知道。
+需要查天气、新闻、资料、放歌或分析时，不要装不知道——那种题 Hub 会交给深度系统。
+自己做不到的事不要说「不懂」；只有书桌状态里真没有的数字才说不知道。
 对方没问就不要报室内温湿度或电脑占用，也不要声称已经开灯或开了程序。
 电脑默认指 Windows；没点名 Mini / Mac 时不要提那边的占用或温度。
 对方明确要开关设备时：口头短应一声，并单独一行写 ACTION: <id>.on 或 ACTION: <id>.off。
+台灯是米家书桌灯（lamp）；灯带是桌上那条灯条（desk-led）；挂灯是顶上那盏，不要和灯带当成同一个。
+对方说灯带就 ACTION: desk-led.on 或 desk-led.off；说台灯才 ACTION: lamp.on 或 lamp.off。
 对方要调灯的亮度时：ACTION: <id>.bri.<1-100>。
-对方要启动电脑上的程序时：ACTION: <id>.run。闲聊不要写 ACTION。
+对方要调空调温度时：ACTION: <id>.temp.<16-30>。
+对方要打游戏、打瓦、开黑、启动无畏契约或启动电脑上的程序时：短应，并 ACTION: <id>.run。不要问想玩哪一款，不要讲剧情或抽卡。
+闲聊不要写 ACTION。
 对方叹气、说累、打招呼时，先应人，不要当成开关指令。
 关灯或开程序时不要提问。上一轮已经问过就不要再问。
 对方要暂停、下一首或问在播什么时：短应；暂停写 ACTION: media.toggle，下一首写 ACTION: media.next。
 对方要调电脑音量时：ACTION: volume.up 或 volume.down 或 volume.mute。
 对方要倒计时时：ACTION: timer.<1-120分钟>。
-对方要记住一句口令时（例如「以后我说开黑就启动无畏契约」），口头答应即可，不要编造新程序。"""
+对方要记住一句口令时（例如「以后我说开黑就启动无畏契约」「记住打游戏就是打瓦」），口头答应即可，不要编造新程序。"""
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _ACTION_RE = re.compile(r"^\s*ACTION:\s*\S+\s*$", re.MULTILINE)
@@ -60,9 +63,14 @@ _ACTION_BRI = re.compile(
     r"^\s*ACTION:\s*(\S+?)\.(?:bri|brightness)\.(\d{1,3})\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+_ACTION_TEMP = re.compile(
+    r"^\s*ACTION:\s*(\S+?)\.(?:temp|temperature)\.(\d{1,2})\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 _CONTROL_HINT = re.compile(
     r"(打开|关掉|关闭|关上|开启|开一下|关一下|开灯|关灯|开空调|关空调|启动|"
-    r"无畏契约|valorant|打瓦|开黑|抖音|亮一点|调亮|暗一点|调暗|调到|再亮|再暗|"
+    r"无畏契约|valorant|打瓦|开黑|打游戏|玩游戏|启动游戏|开游戏|wegame|"
+    r"抖音|亮一点|调亮|暗一点|调暗|调到|调成|设成|设为|设定|再亮|再暗|灯带|台灯|挂灯|"
     r"暂停|下一首|上一首|切歌|继续播放|继续放|静音|音量|声音大|声音小|"
     r"叫我|提醒我|喊我)"
 )
@@ -74,6 +82,7 @@ _QUERY_PC = re.compile(r"(热|忙|卡|占用|cpu|内存|显卡)", re.IGNORECASE)
 _QUERY_LIGHT = re.compile(r"(开了没|亮着吗|开着吗|关了没|亮着没有)")
 _QUERY_MEDIA = re.compile(r"(在播什么|放的什么|在放什么|现在放的|播放的是什么|放什么歌)")
 _QUERY_LAST = re.compile(r"(刚才那句|刚才你说|刚才说了什么|上一句|你刚说)")
+_QUERY_MINI = re.compile(r"(mac\s*mini|mini|麦金塔|迷你|咪妮|麦克迷)", re.IGNORECASE)
 _MEDIA_NEXT = re.compile(r"(下一首|切歌|换一首|下一曲)")
 _MEDIA_PREV = re.compile(r"(上一首|上一曲)")
 _MEDIA_PAUSE = re.compile(r"(暂停|停下|别放了)")
@@ -93,16 +102,16 @@ _ACTION_TIMER = re.compile(
 )
 _RECENT_TURNS = 4
 _RECENT_CLIP = 72
-NUDGE_CONNECT_SEC = 90
-NUDGE_INTERVAL_SEC = 60
-NUDGE_COOLDOWN = timedelta(hours=2)
-NUDGE_MAX_DAY = 2
-NUDGE_QUIET_AFTER_CHAT = timedelta(minutes=45)
+PRESENCE_SEC = 90
 _BRIGHT_UP = re.compile(r"(亮一点|调亮|再亮|亮一些)")
 _BRIGHT_DOWN = re.compile(r"(暗一点|调暗|再暗|暗一些|暗一点)")
 _BRIGHT_SET = re.compile(
     r"(?:调到|亮度(?:调到|设为|设成)?)\s*([0-9]{1,3}|[零〇一二两三四五六七八九十百]+)"
 )
+_TEMP_SET = re.compile(
+    r"(?:调到|调成|设成|设为|设定|调至)?\s*([0-9]{2}|[零〇一二两三四五六七八九十]+)\s*度"
+)
+_TEMP_DEGREE = re.compile(r"(?:\d|[零〇一二两三四五六七八九十]+)\s*度")
 _USER_TIRED = re.compile(r"(累|困|乏|不想动|好累|疲惫)")
 _USER_FRUSTRATED = re.compile(r"(烦|气死|吵|够了|烦死)")
 _USER_BRIGHT = re.compile(r"(开心|谢谢|哈哈|好呀|不错)")
@@ -117,6 +126,17 @@ _TEACH = re.compile(
 _TEACH_ALT = re.compile(
     r"以后(?:我说|我喊)(?P<phrase>.{2,16}?)就(?:帮我)?(?:打开|启动|开启|关掉|关闭|关上|开)(?P<target>.+)"
 )
+_TEACH_GAME = re.compile(
+    r"(?P<phrase>打游戏|玩游戏|开黑).{0,16}?就是.{0,12}?"
+    r"(?P<target>打瓦|无畏契约|valorant|无畏|瓦)",
+    re.IGNORECASE,
+)
+_ASR_CONTRACT = re.compile(r"五[位味微]契约|无[谓位味]契约")
+_ASR_LEDSTRIP = re.compile(r"(?<![台挂])(?:灯带|灯袋|灯戴|登带|凳带)")
+_ASR_LEDSTRIP_ASR = re.compile(r"(打开|关掉|关闭|关上|开一下|关一下|开启).{0,6}当代")
+_ASR_LAMP = re.compile(r"(?:台灯|台登|太灯|抬灯)")
+_ASR_HIT_ME = re.compile(r"(?<![别不])打我(?=[啊呀啦哈。！？.?]|$)")
+_ASR_WANT_HIT = re.compile(r"(?:我要|我想)打我")
 _PUNCT = re.compile(r"[。！？，,、.\s「」『』\"“”]+")
 _FORBIDDEN_PHRASE = frozenset({"技能", "创建技能", "打开", "启动", "关掉", "关闭", "开启", "关上"})
 
@@ -134,8 +154,6 @@ class Companion:
         self._voice = False
         self._ready_at = 0.0
         self._voice_at = 0.0
-        self._tethys_ready = False
-        self._tethys_ready_at = 0.0
         self._speaking = False
         self._seq = 0
         self._lock = threading.Lock()
@@ -152,8 +170,14 @@ class Companion:
         self._timer: threading.Timer | None = None
         self._extra_llm_headers: dict[str, str] = {}
         self._k20_seen_at = 0.0
-        self._nudge_stop = threading.Event()
-        self._nudge_thread: threading.Thread | None = None
+        self._reads_dir: Path | None = None
+        self._story_books = None
+        self._read_jobs: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._read_queue: deque[str] = deque()
+        self._read_lock = threading.Lock()
+        self._read_cv = threading.Condition(self._read_lock)
+        self._read_worker: threading.Thread | None = None
+        self._read_cancel: set[str] = set()
 
     def configure(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
@@ -161,8 +185,6 @@ class Companion:
         self._voice = False
         self._ready_at = 0.0
         self._voice_at = 0.0
-        self._tethys_ready = False
-        self._tethys_ready_at = 0.0
         with self._lock:
             self._speaking = False
             self._seq += 1
@@ -186,10 +208,12 @@ class Companion:
             self._aliases_path.with_name("companion-mood.yaml") if self._aliases_path else None
         )
         self._mood = load_mood(self._mood_path)
-        self._ensure_nudge_loop()
 
     def set_chat_log(self, log: ChatLog | None) -> None:
         self._chat_log = log
+
+    def set_reads_dir(self, path: str | Path | None) -> None:
+        self._reads_dir = Path(path) if path else None
 
     def note_presence(self) -> None:
         """K20 刚打过认证过的 snapshot / chat：人还在这条链路上。"""
@@ -199,7 +223,7 @@ class Companion:
         seen = self._k20_seen_at
         if seen <= 0:
             return False
-        return (now_mono if now_mono is not None else time.monotonic()) - seen < NUDGE_CONNECT_SEC
+        return (now_mono if now_mono is not None else time.monotonic()) - seen < PRESENCE_SEC
 
     def snapshot(self) -> dict[str, Any] | None:
         if not self.config.enabled:
@@ -211,9 +235,6 @@ class Companion:
             "voice": self.voice(),
             "speaking": speaking,
         }
-        tethys = self.config.tethys
-        if tethys and tethys.enabled:
-            body["tethys"] = {"ready": self.tethys_ready()}
         return body
 
     def ready(self) -> bool:
@@ -226,124 +247,18 @@ class Companion:
         self._ready_at = now
         return self._ready
 
-    def tethys_ready(self) -> bool:
-        tethys = self.config.tethys
-        if not self.config.enabled or not tethys or not tethys.enabled:
-            return False
-        now = time.monotonic()
-        if now - self._tethys_ready_at < 5:
-            return self._tethys_ready
-        self._tethys_ready = self._ping_tethys(tethys)
-        self._tethys_ready_at = now
-        return self._tethys_ready
-
-    def _chat_via_tethys(
-        self,
-        text: str,
-        turn: str,
-        seq: int,
-        started: float,
-        tethys_cfg: TethysConfig,
-    ) -> dict[str, Any]:
-        task = strip_tethys_invoke(text)
-        _latency(turn, "tethys_route", chars=len(task))
-        speak = tethys_cfg.speak and bool(self.config.tts_base_url) and not self.config.tts_deliver
-        if speak and tethys_cfg.ack:
-            with self._lock:
-                if seq == self._seq:
-                    self._cue_sentence(tethys_cfg.ack, turn, seq)
-        tethys_at = time.monotonic()
-        try:
-            headers: dict[str, str] = {}
-            if tethys_cfg.session_key:
-                headers["X-Hermes-Session-Key"] = tethys_cfg.session_key
-            raw = self._complete_endpoint(
-                build_tethys_messages(task),
-                base_url=tethys_cfg.base_url,
-                model=tethys_cfg.model,
-                api_key=tethys_cfg.api_key,
-                timeout_sec=tethys_cfg.timeout_sec,
-                num_predict=1024,
-                extra_headers=headers or None,
-            )
-        except HubError as exc:
-            _latency(turn, "tethys_error", ms=_ms(tethys_at))
-            self._record_turn(turn, text, "", _ms(started), [], exc.message)
-            raise
-        tethys_text = _clean_reply(raw)
-        if not tethys_text:
-            _latency(turn, "tethys_empty", ms=_ms(tethys_at))
-            self._record_turn(turn, text, "", _ms(started), [], "泰缇斯没有说出话")
-            raise HubError("companion_unavailable", "泰缇斯没有说出话")
-        _latency(turn, "tethys_done", ms=_ms(tethys_at), chars=len(tethys_text))
-        self._schedule_weixin_notify(task, tethys_text, tethys_cfg)
-        if tethys_cfg.polish:
-            polish_at = time.monotonic()
-            polish_messages = build_polish_messages(task, tethys_text)
-            cue_as_we_go = speak
-            try:
-                if cue_as_we_go:
-                    spoken = self._stream_and_cue(polish_messages, turn, seq)
-                else:
-                    spoken = self._complete(polish_messages)
-            except HubError as exc:
-                _latency(turn, "tethys_polish_error", ms=_ms(polish_at))
-                self._record_turn(turn, text, tethys_text, _ms(started), [], exc.message)
-                raise
-            spoken = _clean_reply(spoken) or tethys_text
-            _latency(turn, "tethys_polish_done", ms=_ms(polish_at), chars=len(spoken))
-        else:
-            spoken = tethys_text
-            if speak:
-                for sent in _chunk_for_voice(spoken):
-                    if not self._cue_sentence(sent, turn, seq):
-                        break
-        self._ready = True
-        self._ready_at = time.monotonic()
-        self._tethys_ready = True
-        self._tethys_ready_at = time.monotonic()
-        _latency(turn, "chat_total", ms=_ms(started), route="tethys")
-        self._commit_reply(spoken)
-        self._record_turn(turn, text, spoken, _ms(started), [{"route": "tethys"}])
-        self._remember(text, spoken)
-        return {"text": spoken, "audio_id": None}
-
-    def _classify_route(self, text: str, turn: str) -> Route:
-        """守岸人（初步 Agent）判断简单/复杂；失败则保守走 shore。"""
-        bypass = route_bypass(text)
-        if bypass is not None:
-            _latency(turn, "route_bypass", route=bypass)
-            return bypass
-        classify_at = time.monotonic()
-        try:
-            raw = self._complete_endpoint(
-                build_route_messages(text),
-                base_url=self.config.llm_base_url,
-                model=self.config.llm_model,
-                api_key=self.config.llm_api_key,
-                timeout_sec=min(10.0, self.config.timeout_sec),
-                num_predict=24,
-                temperature=0.0,
-            )
-        except HubError:
-            _latency(turn, "route_error", ms=_ms(classify_at))
-            return "shore"
-        route = parse_route(raw)
-        chosen: Route = route if route is not None else "shore"
-        _latency(turn, "route_decide", ms=_ms(classify_at), route=chosen, raw=(raw or "")[:40])
-        return chosen
-
     def chat(self, body: dict[str, Any], facts: str) -> dict[str, Any]:
         if not self.config.enabled:
             raise HubError("not_found", "未开启桌面伴侣")
         if not isinstance(body, dict):
             raise HubError("bad_request", "JSON 必须是对象")
-        text = str(body.get("text") or "").strip()
-        if not text:
+        heard = str(body.get("text") or "").strip()
+        if not heard:
             raise HubError("bad_request", "text 不能为空")
+        text = fold_game_asr(heard)
         turn = _turn_id(body)
         started = time.monotonic()
-        _latency(turn, "chat_recv", chars=len(text))
+        _latency(turn, "chat_recv", chars=len(heard))
         with self._lock:
             self._seq += 1
             seq = self._seq
@@ -354,7 +269,7 @@ class Companion:
             self._prepare_mood(text, control=False)
             self._commit_reply(spoken)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=text
+                spoken, turn, seq, started, cue_llm=False, user=heard
             )
         control = looks_like_control(text)
         mood_extra = self._prepare_mood(text, control=control)
@@ -364,18 +279,18 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "query", kind=asked)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=text
+                spoken, turn, seq, started, cue_llm=False, user=heard
             )
         desk = self._handle_desk(text, turn)
         if desk:
-            self._commit_reply(desk)
-            _latency(turn, "desk", chars=len(desk))
+            spoken, skills = desk
+            self._commit_reply(spoken)
+            _latency(turn, "desk", chars=len(spoken))
             return self._finish_spoken(
-                desk, turn, seq, started, cue_llm=False, user=text
+                spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
             )
-        tethys_cfg = self.config.tethys
-        if tethys_cfg and tethys_cfg.enabled and self._classify_route(text, turn) == "tethys":
-            return self._chat_via_tethys(text, turn, seq, started, tethys_cfg)
+        # 泰缇斯 / Hermes 已移除：不再做「简单还是复杂」的路由判定，
+        # 所有对话直接交给伴侣模型（顺带省掉每次一条分类请求）。
         catalog = skill_prompt(self._skills)
         memory = recent_prompt(self._recent)
         desk_facts = desk_facts_prompt(_call_world(self._world.get("desk")))
@@ -392,24 +307,25 @@ class Companion:
                 raw = self._complete(messages)
         except HubError as exc:
             _latency(turn, "ollama_error", ms=_ms(llm_at))
-            self._record_turn(turn, text, "", _ms(started), [], exc.message)
+            self._record_turn(turn, heard, "", _ms(started), [], exc.message)
             raise
         spoken = _clean_reply(raw)
         spoken = enforce_ask_budget(spoken, bool(self._mood.get("allow_ask")))
         applied, skills = self._apply_device_skills(text, raw, turn)
         spoken = _ack_after_skills(spoken, skills)
+        spoken = _ack_ledstrip(text, spoken, skills)
         filled = False
         if not spoken and applied:
             spoken = "好。"
             filled = True
         if not spoken:
             _latency(turn, "ollama_empty", ms=_ms(llm_at))
-            self._record_turn(turn, text, "", _ms(started), skills, "大脑没有说出话")
+            self._record_turn(turn, heard, "", _ms(started), skills, "大脑没有说出话")
             raise HubError("companion_unavailable", "大脑没有说出话")
         _latency(turn, "ollama_done", ms=_ms(llm_at), chars=len(spoken))
         self._commit_reply(spoken)
         return self._finish_spoken(
-            spoken, turn, seq, started, filled=filled, user=text, skills=skills
+            spoken, turn, seq, started, filled=filled, user=heard, skills=skills
         )
 
     def _finish_spoken(
@@ -462,12 +378,38 @@ class Companion:
             turn=turn, user=user, reply=reply, ms=ms, skills=skills, error=error
         )
 
-    def stop(self) -> dict[str, Any]:
-        if not self.config.enabled:
-            raise HubError("not_found", "未开启桌面伴侣")
+    def set_story_books(self, books: Any) -> None:
+        self._story_books = books
+
+    def begin_story_audio(self) -> None:
+        self._cancel_running_reads()
+        with self._lock:
+            self._seq += 1
+            self._speaking = True
+        self._stop_tts()
+
+    def cue_story_sentence(self, text: str) -> bool:
+        if not self.config.enabled or not self.config.tts_base_url:
+            return False
+        with self._lock:
+            seq = self._seq
+        return bool(self._cue_sentence(text, "story", seq))
+
+    def stop_story_audio(self) -> None:
         with self._lock:
             self._seq += 1
             self._speaking = False
+        self._stop_tts()
+
+    def stop(self) -> dict[str, Any]:
+        if not self.config.enabled:
+            raise HubError("not_found", "未开启桌面伴侣")
+        if self._story_books is not None:
+            self._story_books.pause()
+        with self._lock:
+            self._seq += 1
+            self._speaking = False
+        self._cancel_running_reads()
         self._stop_tts()
         _latency("-", "stop")
         return {"ok": True}
@@ -499,6 +441,352 @@ class Companion:
             text, turn, seq, started, cue_llm=False, user="（微信）"
         )
 
+    def read(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Hub 朗读页：预估时长后，书桌播放或生成可下载 wav。"""
+        if not self.config.enabled:
+            raise HubError("not_found", "未开启桌面伴侣")
+        if not isinstance(body, dict):
+            raise HubError("bad_request", "JSON 必须是对象")
+        text = str(body.get("text") or "").strip()
+        if not text:
+            raise HubError("bad_request", "text 不能为空")
+        if len(text) > MAX_READ_CHARS:
+            raise HubError("bad_request", "一次最多八千字")
+        mode = str(body.get("mode") or "play").strip()
+        if mode not in {"play", "file"}:
+            raise HubError("bad_request", "mode 只能是 play 或 file")
+        if not self.config.tts_base_url:
+            raise HubError("companion_unavailable", "还没接上嘴巴")
+        if self._story_books is not None:
+            self._story_books.pause()
+        chars = spoken_chars(text)
+        estimate = estimate_read_seconds(text)
+        turn = _turn_id(body)
+        raw_chunks = chunk_read_text(text)
+        chunks = pack_read_chunks(raw_chunks)
+        if not chunks:
+            raise HubError("bad_request", "text 不能为空")
+        _latency(turn, "read_start", mode=mode, chars=chars, chunks=len(chunks), raw=len(raw_chunks))
+        job = self._remember_read_job(
+            turn,
+            mode=mode,
+            text=text,
+            chars=chars,
+            estimate=estimate,
+            chunks=len(chunks),
+            status="queued",
+            done=0,
+            pieces=chunks,
+        )
+        self._ensure_read_worker()
+        with self._read_cv:
+            self._read_queue.append(turn)
+            self._read_cv.notify()
+        out = _read_job_public(job)
+        out["text"] = text
+        return out
+
+    def read_jobs(self) -> dict[str, Any]:
+        if not self.config.enabled:
+            raise HubError("not_found", "未开启桌面伴侣")
+        self._merge_disk_reads()
+        with self._read_lock:
+            items = [_read_job_public(job) for job in self._read_jobs.values()]
+        items.sort(key=lambda item: int(item.get("created_at") or 0), reverse=True)
+        return {"items": items}
+
+    def read_job_action(self, ident: str, action: str) -> dict[str, Any]:
+        if not self.config.enabled:
+            raise HubError("not_found", "未开启桌面伴侣")
+        if not ident or not ID_RE.match(ident):
+            raise HubError("not_found", "没有这个任务")
+        action = (action or "").strip()
+        if action == "cancel":
+            return self._cancel_read_job(ident)
+        if action == "delete":
+            return self._delete_read_job(ident)
+        if action == "replay":
+            return self._replay_read_job(ident)
+        raise HubError("bad_request", "action 只能是 cancel、delete 或 replay")
+
+    def _remember_read_job(
+        self,
+        ident: str,
+        *,
+        mode: str,
+        text: str,
+        chars: int,
+        estimate: int,
+        chunks: int,
+        status: str,
+        done: int,
+        pieces: list[str] | None = None,
+    ) -> dict[str, Any]:
+        preview = "".join(text.split())
+        if len(preview) > 36:
+            preview = preview[:35] + "…"
+        job: dict[str, Any] = {
+            "id": ident,
+            "mode": mode,
+            "status": status,
+            "chars": chars,
+            "estimate_sec": estimate,
+            "chunks": chunks,
+            "done": done,
+            "preview": preview,
+            "audio_id": None,
+            "duration_sec": None,
+            "bytes": None,
+            "filename": None,
+            "error": None,
+            "created_at": int(time.time()),
+            "_text": text,
+        }
+        if pieces is not None:
+            job["_chunks"] = list(pieces)
+        with self._read_lock:
+            self._read_jobs[ident] = job
+            while len(self._read_jobs) > MAX_READ_JOBS:
+                self._read_jobs.popitem(last=False)
+        return job
+
+    def _ensure_read_worker(self) -> None:
+        worker = self._read_worker
+        if worker is not None and worker.is_alive():
+            return
+        thread = threading.Thread(target=self._read_loop, name="read-jobs", daemon=True)
+        self._read_worker = thread
+        thread.start()
+
+    def _read_loop(self) -> None:
+        while True:
+            with self._read_cv:
+                while not self._read_queue:
+                    self._read_cv.wait()
+                ident = self._read_queue.popleft()
+            try:
+                self._run_read_job(ident)
+            except Exception as exc:  # noqa: BLE001
+                _latency(ident, "read_job_crash")
+                with self._read_lock:
+                    job = self._read_jobs.get(ident)
+                    if job is not None:
+                        job["status"] = "error"
+                        job["error"] = str(exc)[:120]
+
+    def _run_read_job(self, ident: str) -> None:
+        with self._read_lock:
+            if ident in self._read_cancel:
+                job = self._read_jobs.get(ident)
+                if job is not None and job.get("status") in {"queued", "running"}:
+                    job["status"] = "cancelled"
+                    job.pop("_chunks", None)
+                return
+            job = self._read_jobs.get(ident)
+            if job is None or job.get("status") == "cancelled":
+                return
+            chunks = list(job.get("_chunks") or [])
+            mode = str(job.get("mode") or "file")
+            job["status"] = "running"
+            job["done"] = 0
+        _latency(ident, "read_job_run", mode=mode, chunks=len(chunks))
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+            self._speaking = True
+        try:
+            if mode == "play":
+                self._stop_tts()
+            parts: list[bytes] = []
+            for i, sent in enumerate(chunks, start=1):
+                self._raise_if_read_stopped(ident, seq)
+                if mode == "play":
+                    if not self._cue_sentence(sent, ident, seq):
+                        raise HubError("companion_unavailable", "被打断了")
+                else:
+                    wav = self._speak(sent, ident, play_only=False, play=False)
+                    if not wav:
+                        raise HubError("companion_unavailable", "合成失败")
+                    parts.append(wav)
+                with self._read_lock:
+                    current = self._read_jobs.get(ident)
+                    if current is not None:
+                        current["done"] = i
+                _latency(ident, "read_chunk", i=i, n=len(chunks), chars=len(sent), mode=mode)
+            if mode == "play":
+                with self._read_lock:
+                    current = self._read_jobs.get(ident)
+                    if current is not None:
+                        current["status"] = "done"
+                        current["done"] = len(chunks)
+                        current.pop("_chunks", None)
+                _latency(ident, "read_job_done", mode="play")
+                return
+            joined = join_wavs(parts)
+            self._store_read(ident, joined)
+            with self._read_lock:
+                current = self._read_jobs.get(ident)
+                if current is not None:
+                    current["status"] = "done"
+                    current["done"] = len(chunks)
+                    current["audio_id"] = ident
+                    current["duration_sec"] = round(wav_duration_sec(joined), 3)
+                    current["bytes"] = len(joined)
+                    current["filename"] = f"shorekeeper-{ident}.wav"
+                    current.pop("_chunks", None)
+                    self._write_read_meta(current)
+            _latency(ident, "read_job_done", bytes=len(joined))
+        except (HubError, ValueError, wave.Error) as exc:
+            interrupted = isinstance(exc, HubError) and exc.message == "被打断了"
+            message = exc.message if isinstance(exc, HubError) else "合成失败"
+            with self._read_lock:
+                current = self._read_jobs.get(ident)
+                if current is not None:
+                    current["status"] = "cancelled" if interrupted else "error"
+                    current["error"] = None if interrupted else message
+                    current.pop("_chunks", None)
+            _latency(ident, "read_job_error" if not interrupted else "read_job_cancel")
+        finally:
+            with self._lock:
+                self._speaking = False
+
+    def _raise_if_read_stopped(self, ident: str, seq: int) -> None:
+        with self._read_lock:
+            cancelled = ident in self._read_cancel
+        with self._lock:
+            barged = seq != self._seq
+        if cancelled or barged:
+            raise HubError("companion_unavailable", "被打断了")
+
+    def _cancel_running_reads(self) -> None:
+        with self._read_lock:
+            for ident, job in self._read_jobs.items():
+                if job.get("status") in {"queued", "running"}:
+                    job["status"] = "cancelled"
+                    job["error"] = None
+                    job.pop("_chunks", None)
+                    self._read_cancel.add(ident)
+            self._read_queue.clear()
+
+    def _cancel_read_job(self, ident: str) -> dict[str, Any]:
+        running = False
+        with self._read_lock:
+            job = self._read_jobs.get(ident)
+            if job is None:
+                raise HubError("not_found", "没有这个任务")
+            if job.get("status") in {"done", "error", "cancelled"}:
+                return _read_job_public(job)
+            job["status"] = "cancelled"
+            job["error"] = None
+            job.pop("_chunks", None)
+            self._read_cancel.add(ident)
+            try:
+                self._read_queue.remove(ident)
+            except ValueError:
+                running = True
+        if running:
+            with self._lock:
+                self._seq += 1
+                self._speaking = False
+            self._stop_tts()
+        with self._read_lock:
+            job = self._read_jobs.get(ident) or job
+        return _read_job_public(job)
+
+    def _delete_read_job(self, ident: str) -> dict[str, Any]:
+        with self._read_lock:
+            job = self._read_jobs.get(ident)
+        if job and job.get("status") in {"queued", "running"}:
+            self._cancel_read_job(ident)
+        with self._read_lock:
+            self._read_jobs.pop(ident, None)
+            self._read_cancel.discard(ident)
+        with self._lock:
+            self._clips.pop(ident, None)
+        if self._reads_dir and ID_RE.match(ident):
+            for suffix in (".wav", ".json"):
+                path = self._reads_dir / f"{ident}{suffix}"
+                if path.is_file():
+                    path.unlink()
+        return {"ok": True, "id": ident}
+
+    def _replay_read_job(self, ident: str) -> dict[str, Any]:
+        with self._read_lock:
+            job = self._read_jobs.get(ident)
+            text = str((job or {}).get("_text") or "")
+        if not text:
+            self._merge_disk_reads()
+            with self._read_lock:
+                job = self._read_jobs.get(ident)
+                text = str((job or {}).get("_text") or "")
+        if not text:
+            raise HubError("not_found", "这篇稿已经不在了")
+        return self.read({"text": text, "mode": "play"})
+
+    def _merge_disk_reads(self) -> None:
+        if self._reads_dir is None or not self._reads_dir.is_dir():
+            return
+        wavs = sorted(self._reads_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
+        with self._read_lock:
+            for path in wavs:
+                ident = path.stem
+                if not ID_RE.match(ident) or ident in self._read_jobs:
+                    continue
+                if len(self._read_jobs) >= MAX_READ_JOBS:
+                    break
+                meta: dict[str, Any] = {}
+                sidecar = path.with_suffix(".json")
+                if sidecar.is_file():
+                    try:
+                        loaded = json.loads(sidecar.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        loaded = {}
+                    if isinstance(loaded, dict):
+                        meta = loaded
+                self._read_jobs[ident] = {
+                    "id": ident,
+                    "mode": "file",
+                    "status": "done",
+                    "chars": meta.get("chars"),
+                    "estimate_sec": meta.get("estimate_sec"),
+                    "chunks": meta.get("chunks"),
+                    "done": meta.get("chunks") or meta.get("done"),
+                    "preview": meta.get("preview") or ident,
+                    "audio_id": ident,
+                    "duration_sec": meta.get("duration_sec"),
+                    "bytes": meta.get("bytes") or path.stat().st_size,
+                    "filename": meta.get("filename") or f"shorekeeper-{ident}.wav",
+                    "error": None,
+                    "created_at": meta.get("created_at") or int(path.stat().st_mtime),
+                    "_text": meta.get("text") or "",
+                }
+
+    def _write_read_meta(self, job: dict[str, Any]) -> None:
+        if self._reads_dir is None:
+            return
+        ident = str(job.get("id") or "")
+        if not ident or not ID_RE.match(ident):
+            return
+        payload = {
+            "id": ident,
+            "mode": "file",
+            "status": "done",
+            "chars": job.get("chars"),
+            "estimate_sec": job.get("estimate_sec"),
+            "chunks": job.get("chunks"),
+            "done": job.get("done"),
+            "preview": job.get("preview"),
+            "duration_sec": job.get("duration_sec"),
+            "bytes": job.get("bytes"),
+            "filename": job.get("filename"),
+            "created_at": job.get("created_at"),
+            "text": job.get("_text") or "",
+        }
+        self._reads_dir.mkdir(parents=True, exist_ok=True)
+        (self._reads_dir / f"{ident}.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+
     def audio(self, ident: str) -> bytes:
         if not self.config.enabled:
             raise HubError("not_found", "未开启桌面伴侣")
@@ -506,6 +794,10 @@ class Companion:
             raise HubError("not_found", "没有这段声音")
         with self._lock:
             wav = self._clips.get(ident)
+        if not wav and self._reads_dir and ID_RE.match(ident):
+            stored = self._reads_dir / f"{ident}.wav"
+            if stored.is_file():
+                wav = stored.read_bytes()
         if not wav:
             raise HubError("not_found", "没有这段声音")
         _latency(ident, "audio_get", bytes=len(wav))
@@ -556,6 +848,8 @@ class Companion:
             return speak_temp(_call_world(self._world.get("temperature")), text)
         if kind == "pc":
             return speak_pc(_call_world(self._world.get("pc")), text)
+        if kind == "mini":
+            return speak_mini(_call_world(self._world.get("desk")), text)
         if kind == "light":
             getter = self._world.get("device")
             return speak_light(text, self._skills, getter if callable(getter) else None)
@@ -565,17 +859,98 @@ class Companion:
             return speak_last(self._recent)
         return "我不太清楚。"
 
-    def _handle_desk(self, text: str, turn: str) -> str | None:
+    def _handle_desk(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         seconds = parse_timer(text)
         if seconds is not None:
-            return self._arm_timer(seconds)
+            spoken = self._arm_timer(seconds)
+            return spoken, [{"id": "timer", "sec": seconds, "ok": True}]
         media_act = infer_media(text)
         if media_act:
-            return self._run_media(media_act, turn)
+            spoken = self._run_media(media_act, turn)
+            ok = spoken not in {"这次没动成。", "播放控制关着。", "这台电脑还不能控播放。"}
+            return spoken, [{"id": "media", "action": media_act, "ok": ok}]
         volume_act = infer_volume(text)
         if volume_act:
-            return self._run_volume(volume_act, turn)
+            spoken = self._run_volume(volume_act, turn)
+            ok = spoken not in {"这次没动成。", "音量我还调不了。"}
+            return spoken, [{"id": "volume", "action": volume_act, "ok": ok}]
+        launched = self._run_launch(text, turn)
+        if launched:
+            return launched
+        climate = self._run_temp(text, turn)
+        if climate:
+            return climate
         return None
+
+    def _run_launch(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        if not self._skills or self._run_skill is None:
+            return None
+        wanted = infer_control(text, self._skills, self._aliases)
+        for token, on in wanted:
+            if not on:
+                continue
+            ident = resolve_skill(token, self._skills)
+            if not ident:
+                continue
+            item = next((s for s in self._skills if s["id"] == ident), None)
+            if not item or item.get("kind") != "run":
+                continue
+            name = item.get("name") or ident
+            try:
+                self._call_run_skill(ident, True)
+            except HubError as exc:
+                _latency(turn, "skill_error", id=ident, code=exc.code)
+                return (
+                    "这次没动成。",
+                    [{"id": ident, "name": name, "on": True, "ok": False, "code": exc.code}],
+                )
+            _latency(turn, "skill_ok", id=ident, on=1)
+            return f"好，开{name}。", [{"id": ident, "name": name, "on": True, "ok": True}]
+        return None
+
+    def _run_temp(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        wanted = infer_temp(text, self._skills)
+        if not wanted or self._run_skill is None:
+            return None
+        events: list[dict[str, Any]] = []
+        applied = False
+        spoken = ""
+        for token, spec in wanted:
+            ident = resolve_skill(token, self._skills)
+            if not ident:
+                continue
+            item = next((row for row in self._skills if row["id"] == ident), None)
+            if not item:
+                continue
+            name = item.get("name") or ident
+            prop_id = str(item.get("temp_id") or "temp")
+            value = int(spec["value"])
+            try:
+                self._call_run_skill(ident, True, props={prop_id: value})
+            except HubError as exc:
+                _latency(turn, "skill_error", id=ident, code=exc.code)
+                return (
+                    "这次没动成。",
+                    [
+                        {
+                            "id": ident,
+                            "name": name,
+                            "on": True,
+                            "temp": value,
+                            "ok": False,
+                            "code": exc.code,
+                        }
+                    ],
+                )
+            applied = True
+            _latency(turn, "skill_ok", id=ident, on=1, temp=value)
+            events.append(
+                {"id": ident, "name": name, "on": True, "temp": value, "ok": True}
+            )
+            spoken = f"好，{name}{cn_num(value)}度。"
+        if not applied:
+            return None
+        return spoken, events
 
     def _run_media(self, action: str, turn: str) -> str:
         fn = self._world.get("media_command")
@@ -641,26 +1016,6 @@ class Companion:
         if timer is not None:
             timer.cancel()
 
-    def _ensure_nudge_loop(self) -> None:
-        if not self.config.enabled:
-            return
-        thread = self._nudge_thread
-        if thread is not None and thread.is_alive():
-            return
-        self._nudge_stop.clear()
-        thread = threading.Thread(target=self._nudge_loop, name="shore-nudge", daemon=True)
-        self._nudge_thread = thread
-        thread.start()
-
-    def _nudge_loop(self) -> None:
-        while not self._nudge_stop.wait(NUDGE_INTERVAL_SEC):
-            if not self.config.enabled:
-                continue
-            try:
-                self._maybe_nudge()
-            except Exception:
-                continue
-
     def _desk_flags(self) -> tuple[bool, bool]:
         raw_game = _call_world(self._world.get("game"))
         if "game" not in self._world:
@@ -673,52 +1028,6 @@ class Companion:
         connected, game = self._desk_flags()
         return unsolicited_block_reason(connected=connected, game=game)
 
-    def _maybe_nudge(self, now: datetime | None = None) -> str | None:
-        if not self.config.enabled:
-            return None
-        moment = now or datetime.now().astimezone()
-        mood = decay_mood(dict(self._mood), moment)
-        with self._lock:
-            speaking = self._speaking
-        media = _call_world(self._world.get("media"))
-        media_playing = isinstance(media, dict) and bool(media.get("playing"))
-        connected, game = self._desk_flags()
-        reason = nudge_block_reason(
-            connected=connected,
-            game=game,
-            hour=moment.hour,
-            self_tag=str(mood.get("self") or "quiet"),
-            speaking=speaking,
-            media_playing=media_playing,
-            last_nudge=parse_mood_time(mood.get("last_nudge_at"), moment),
-            last_user=parse_mood_time(mood.get("last_user_at"), moment),
-            nudge_count=int(mood.get("nudge_count") or 0),
-            nudge_day=str(mood.get("nudge_day") or "") or None,
-            now=moment,
-        )
-        if reason:
-            return None
-        spoken = nudge_line(str(mood.get("self") or "quiet"))
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
-        turn = uuid.uuid4().hex[:12]
-        if self.config.tts_base_url:
-            self._cue_sentence(spoken, turn, seq)
-        self._remember("（守夜）", spoken)
-        day = moment.date().isoformat()
-        count = 1
-        if str(mood.get("nudge_day") or "") == day:
-            count = int(mood.get("nudge_count") or 0) + 1
-        mood["last_nudge_at"] = moment.isoformat(timespec="seconds")
-        mood["nudge_day"] = day
-        mood["nudge_count"] = count
-        mood["updated_at"] = moment.isoformat(timespec="seconds")
-        self._mood = mood
-        save_mood(self._mood_path, mood)
-        _latency(turn, "nudge", chars=len(spoken))
-        return spoken
-
     def _remember(self, user: str, reply: str) -> None:
         spoken = (reply or "").strip()
         heard = (user or "").strip()
@@ -726,15 +1035,23 @@ class Companion:
             return
         self._recent.append((heard, spoken))
 
-    def _call_run_skill(self, ident: str, on: bool, brightness: int | None = None) -> None:
+    def _call_run_skill(
+        self,
+        ident: str,
+        on: bool,
+        brightness: int | None = None,
+        props: dict[str, Any] | None = None,
+    ) -> None:
         fn = self._run_skill
         if fn is None:
             return
-        if brightness is None:
-            fn(ident, on)
-            return
+        kwargs: dict[str, Any] = {}
+        if brightness is not None:
+            kwargs["brightness"] = brightness
+        if props:
+            kwargs["props"] = props
         try:
-            fn(ident, on, brightness)
+            fn(ident, on, **kwargs)
         except TypeError:
             fn(ident, on)
 
@@ -747,13 +1064,19 @@ class Companion:
             return desk_ok, events
         wanted = parse_action_lines(raw_reply)
         bri_wanted = parse_bri_actions(raw_reply)
-        if (wanted or bri_wanted) and not looks_like_control(user_text):
+        temp_wanted = parse_temp_actions(raw_reply)
+        if (wanted or bri_wanted or temp_wanted) and not looks_like_control(user_text):
             wanted = []
             bri_wanted = []
+            temp_wanted = []
+        wanted = constrain_light_actions(user_text, wanted, self._skills)
+        bri_wanted = constrain_light_actions(user_text, bri_wanted, self._skills)
         if not wanted:
             wanted = infer_control(user_text, self._skills, self._aliases)
         if not bri_wanted:
             bri_wanted = infer_brightness(user_text, self._skills)
+        if not temp_wanted:
+            temp_wanted = infer_temp(user_text, self._skills)
         applied = False
         for token, on in wanted:
             ident = resolve_skill(token, self._skills)
@@ -807,6 +1130,34 @@ class Companion:
             events.append(
                 {"id": ident, "name": name, "on": True, "brightness": target, "ok": True}
             )
+        for token, spec in temp_wanted:
+            ident = resolve_skill(token, self._skills)
+            if not ident:
+                continue
+            item = next((row for row in self._skills if row["id"] == ident), None)
+            name = (item or {}).get("name") or ident
+            prop_id = str((item or {}).get("temp_id") or "temp")
+            value = int(spec["value"])
+            try:
+                self._call_run_skill(ident, True, props={prop_id: value})
+            except HubError as exc:
+                _latency(turn, "skill_error", id=ident, code=exc.code)
+                events.append(
+                    {
+                        "id": ident,
+                        "name": name,
+                        "on": True,
+                        "temp": value,
+                        "ok": False,
+                        "code": exc.code,
+                    }
+                )
+                continue
+            applied = True
+            _latency(turn, "skill_ok", id=ident, on=1, temp=value)
+            events.append(
+                {"id": ident, "name": name, "on": True, "temp": value, "ok": True}
+            )
         desk_ok = self._apply_desk_actions(user_text, raw_reply, turn, events)
         return applied or desk_ok, events
 
@@ -858,6 +1209,16 @@ class Companion:
                 self._clips.popitem(last=False)
         return ident
 
+    def _store_read(self, ident: str, wav: bytes) -> None:
+        with self._lock:
+            self._clips[ident] = wav
+            while len(self._clips) > MAX_CLIPS:
+                self._clips.popitem(last=False)
+        if self._reads_dir is None:
+            return
+        self._reads_dir.mkdir(parents=True, exist_ok=True)
+        (self._reads_dir / f"{ident}.wav").write_bytes(wav)
+
     def _stop_tts(self) -> None:
         if not self.config.tts_base_url:
             return
@@ -873,18 +1234,6 @@ class Companion:
                 resp.read()
         except (TimeoutError, urllib.error.URLError, OSError):
             return
-
-    def _ping_tethys(self, tethys: TethysConfig) -> bool:
-        url = _join(tethys.base_url, "/models")
-        headers: dict[str, str] = {}
-        if tethys.api_key:
-            headers["Authorization"] = f"Bearer {tethys.api_key}"
-        try:
-            req = urllib.request.Request(url, method="GET", headers=headers)
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
-                return 200 <= resp.status < 300
-        except (urllib.error.URLError, TimeoutError, OSError):
-            return False
 
     def _complete_endpoint(
         self,
@@ -923,45 +1272,6 @@ class Companion:
                 self.config.num_predict,
             ) = saved
             self._extra_llm_headers = saved_headers
-
-    def _schedule_weixin_notify(
-        self, task: str, tethys_text: str, tethys_cfg: TethysConfig
-    ) -> None:
-        if not tethys_cfg.weixin_notify:
-            return
-        thread = threading.Thread(
-            target=self._notify_weixin,
-            args=(task, tethys_text, tethys_cfg),
-            daemon=True,
-            name="tethys-weixin",
-        )
-        thread.start()
-
-    def _notify_weixin(
-        self, task: str, tethys_text: str, tethys_cfg: TethysConfig
-    ) -> None:
-        url = (tethys_cfg.notify_url or "").strip() or default_notify_url(
-            tethys_cfg.base_url
-        )
-        body = json.dumps(
-            {"text": f"书桌任务：{task.strip()}\n\n{tethys_text.strip()}"},
-            ensure_ascii=False,
-        ).encode("utf-8")
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        if tethys_cfg.api_key:
-            headers["Authorization"] = f"Bearer {tethys_cfg.api_key}"
-        req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-        started = time.monotonic()
-        try:
-            with urllib.request.urlopen(req, timeout=15.0) as resp:
-                ok = 200 <= resp.status < 300
-        except (TimeoutError, urllib.error.URLError, OSError):
-            _latency("-", "weixin_notify_error", ms=_ms(started))
-            return
-        if ok:
-            _latency("-", "weixin_notify_ok", ms=_ms(started))
-        else:
-            _latency("-", "weixin_notify_error", ms=_ms(started))
 
     def _ping_llm(self) -> bool:
         openai = openai_mode(self.config)
@@ -1079,8 +1389,13 @@ class Companion:
                 "stream": stream,
                 "max_tokens": self.config.num_predict,
                 "temperature": temp,
-                "enable_thinking": False,
             }
+            if "hermes" not in (self.config.llm_model or "").lower():
+                payload["enable_thinking"] = False
+            # openrouter/free 会抽到必须推理的模型。effort=none 会被拒绝，
+            # 推理正文又进不了 content，守岸人就会当成没说话。minimal 把话留在正文。
+            if _openrouter(self.config.llm_base_url):
+                payload["reasoning"] = {"effort": "minimal"}
             return json.dumps(payload).encode("utf-8")
         payload = {
             "model": self.config.llm_model,
@@ -1145,20 +1460,36 @@ class Companion:
             return False
         return isinstance(body, dict) and bool(body.get("ready"))
 
-    def _speak(self, text: str, turn: str) -> bytes | None:
+    def _speak(
+        self,
+        text: str,
+        turn: str,
+        *,
+        play_only: bool | None = None,
+        play: bool | None = None,
+    ) -> bytes | None:
         url = _join(self.config.tts_base_url or "", "/v1/speak")
-        play_only = not self.config.tts_deliver
+        if play_only is None:
+            play_only = not self.config.tts_deliver
         body: dict[str, Any] = {
             "text": text,
             "voice": "shorekeeper",
             "language": "chinese",
             "turn_id": turn,
+            "speed": round(float(getattr(self.config, "voice_speed", 1.0) or 1.0), 2),
         }
         if play_only:
             body["play_only"] = True
+        if play is False:
+            body["play"] = False
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         accept = "application/json" if play_only else "audio/wav"
-        timeout = 3.0 if play_only else self.config.tts_timeout_sec
+        if play_only:
+            timeout = 3.0
+        elif play is False:
+            timeout = READ_TTS_TIMEOUT_SEC
+        else:
+            timeout = self.config.tts_timeout_sec
         req = urllib.request.Request(
             url,
             data=payload,
@@ -1183,7 +1514,7 @@ class Companion:
 
 
 def skill_prompt(skills: list[dict[str, str]]) -> str:
-    toggles = [item for item in skills if item.get("kind", "toggle") != "run"]
+    toggles = [item for item in skills if item.get("kind", "toggle") not in {"run", "sensor"}]
     launches = [item for item in skills if item.get("kind") == "run"]
     dimmable = [item for item in toggles if item.get("brightness")]
     lines: list[str] = []
@@ -1194,6 +1525,10 @@ def skill_prompt(skills: list[dict[str, str]]) -> str:
     if dimmable:
         names = "、".join(f"{item['name']}（{item['id']}）" for item in dimmable)
         lines.append(f"可调亮度：{names}。对方要调亮暗时，ACTION: <id>.bri.<1-100>。")
+    climate = [item for item in toggles if item.get("temp")]
+    if climate:
+        names = "、".join(f"{item['name']}（{item['id']}）" for item in climate)
+        lines.append(f"可调温度：{names}。对方要调空调温度时，ACTION: <id>.temp.<16-30>。")
     if launches:
         names = "、".join(f"{item['name']}（{item['id']}）" for item in launches)
         lines.append(f"可启动：{names}。")
@@ -1224,8 +1559,35 @@ def parse_bri_actions(raw: str) -> list[tuple[str, dict[str, int]]]:
     return found
 
 
+def parse_temp_actions(raw: str) -> list[tuple[str, dict[str, int]]]:
+    found: list[tuple[str, dict[str, int]]] = []
+    for match in _ACTION_TEMP.finditer(raw):
+        value = int(match.group(2))
+        if 16 <= value <= 30:
+            found.append((match.group(1), {"value": value}))
+    return found
+
+
+def fold_game_asr(text: str) -> str:
+    """把打瓦 / 无畏契约 / 灯带台灯的常见口误折回技能能认的词。"""
+    out = (text or "").strip()
+    if not out:
+        return out
+    out = _ASR_CONTRACT.sub("无畏契约", out)
+    out = out.replace("微企业", "WeGame")
+    out = _ASR_WANT_HIT.sub("我要打瓦", out)
+    out = _ASR_HIT_ME.sub("打瓦", out)
+    if _ASR_LEDSTRIP_ASR.search(out):
+        out = _ASR_LEDSTRIP_ASR.sub(lambda m: m.group(0).replace("当代", "灯带"), out)
+    if _ASR_LEDSTRIP.search(out) and "台灯" not in out:
+        out = _ASR_LEDSTRIP.sub("灯带", out)
+    elif _ASR_LAMP.search(out) and "灯带" not in out:
+        out = _ASR_LAMP.sub("台灯", out)
+    return out
+
+
 def looks_like_control(text: str) -> bool:
-    return bool(_CONTROL_HINT.search(text))
+    return bool(_CONTROL_HINT.search(fold_game_asr(text)))
 
 
 def looks_like_query(text: str) -> bool:
@@ -1248,6 +1610,10 @@ def query_kind(text: str) -> str | None:
         r"(温度|多少度|几度)", stripped
     ):
         return "pc"
+    if _QUERY_MINI.search(stripped) and re.search(
+        r"(温度|多少度|几度|占用|内存|热|忙)", stripped
+    ):
+        return "mini"
     if re.search(r"(显卡|gpu)", stripped, re.IGNORECASE):
         return "pc"
     if "电脑" in stripped and _QUERY_PC.search(stripped):
@@ -1260,18 +1626,94 @@ def query_kind(text: str) -> str | None:
 
 
 def is_teach_attempt(text: str) -> bool:
-    if "以后我说" in text or "以后我喊" in text:
+    folded = fold_game_asr(text)
+    if "以后我说" in folded or "以后我喊" in folded:
         return True
-    return ("技能" in text) and any(word in text for word in ("创建", "新建", "加一个"))
+    if ("技能" in folded) and any(word in folded for word in ("创建", "新建", "加一个")):
+        return True
+    if _TEACH_GAME.search(folded):
+        return True
+    return False
 
 
 def skill_nicknames(item: dict[str, str]) -> list[str]:
     names = [item["id"], item["name"]]
     if "无畏契约" in item["name"] or item["id"] == "wegame":
-        names.extend(["无畏契约", "无畏", "valorant", "打瓦"])
+        names.extend(
+            [
+                "无畏契约",
+                "无畏",
+                "valorant",
+                "打瓦",
+                "瓦",
+                "打游戏",
+                "玩游戏",
+                "开黑",
+                "启动游戏",
+                "开游戏",
+                "五位契约",
+                "WeGame",
+                "wegame",
+            ]
+        )
     if "抖音" in item["name"] or item["id"] == "douyin":
         names.extend(["抖音", "tiktok", "刷抖音"])
+    if "灯带" in item["name"] or item["id"] in {"desk-led", "ledstrip", "ws2812"}:
+        names.extend(["灯带", "氛围灯", "LED灯带"])
     return [name for name in names if name]
+
+
+def _is_ledstrip(item: dict[str, str]) -> bool:
+    if item.get("kind") == "run":
+        return False
+    name = str(item.get("name") or "")
+    ident = str(item.get("id") or "")
+    return "灯带" in name or ident in {"desk-led", "ledstrip", "ws2812"}
+
+
+def constrain_light_actions(
+    text: str,
+    wanted: list[tuple[Any, Any]],
+    skills: list[dict[str, str]],
+) -> list[tuple[Any, Any]]:
+    """User said 灯带: don't operate 挂灯 / 台灯 even if the model wrote ACTION: 挂灯.off."""
+    if "灯带" not in (text or "") or not wanted:
+        if "台灯" in (text or "") and "灯带" not in (text or "") and wanted:
+            lamp_ids = {
+                item["id"]
+                for item in skills
+                if item.get("id") == "lamp" or item.get("name") == "台灯"
+            }
+            kept_lamp: list[tuple[Any, Any]] = []
+            for token, payload in wanted:
+                ident = resolve_skill(str(token), skills)
+                if ident and ident in lamp_ids:
+                    kept_lamp.append((token, payload))
+            return kept_lamp
+        return wanted
+    led_ids = {item["id"] for item in skills if _is_ledstrip(item)}
+    kept: list[tuple[Any, Any]] = []
+    for token, payload in wanted:
+        ident = resolve_skill(str(token), skills)
+        if ident and ident in led_ids:
+            kept.append((token, payload))
+    return kept
+
+
+def _ack_ledstrip(text: str, spoken: str, events: list[dict[str, Any]]) -> str:
+    if "灯带" not in (text or ""):
+        return spoken
+    ok = any(
+        item.get("ok")
+        and (
+            "灯带" in str(item.get("name") or "")
+            or str(item.get("id") or "") in {"desk-led", "ledstrip", "ws2812"}
+        )
+        for item in events
+    )
+    if ok:
+        return spoken
+    return "灯带还没接到 Hub。"
 
 
 def resolve_skill(token: str, skills: list[dict[str, str]]) -> str | None:
@@ -1296,6 +1738,7 @@ def infer_control(
     skills: list[dict[str, str]],
     aliases: dict[str, dict[str, Any]] | None = None,
 ) -> list[tuple[str, bool]]:
+    text = fold_game_asr(text)
     hits: list[tuple[str, bool]] = []
     for phrase, spec in (aliases or {}).items():
         if phrase and phrase in text:
@@ -1325,6 +1768,20 @@ def infer_control(
         else:
             return []
     on = want_on
+    if "灯带" in text:
+        leds = [item for item in skills if _is_ledstrip(item)]
+        if leds:
+            return [(leds[0]["id"], on)]
+        return []
+    if "台灯" in text:
+        lamps = [
+            item
+            for item in skills
+            if item.get("kind") != "run"
+            and (item.get("id") == "lamp" or item.get("name") == "台灯")
+        ]
+        if lamps:
+            return [(lamps[0]["id"], on)]
     for item in skills:
         if any(nick in text for nick in skill_nicknames(item) if len(nick) >= 2):
             if item.get("kind") == "run":
@@ -1336,7 +1793,21 @@ def infer_control(
     if hits:
         return hits
     if re.search(r"[开关].*灯|灯.*[开关]|开灯|关灯", text):
-        lights = [item for item in skills if "灯" in item["name"]]
+        lamps = [
+            item
+            for item in skills
+            if item.get("kind") != "run"
+            and (item.get("id") == "lamp" or item.get("name") == "台灯")
+        ]
+        if lamps:
+            return [(lamps[0]["id"], on)]
+        lights = [
+            item
+            for item in skills
+            if "灯" in item.get("name", "")
+            and not _is_ledstrip(item)
+            and item.get("name") != "挂灯"
+        ]
         if lights:
             return [(lights[0]["id"], on)]
     if re.search(r"空调", text):
@@ -1357,6 +1828,8 @@ def infer_brightness(
     text: str, skills: list[dict[str, str]]
 ) -> list[tuple[str, dict[str, int]]]:
     if not skills:
+        return []
+    if _TEMP_DEGREE.search(text) and "亮度" not in text:
         return []
     delta = 0
     value: int | None = None
@@ -1381,6 +1854,33 @@ def infer_brightness(
             break
     spec: dict[str, int] = {"value": value} if value is not None else {"delta": delta}
     return [(chosen["id"], spec)]
+
+
+def infer_temp(
+    text: str, skills: list[dict[str, str]]
+) -> list[tuple[str, dict[str, int]]]:
+    climate = [item for item in skills if item.get("temp")]
+    if not climate:
+        return []
+    match = _TEMP_SET.search(text)
+    if not match:
+        return []
+    parsed = parse_cn_int(match.group(1))
+    if parsed is None:
+        return []
+    chosen = climate[0]
+    for item in climate:
+        if any(nick in text for nick in skill_nicknames(item) if len(nick) >= 2):
+            chosen = item
+            break
+    else:
+        if "空调" not in text and len(climate) != 1:
+            return []
+    lo = int(chosen.get("temp_min") or 16)
+    hi = int(chosen.get("temp_max") or 30)
+    if parsed < lo or parsed > hi:
+        parsed = max(lo, min(hi, parsed))
+    return [(chosen["id"], {"value": parsed})]
 
 
 def parse_cn_int(raw: str) -> int | None:
@@ -1513,18 +2013,6 @@ def decay_mood(mood: dict[str, Any], now: datetime) -> dict[str, Any]:
     return out
 
 
-def parse_mood_time(raw: Any, now: datetime) -> datetime | None:
-    if not raw:
-        return None
-    try:
-        then = datetime.fromisoformat(str(raw))
-    except ValueError:
-        return None
-    if then.tzinfo is None:
-        then = then.replace(tzinfo=now.tzinfo)
-    return then
-
-
 def unsolicited_block_reason(
     *,
     connected: bool,
@@ -1535,56 +2023,6 @@ def unsolicited_block_reason(
     if game:
         return "game"
     return None
-
-
-def nudge_block_reason(
-    *,
-    connected: bool,
-    game: bool,
-    hour: int,
-    self_tag: str,
-    speaking: bool,
-    media_playing: bool,
-    last_nudge: datetime | None,
-    last_user: datetime | None,
-    nudge_count: int,
-    nudge_day: str | None,
-    now: datetime,
-) -> str | None:
-    hard = unsolicited_block_reason(connected=connected, game=game)
-    if hard:
-        return hard
-    if speaking:
-        return "speaking"
-    if media_playing:
-        return "media"
-    if not (hour >= 23 or hour < 5):
-        return "hour"
-    if self_tag == "distant":
-        return "mood"
-    if last_user is not None:
-        then = last_user
-        if then.tzinfo is None:
-            then = then.replace(tzinfo=now.tzinfo)
-        if now - then < NUDGE_QUIET_AFTER_CHAT:
-            return "recent"
-    day = now.date().isoformat()
-    count = nudge_count if nudge_day == day else 0
-    if count >= NUDGE_MAX_DAY:
-        return "cap"
-    if last_nudge is not None:
-        then = last_nudge
-        if then.tzinfo is None:
-            then = then.replace(tzinfo=now.tzinfo)
-        if now - then < NUDGE_COOLDOWN:
-            return "cooldown"
-    return None
-
-
-def nudge_line(self_tag: str) -> str:
-    if self_tag == "concerned":
-        return "夜已经深了。"
-    return "该歇了。"
 
 
 def default_mood() -> dict[str, Any]:
@@ -1707,6 +2145,25 @@ def speak_pc_temp(payload: dict[str, Any]) -> str:
     if not bits:
         return "温度我还没读到。"
     return "电脑现在" + "，".join(bits) + "。"
+
+
+def speak_mini(desk: Any, text: str = "") -> str:
+    mini = desk.get("mini") if isinstance(desk, dict) else None
+    pc = mini.get("pc") if isinstance(mini, dict) else None
+    if not isinstance(pc, dict) or not pc:
+        return "Mini 那边还没报到。"
+    payload = dict(pc)
+    if "online" not in payload:
+        payload["online"] = True
+    asked = text or ""
+    if re.search(r"(温度|多少度|几度)", asked):
+        line = speak_pc_temp(payload)
+        return line.replace("电脑现在", "Mini 现在", 1) if line.startswith("电脑") else line
+    if re.search(r"(内存|运存)", asked):
+        line = speak_memory(payload)
+        return "Mini " + line if not line.startswith("Mini") else line
+    spoken = speak_pc(payload, asked)
+    return spoken.replace("电脑", "Mini", 1)
 
 
 def speak_pc(payload: Any, text: str = "") -> str:
@@ -1953,13 +2410,8 @@ def load_mood(path: Path | None) -> dict[str, Any]:
     mood["last_ask"] = bool(raw.get("last_ask"))
     if raw.get("updated_at"):
         mood["updated_at"] = str(raw["updated_at"])
-    for key in ("last_nudge_at", "nudge_day", "last_user_at"):
-        if raw.get(key):
-            mood[key] = str(raw[key])
-    try:
-        mood["nudge_count"] = int(raw.get("nudge_count") or 0)
-    except (TypeError, ValueError):
-        mood["nudge_count"] = 0
+    if raw.get("last_user_at"):
+        mood["last_user_at"] = str(raw["last_user_at"])
     return mood
 
 
@@ -1974,18 +2426,18 @@ def save_mood(path: Path | None, mood: dict[str, Any]) -> None:
     }
     if mood.get("updated_at"):
         body["updated_at"] = mood["updated_at"]
-    for key in ("last_nudge_at", "nudge_day", "last_user_at"):
-        if mood.get(key):
-            body[key] = mood[key]
-    if mood.get("nudge_count"):
-        body["nudge_count"] = int(mood["nudge_count"])
+    if mood.get("last_user_at"):
+        body["last_user_at"] = mood["last_user_at"]
     path.write_text(yaml.safe_dump(body, allow_unicode=True, sort_keys=True), encoding="utf-8")
 
 
 def parse_teach(text: str, skills: list[dict[str, str]]) -> dict[str, Any] | None:
-    match = _TEACH.search(text) if "技能" in text else None
+    folded = fold_game_asr(text)
+    match = _TEACH.search(folded) if "技能" in folded else None
     if match is None:
-        match = _TEACH_ALT.search(text)
+        match = _TEACH_ALT.search(folded)
+    if match is None:
+        match = _TEACH_GAME.search(folded)
     if match is None:
         return None
     phrase = _normalize_phrase(match.group("phrase"))
@@ -2051,6 +2503,158 @@ def clip_announce(text: str, *, max_sentences: int = 3) -> str:
     return leftover[:159] + "…"
 
 
+def spoken_chars(text: str) -> int:
+    return len("".join((text or "").split()))
+
+
+def estimate_read_seconds(text: str) -> int:
+    n = spoken_chars(text)
+    if n <= 0:
+        return 0
+    return max(1, int(round(n / READ_CHARS_PER_SEC)))
+
+
+def chunk_read_text(text: str, limit: int = 120) -> list[str]:
+    text = (text or "").strip()
+    if not text:
+        return []
+    ready, rest = cut_sentences(text)
+    chunks = list(ready)
+    leftover = (rest or "").strip()
+    if leftover:
+        chunks.append(leftover)
+    if not chunks:
+        chunks = [text]
+    out: list[str] = []
+    for piece in chunks:
+        if len(piece) <= limit:
+            out.append(piece)
+            continue
+        for i in range(0, len(piece), limit):
+            out.append(piece[i : i + limit])
+    return out
+
+
+_PUNCT_ONLY = re.compile(r"^[\s。！？!?，,、．.；;：:\"“”‘’「」『』（）()…—\-·]+$")
+_CLAUSE_END = set("，、；：")
+
+
+def _clauses(piece: str) -> list[str]:
+    """在逗号处断开，避免一整句长短差太大时模型忽慢忽快。"""
+    parts: list[str] = []
+    start = 0
+    for i, ch in enumerate(piece):
+        if ch in _CLAUSE_END:
+            parts.append(piece[start : i + 1])
+            start = i + 1
+    if start < len(piece):
+        parts.append(piece[start:])
+    return [part for part in parts if part.strip()]
+
+
+def pack_read_chunks(pieces: list[str], *, target: int = 36, limit: int = 52) -> list[str]:
+    """把过短的碎片合成一段再送 TTS。
+
+    守岸人克隆参考约 37 字 / 9.5 秒。同一段里句子一短一长时，短的会被拖慢、
+    长的会被赶到约 5 字/秒。先按逗号拆开，再拼回参考长度，语速才稳。
+    """
+    flat: list[str] = []
+    for piece in pieces:
+        text = (piece or "").strip()
+        if not text or _PUNCT_ONLY.match(text):
+            continue
+        flat.extend(_clauses(text))
+    packed: list[str] = []
+    buf = ""
+    floor = max(8, target // 2)
+
+    def take(buf: str) -> str:
+        while len(buf) > limit:
+            tail = len(buf) - target
+            cut = target if tail >= floor else max(target, len(buf) // 2)
+            cut = min(cut, limit, len(buf) - 1)
+            packed.append(buf[:cut])
+            buf = buf[cut:]
+        return buf
+
+    for text in flat:
+        if not buf:
+            buf = text
+            continue
+        if len(buf) < target and len(buf) + len(text) <= limit:
+            buf += text
+            continue
+        buf = take(buf)
+        if buf and len(buf) < target and len(buf) + len(text) <= limit:
+            buf += text
+            continue
+        if buf:
+            packed.append(buf)
+        buf = text
+    if not buf:
+        return packed
+    buf = take(buf)
+    if packed and len(buf) < floor and len(packed[-1]) + len(buf) <= limit:
+        packed[-1] += buf
+    elif buf:
+        packed.append(buf)
+    return packed
+
+
+def _read_job_public(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": job.get("id"),
+        "job_id": job.get("id"),
+        "mode": job.get("mode"),
+        "status": job.get("status"),
+        "chars": job.get("chars"),
+        "estimate_sec": job.get("estimate_sec"),
+        "chunks": job.get("chunks"),
+        "done": job.get("done"),
+        "preview": job.get("preview"),
+        "audio_id": job.get("audio_id"),
+        "duration_sec": job.get("duration_sec"),
+        "bytes": job.get("bytes"),
+        "filename": job.get("filename"),
+        "error": job.get("error"),
+        "created_at": job.get("created_at"),
+        "format": "audio/wav",
+    }
+
+
+def join_wavs(parts: list[bytes]) -> bytes:
+    if not parts:
+        raise ValueError("没有音频")
+    if len(parts) == 1:
+        return parts[0]
+    frames: list[bytes] = []
+    layout: tuple[int, int, int] | None = None
+    for raw in parts:
+        with wave.open(io.BytesIO(raw), "rb") as src:
+            current = (src.getnchannels(), src.getsampwidth(), src.getframerate())
+            if layout is None:
+                layout = current
+            elif current != layout:
+                raise ValueError("wav 格式不一致")
+            frames.append(src.readframes(src.getnframes()))
+    out = io.BytesIO()
+    with wave.open(out, "wb") as dst:
+        assert layout is not None
+        dst.setnchannels(layout[0])
+        dst.setsampwidth(layout[1])
+        dst.setframerate(layout[2])
+        dst.writeframes(b"".join(frames))
+    return out.getvalue()
+
+
+def wav_duration_sec(raw: bytes) -> float:
+    with wave.open(io.BytesIO(raw), "rb") as src:
+        rate = src.getframerate()
+        if rate <= 0:
+            return 0.0
+        return src.getnframes() / float(rate)
+
+
 def _chunk_for_voice(text: str, limit: int = 120) -> list[str]:
     text = text.strip()
     if not text:
@@ -2103,6 +2707,7 @@ def desk_facts_prompt(desk: Any) -> str:
     mini = desk.get("mini") if isinstance(desk.get("mini"), dict) else {}
     lines = [
         "机器与设备（仅你自己看。对方没问灯、温度、占用、内存、显卡、某台机器时，禁止提起下面任何一项。"
+        "问了就用下面的数字直接答，不要说不知道。"
         "「电脑」默认指 Windows；没点名 Mini / Mac 不要提。）"
     ]
     win_pc = win.get("pc") if isinstance(win.get("pc"), dict) else {}
@@ -2218,6 +2823,10 @@ def _latency(turn: str, stage: str, **fields: Any) -> None:
     parts = [f"latency {stamp} turn={turn} stage={stage}"]
     parts.extend(f"{key}={value}" for key, value in fields.items())
     print(" ".join(parts), flush=True)
+
+
+def _openrouter(base_url: str | None) -> bool:
+    return "openrouter.ai" in (base_url or "").lower()
 
 
 def openai_mode(config: CompanionConfig) -> bool:

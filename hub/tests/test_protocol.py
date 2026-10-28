@@ -170,6 +170,30 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn("守岸人", html)
         conn.close()
 
+    def test_companion_read_page(self) -> None:
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/read")
+        resp = conn.getresponse()
+        html = resp.read().decode("utf-8")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("text/html", resp.getheader("Content-Type") or "")
+        self.assertIn("朗读", html)
+        self.assertIn('id="story"', html)
+        self.assertIn('id="timer"', html)
+        self.assertIn('id="importBar"', html)
+        self.assertIn('id="readLog"', html)
+        self.assertIn("短稿", html)
+        self.assertIn('id="text"', html)
+        conn.close()
+
+    def test_lan_protocol_mentions_story_routes(self) -> None:
+        text = Path(__file__).resolve().parents[2].joinpath("docs/lan-protocol.md").read_text(encoding="utf-8")
+        self.assertIn("/v1/companion/books", text)
+        self.assertIn("/v1/companion/story", text)
+        self.assertIn("安卓不要打", text)
+        readme = Path(__file__).resolve().parents[1].joinpath("README.md").read_text(encoding="utf-8")
+        self.assertIn("books/", readme)
+
     def test_companion_disabled_is_404(self) -> None:
         status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 404)
@@ -181,6 +205,15 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(body["error"]["code"], "not_found")
         status, body = self._request("POST", "/v1/companion/announce", {"text": "灯关了。"})
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error"]["code"], "not_found")
+        status, body = self._request("POST", "/v1/companion/read", {"text": "今晚睡前。", "mode": "play"})
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error"]["code"], "not_found")
+        status, body = self._request("GET", "/v1/companion/read/jobs")
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error"]["code"], "not_found")
+        status, body = self._request("GET", "/v1/companion/books")
         self.assertEqual(status, 404)
         self.assertEqual(body["error"]["code"], "not_found")
 

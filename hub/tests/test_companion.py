@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+import wave
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
@@ -17,24 +18,33 @@ from pathlib import Path
 
 from dock_hub.companion import (
     Companion,
+    MAX_READ_CHARS,
     _clean_reply,
     _join,
     appraise_user,
     build_messages,
+    chunk_read_text,
     clip_announce,
     cn_clock,
     cut_sentences,
+    estimate_read_seconds,
+    join_wavs,
+    pack_read_chunks,
+    spoken_chars,
+    wav_duration_sec,
     enforce_ask_budget,
     facts_from_snapshot,
     desk_facts_prompt,
     infer_brightness,
     infer_control,
+    infer_temp,
+    constrain_light_actions,
+    fold_game_asr,
     infer_media,
     infer_volume,
     looks_like_control,
-    nudge_block_reason,
-    nudge_line,
     parse_bri_actions,
+    parse_temp_actions,
     parse_teach,
     parse_action_lines,
     parse_timer,
@@ -44,6 +54,7 @@ from dock_hub.companion import (
     skill_prompt,
     speak_media,
     speak_pc,
+    speak_mini,
     speak_temp,
     speak_time,
     speak_timer,
@@ -130,6 +141,34 @@ class _FakeBytes:
         return False
 
 
+def _tiny_wav(*, frames: int = 2400, rate: int = 24000) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(b"\x00\x00" * frames)
+    return buf.getvalue()
+
+
+def _fake_read_tts(wav: bytes, seen: list[dict]):
+    def urlopen(req: Request, timeout: object = None) -> _FakeResp | _FakeBytes:
+        url = req.get_full_url()
+        if url.endswith("/health"):
+            return _FakeResp({"ok": True, "ready": True, "service": "helm-companion-tts"})
+        if url.endswith("/v1/stop"):
+            return _FakeResp({"ok": True})
+        if url.endswith("/v1/speak"):
+            body = json.loads((req.data or b"{}").decode("utf-8"))
+            seen.append(body)
+            if body.get("play_only"):
+                return _FakeResp({"ok": True, "play": True}, status=202)
+            return _FakeBytes(wav)
+        raise AssertionError(url)
+
+    return urlopen
+
+
 def _fake_ollama(content: str = "晚上好，漂泊者。", wav: bytes | None = None):
     def urlopen(req: Request, timeout: object = None) -> _FakeResp | _FakeBytes:
         url = req.get_full_url()
@@ -172,11 +211,38 @@ class CompanionLogicTest(unittest.TestCase):
         self.assertTrue(looks_like_control("关灯。"))
         self.assertFalse(looks_like_control("晚上好。"))
         self.assertEqual(infer_control("关灯。", skills), [("lamp", False)])
+        hang = skills + [{"id": "m553687922", "name": "挂灯", "kind": "toggle"}]
+        self.assertEqual(infer_control("关掉灯带。", hang), [])
+        self.assertEqual(
+            infer_control("关掉灯带。", hang + [{"id": "desk-led", "name": "灯带", "kind": "toggle"}]),
+            [("desk-led", False)],
+        )
+        self.assertEqual(
+            infer_control("关掉台灯。", hang + [{"id": "desk-led", "name": "灯带", "kind": "toggle"}]),
+            [("lamp", False)],
+        )
+        self.assertEqual(fold_game_asr("他打开当代"), "他打开灯带")
+        self.assertEqual(fold_game_asr("打开台灯"), "打开台灯")
+        self.assertEqual(
+            constrain_light_actions(
+                "关掉灯带。",
+                [("挂灯", False)],
+                hang + [{"id": "desk-led", "name": "灯带", "kind": "toggle"}],
+            ),
+            [],
+        )
         self.assertEqual(infer_control("打开空调。", skills), [("ac", True)])
         self.assertEqual(infer_control("关掉加湿器。", skills + [{"id": "m222", "name": "加湿器", "kind": "toggle"}]), [("m222", False)])
         self.assertEqual(infer_control("启动无畏契约。", skills), [("wegame", True)])
         self.assertEqual(infer_control("打瓦。", skills), [("wegame", True)])
+        self.assertEqual(infer_control("我要打游戏", skills), [("wegame", True)])
+        self.assertEqual(infer_control("帮我启动游戏", skills), [("wegame", True)])
+        self.assertEqual(infer_control("我要打五位契约", skills), [("wegame", True)])
+        self.assertEqual(infer_control("我要打我啊", skills), [("wegame", True)])
+        self.assertEqual(infer_control("开黑。", skills), [("wegame", True)])
         self.assertEqual(infer_control("开黑。", skills, {"开黑": {"id": "wegame", "on": True}}), [("wegame", True)])
+        self.assertTrue(looks_like_control("我要打游戏"))
+        self.assertTrue(looks_like_control("我要打我啊"))
         self.assertEqual(resolve_skill("刷抖音", skills), "douyin")
         self.assertTrue(looks_like_control("打开抖音。"))
         self.assertEqual(infer_control("打开抖音。", skills), [("douyin", True)])
@@ -190,6 +256,8 @@ class CompanionLogicTest(unittest.TestCase):
         self.assertEqual(query_kind("电脑内存多少。"), "pc")
         self.assertEqual(query_kind("电脑温度。"), "pc")
         self.assertEqual(query_kind("电脑多少度。"), "pc")
+        self.assertEqual(query_kind("我麦克咪妮的温度怎么样啊"), "mini")
+        self.assertEqual(query_kind("Mac Mini 占用。"), "mini")
         self.assertEqual(query_kind("灯开了没。"), "light")
         self.assertEqual(query_kind("今天几号。"), "time")
         self.assertEqual(query_kind("星期几。"), "time")
@@ -200,6 +268,15 @@ class CompanionLogicTest(unittest.TestCase):
         dim = skills + [{"id": "lamp", "name": "台灯", "kind": "toggle", "brightness": True}]
         self.assertEqual(infer_brightness("亮一点。", dim), [("lamp", {"delta": 15})])
         self.assertEqual(infer_brightness("调到四十。", dim), [("lamp", {"value": 40})])
+        self.assertEqual(infer_brightness("把空调调到二十四度。", dim), [])
+        climate = skills + [{"id": "ac", "name": "空调", "kind": "toggle", "temp": True, "temp_id": "temp", "temp_min": 16, "temp_max": 30}]
+        self.assertTrue(looks_like_control("把空调调成二十四度"))
+        self.assertIsNone(query_kind("把空调调成二十四度"))
+        self.assertEqual(infer_temp("把空调调成二十四度。", climate), [("ac", {"value": 24})])
+        self.assertEqual(infer_temp("空调二十五度。", climate), [("ac", {"value": 25})])
+        self.assertEqual(infer_temp("把空调调到16度。", climate), [("ac", {"value": 16})])
+        self.assertEqual(infer_temp("屋里多少度。", climate), [])
+        self.assertEqual(parse_temp_actions("好。\nACTION: ac.temp.24\n"), [("ac", {"value": 24})])
         self.assertEqual(infer_media("下一首。"), "next")
         self.assertEqual(infer_media("暂停。"), "toggle")
         self.assertEqual(infer_volume("声音大一点。"), "up")
@@ -252,6 +329,14 @@ class CompanionLogicTest(unittest.TestCase):
             speak_pc({"online": True, "cpu": {"percent": 12}}, "电脑多少度。"),
             "温度我还没读到。",
         )
+        self.assertEqual(
+            speak_mini(
+                {"mini": {"pc": {"online": True, "cpu": {"temp_celsius": 35.1}}}},
+                "我麦克咪妮的温度怎么样啊",
+            ),
+            "Mini 现在CPU 35度。",
+        )
+        self.assertEqual(speak_mini({}, "Mini 温度"), "Mini 那边还没报到。")
         self.assertIn("潮", speak_temp({"celsius": 23.5, "humidity": 80}, "潮不潮"))
         self.assertEqual(enforce_ask_budget("好。还要开灯吗？", False), "好。")
         self.assertEqual(enforce_ask_budget("今晚还开着吗？", False), "嗯。")
@@ -270,8 +355,15 @@ class CompanionLogicTest(unittest.TestCase):
         self.assertTrue(spec["on"])
         spec = parse_teach("创建一个技能，我说打瓦就打开无畏契约", skills)
         self.assertEqual(spec["phrase"], "打瓦")
+        spec = parse_teach("你要记住打游戏就是打瓦", skills)
+        self.assertEqual(spec["phrase"], "打游戏")
+        self.assertEqual(spec["id"], "wegame")
+        spec = parse_teach("我跟你说打游戏就是想打我啊记住了吗", skills)
+        self.assertEqual(spec["phrase"], "打游戏")
+        self.assertEqual(spec["id"], "wegame")
         self.assertIsNone(parse_teach("以后我说开黑就启动原神。", skills))
         self.assertIsNone(parse_teach("晚上好。", skills))
+        self.assertIsNone(parse_teach("我要打游戏", skills))
 
     def test_messages_are_just_the_utterance(self) -> None:
         messages = build_messages("岸宝", "")
@@ -341,66 +433,59 @@ class CompanionLogicTest(unittest.TestCase):
         self.assertEqual(clip_announce("  好。  "), "好。")
         self.assertEqual(clip_announce(""), "")
 
-    def test_nudge_never_when_game_offline_or_disconnected(self) -> None:
-        tz = timezone(timedelta(hours=8))
-        now = datetime(2026, 9, 2, 23, 40, tzinfo=tz)
-        ok = dict(
-            connected=True,
-            game=False,
-            hour=23,
-            self_tag="quiet",
-            speaking=False,
-            media_playing=False,
-            last_nudge=None,
-            last_user=None,
-            nudge_count=0,
-            nudge_day=None,
-            now=now,
-        )
-        self.assertIsNone(nudge_block_reason(**ok))
-        self.assertEqual(unsolicited_block_reason(connected=True, game=False), None)
-        self.assertEqual(nudge_block_reason(**{**ok, "connected": False}), "disconnected")
-        self.assertEqual(nudge_block_reason(**{**ok, "game": True}), "game")
-        self.assertEqual(nudge_block_reason(**{**ok, "hour": 15}), "hour")
-        self.assertEqual(nudge_block_reason(**{**ok, "self_tag": "distant"}), "mood")
-        self.assertEqual(nudge_block_reason(**{**ok, "speaking": True}), "speaking")
-        self.assertEqual(nudge_block_reason(**{**ok, "media_playing": True}), "media")
-        self.assertEqual(
-            nudge_block_reason(**{**ok, "last_user": now - timedelta(minutes=10)}),
-            "recent",
-        )
-        self.assertEqual(
-            nudge_block_reason(**{**ok, "nudge_count": 2, "nudge_day": "2026-09-02"}),
-            "cap",
-        )
-        self.assertEqual(
-            nudge_block_reason(**{**ok, "last_nudge": now - timedelta(minutes=30)}),
-            "cooldown",
-        )
-        self.assertEqual(nudge_line("concerned"), "夜已经深了。")
-        self.assertNotIn("？", nudge_line("concerned"))
-        self.assertNotIn("？", nudge_line("quiet"))
+    def test_estimate_read_seconds_uses_four_chars_per_sec(self) -> None:
+        self.assertEqual(spoken_chars("  今晚 睡前。 "), 5)
+        self.assertEqual(estimate_read_seconds(""), 0)
+        self.assertEqual(estimate_read_seconds("啊"), 1)
+        self.assertEqual(estimate_read_seconds("字" * 240), 60)
 
-    def test_maybe_nudge_stays_silent_until_hub_says_yes(self) -> None:
-        tz = timezone(timedelta(hours=8))
-        late = datetime(2026, 9, 2, 23, 40, tzinfo=tz)
-        companion = Companion(CompanionConfig(enabled=True))
-        companion._world = {
-            "pc": lambda: {"online": False},
-            "game": lambda: False,
-        }
-        companion._mood = {"user": "calm", "self": "quiet", "last_ask": False}
-        self.assertIsNone(companion._maybe_nudge(late))
-        companion.note_presence()
-        self.assertEqual(companion._maybe_nudge(late), "该歇了。")
-        self.assertIsNone(companion._maybe_nudge(late))
-        companion._mood["last_nudge_at"] = None
-        companion._mood["nudge_count"] = 0
-        companion._world["game"] = lambda: True
-        self.assertIsNone(companion._maybe_nudge(late))
-        companion._world["game"] = lambda: False
-        companion._world["pc"] = lambda: {"online": False}
-        self.assertEqual(companion._maybe_nudge(late), "该歇了。")
+    def test_chunk_read_text_keeps_leftover_and_splits_long(self) -> None:
+        self.assertEqual(chunk_read_text("晚上好。还早"), ["晚上好。", "还早"])
+        long = "啊" * 250
+        parts = chunk_read_text(long, limit=120)
+        self.assertEqual("".join(parts), long)
+        self.assertTrue(all(len(p) <= 120 for p in parts))
+
+    def test_join_wavs_appends_pcm(self) -> None:
+        a = _tiny_wav(frames=2400)
+        b = _tiny_wav(frames=4800)
+        joined = join_wavs([a, b])
+        self.assertAlmostEqual(wav_duration_sec(joined), 0.3, places=3)
+
+    def test_pack_read_chunks_merges_short_sentences(self) -> None:
+        parts = [f"第{i}句。" for i in range(40)]
+        packed = pack_read_chunks(parts, target=90, limit=160)
+        self.assertGreater(len(parts), 20)
+        self.assertLessEqual(len(packed), 8)
+        self.assertEqual("".join(packed), "".join(parts))
+        self.assertTrue(all(len(p) <= 160 for p in packed))
+        self.assertEqual(pack_read_chunks(["。", "好。", "！"]), ["好。"])
+
+    def test_pack_read_chunks_evens_out_a_short_then_long_sentence(self) -> None:
+        text = (
+            "他感觉像是经历了一场思维风暴和认知洗礼。"
+            "这一刻，程乞将目光聚焦在【量子型梦洞捕捉仪】的介绍上，简单来说，"
+            "它就是一种探测器，就像是金属探测器一般，一旦扫描到埋藏在的地下的金属，会发出对应的提示。"
+        )
+        packed = pack_read_chunks(chunk_read_text(text))
+        self.assertEqual("".join(packed), text)
+        self.assertGreater(len(packed), 1)
+        self.assertTrue(all(len(part) <= 52 for part in packed))
+        self.assertLess(max(len(part) for part in packed) - min(len(part) for part in packed), 16)
+        self.assertNotIn("探测器，就像", packed[0][-12:])
+
+    def test_pack_read_chunks_default_stays_near_clone(self) -> None:
+        parts = [f"第{i}句。" for i in range(40)]
+        packed = pack_read_chunks(parts)
+        aggressive = pack_read_chunks(parts, target=90, limit=160)
+        self.assertGreater(len(packed), len(aggressive))
+        self.assertTrue(all(len(p) <= 52 for p in packed))
+        self.assertEqual("".join(packed), "".join(parts))
+
+    def test_announce_stays_quiet_when_phone_is_gone(self) -> None:
+        self.assertEqual(unsolicited_block_reason(connected=True, game=False), None)
+        self.assertEqual(unsolicited_block_reason(connected=False, game=False), "disconnected")
+        self.assertEqual(unsolicited_block_reason(connected=True, game=True), "game")
 
     def test_parse_and_dump_companion(self) -> None:
         cfg = parse_config(
@@ -544,22 +629,6 @@ class CompanionProtocolTest(unittest.TestCase):
         self.assertFalse(body["companion"]["voice"])
         self.assertTrue(self.hub.companion.k20_connected())
 
-    def test_nudge_ignores_phone_until_snapshot(self) -> None:
-        self.assertFalse(self.hub.companion.k20_connected())
-        late = datetime(2026, 9, 2, 1, 10, tzinfo=timezone(timedelta(hours=8)))
-        self.hub.companion._mood = {
-            "user": "calm",
-            "self": "concerned",
-            "last_ask": False,
-        }
-        self.hub.companion._world = {
-            **self.hub.companion._world,
-            "game": lambda: False,
-        }
-        self.assertIsNone(self.hub.companion._maybe_nudge(late))
-        self._request("GET", "/v1/snapshot")
-        self.assertEqual(self.hub.companion._maybe_nudge(late), "夜已经深了。")
-
     def test_chat_502_when_ollama_down(self) -> None:
         status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 502)
@@ -622,18 +691,61 @@ class CompanionProtocolTest(unittest.TestCase):
         self.assertEqual(body["text"], "好。")
         self.assertEqual(seen, [("ac", True)])
 
+    def test_chat_sets_ac_temp_without_llm(self) -> None:
+        seen: list[dict[str, object]] = []
+
+        def run(ident: str, on: bool, brightness: int | None = None, props: dict | None = None) -> None:
+            seen.append({"id": ident, "on": on, "brightness": brightness, "props": props})
+
+        self.hub.companion.set_skills(
+            [
+                {
+                    "id": "ac",
+                    "name": "空调",
+                    "kind": "toggle",
+                    "temp": True,
+                    "temp_id": "temp",
+                    "temp_min": 16,
+                    "temp_max": 30,
+                }
+            ],
+            run,
+        )
+
+        def boom(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("setting AC temp must not call LLM")
+
+        with patch("dock_hub.companion.urllib.request.urlopen", boom):
+            status, body = self._request("POST", "/v1/companion/chat", {"text": "把空调调成二十四度"})
+        self.assertEqual(status, 200)
+        self.assertEqual(seen, [{"id": "ac", "on": True, "brightness": None, "props": {"temp": 24}}])
+        self.assertIn("二十四", body["text"])
+
     def test_chat_launches_valorant(self) -> None:
         seen: list[tuple[str, bool]] = []
         self.hub.companion.set_skills(
             [{"id": "wegame", "name": "无畏契约", "kind": "run"}],
             lambda ident, on: seen.append((ident, on)),
         )
-        fake = _fake_ollama("好。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
-            status, body = self._request("POST", "/v1/companion/chat", {"text": "启动无畏契约。"})
-        self.assertEqual(status, 200)
-        self.assertEqual(body["text"], "好。")
-        self.assertEqual(seen, [("wegame", True)])
+        def boom(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("launching a game must not call the LLM")
+
+        with patch("dock_hub.companion.urllib.request.urlopen", boom):
+            for utterance in (
+                "启动无畏契约。",
+                "打开无畏契约",
+                "我要打瓦",
+                "我要打游戏",
+                "我要打五位契约",
+                "我要打我啊",
+            ):
+                seen.clear()
+                status, body = self._request(
+                    "POST", "/v1/companion/chat", {"text": utterance}
+                )
+                self.assertEqual(status, 200, utterance)
+                self.assertEqual(body["text"], "好，开无畏契约。", utterance)
+                self.assertEqual(seen, [("wegame", True)], utterance)
 
     def test_chat_teaches_alias(self) -> None:
         seen: list[tuple[str, bool]] = []
@@ -652,6 +764,16 @@ class CompanionProtocolTest(unittest.TestCase):
             )
         self.assertEqual(status, 200)
         self.assertIn("开黑", body["text"])
+        self.assertEqual(seen, [])
+        fake = _fake_ollama("好。")
+        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+            status, body = self._request(
+                "POST",
+                "/v1/companion/chat",
+                {"text": "记住打游戏就是打瓦"},
+            )
+        self.assertEqual(status, 200)
+        self.assertIn("打游戏", body["text"])
         self.assertEqual(seen, [])
         fake = _fake_ollama("好。")
         with patch("dock_hub.companion.urllib.request.urlopen", fake):
@@ -1254,63 +1376,204 @@ class CompanionProtocolTest(unittest.TestCase):
         self.assertTrue(any(url.endswith("/compatible-mode/v1/chat/completions") for url in seen))
         self.assertTrue(payloads)
         self.assertFalse(payloads[0].get("enable_thinking"))
+        self.assertNotIn("reasoning", payloads[0])
         self.assertEqual(payloads[0].get("model"), "qwen3.8-flash")
 
-    def test_tethys_session_key_header(self) -> None:
-        seen: list[Request] = []
-
-        def fake(req: Request, timeout: object = None) -> _FakeResp:
-            seen.append(req)
-            if req.get_full_url().endswith("/chat/completions"):
-                return _FakeResp({"choices": [{"message": {"content": "结论。"}}]})
-            raise AssertionError(req.get_full_url())
-
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
-            text = self.hub.companion._complete_endpoint(
-                [{"role": "user", "content": "hi"}],
-                base_url="http://127.0.0.1:8642/v1",
-                model="hermes-agent",
-                api_key="tethys-key",
-                timeout_sec=2,
-                num_predict=64,
-                extra_headers={"X-Hermes-Session-Key": "tethys:wanderer"},
-            )
-        self.assertEqual(text, "结论。")
-        sent = {key.lower(): value for key, value in seen[0].header_items()}
-        self.assertEqual(sent.get("x-hermes-session-key"), "tethys:wanderer")
-        self.assertEqual(sent.get("authorization"), "Bearer tethys-key")
-
-    def test_notify_weixin_posts_full_result(self) -> None:
-        posted: list[tuple[str, str]] = []
-
-        def fake(req: Request, timeout: object = None) -> _FakeResp:
-            posted.append((req.get_full_url(), (req.data or b"").decode("utf-8")))
-            return _FakeResp({"ok": True})
-
-        cfg = parse_config(
-            {
-                "name": "study",
-                "token": "secret-token-value",
-                "companion": {
-                    "enabled": True,
-                    "llm": {"base_url": "http://127.0.0.1:9", "model": "qwen3.5:4b"},
-                    "tethys": {
+    def test_openrouter_requests_minimal_reasoning(self) -> None:
+        self.hub.companion.configure(
+            parse_config(
+                {
+                    "name": "study",
+                    "token": "secret-token-value",
+                    "companion": {
                         "enabled": True,
-                        "base_url": "http://10.0.0.8:8642/v1",
-                        "api_key": "tethys-key",
-                        "notify_url": "http://10.0.0.8:8643/v1/weixin",
+                        "llm": {
+                            "base_url": "https://openrouter.ai/api/v1",
+                            "model": "openrouter/free",
+                            "api_key": "sk-test-placeholder",
+                            "timeout_sec": 2,
+                        },
                     },
+                    "devices": [],
+                }
+            ).companion
+        )
+        payload = json.loads(
+            self.hub.companion._chat_payload(
+                [{"role": "user", "content": "在吗"}], stream=True
+            )
+        )
+        self.assertEqual(payload.get("reasoning"), {"effort": "minimal"})
+        self.assertFalse(payload.get("enable_thinking"))
+
+    def _enable_tts(self) -> None:
+        self.hub.companion.configure(
+            parse_config(
+                {
+                    "name": "study",
+                    "token": "secret-token-value",
+                    "companion": {
+                        "enabled": True,
+                        "llm": {
+                            "base_url": "http://127.0.0.1:9",
+                            "model": "qwen3.5:4b",
+                            "timeout_sec": 2,
+                        },
+                        "tts": {"base_url": "http://127.0.0.1:9", "timeout_sec": 2},
+                    },
+                    "devices": [],
                 },
-                "devices": [],
-            }
-        ).companion
-        self.hub.companion.configure(cfg)
-        assert cfg.tethys is not None
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
-            self.hub.companion._notify_weixin("查基金", "涨了。", cfg.tethys)
-        self.assertEqual(posted[0][0], "http://10.0.0.8:8643/v1/weixin")
-        self.assertIn("书桌任务：查基金", posted[0][1])
-        self.assertIn("涨了。", posted[0][1])
+                path=Path(self.tmp.name) / "hub.yaml",
+            ).companion
+        )
+
+    def test_read_empty_text_is_400(self) -> None:
+        status, body = self._request("POST", "/v1/companion/read", {"text": "  ", "mode": "play"})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"]["code"], "bad_request")
+
+    def test_read_too_long_is_400(self) -> None:
+        status, body = self._request(
+            "POST",
+            "/v1/companion/read",
+            {"text": "字" * (MAX_READ_CHARS + 1), "mode": "play"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"]["code"], "bad_request")
+
+    def test_read_play_cues_mini_without_file(self) -> None:
+        self._enable_tts()
+        seen: list[dict] = []
+        with patch("dock_hub.companion.urllib.request.urlopen", _fake_read_tts(_tiny_wav(), seen)):
+            status, body = self._request(
+                "POST",
+                "/v1/companion/read",
+                {"text": "今晚睡前。先听这一段。", "mode": "play"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(body["mode"], "play")
+            self.assertIn(body["status"], {"queued", "running", "done"})
+            job = self._wait_read_job(body["id"])
+        self.assertEqual(job["status"], "done")
+        self.assertIsNone(job["audio_id"])
+        self.assertEqual(job["estimate_sec"], 3)
+        self.assertTrue(any(item.get("play_only") for item in seen))
+        self.assertFalse(any(item.get("play") is False for item in seen))
+
+    def _wait_read_job(self, job_id: str, timeout: float = 2.0) -> dict:
+        deadline = time.monotonic() + timeout
+        last: dict = {}
+        while time.monotonic() < deadline:
+            status, body = self._request("GET", "/v1/companion/read/jobs")
+            self.assertEqual(status, 200)
+            items = body["items"]
+            match = next((item for item in items if item["id"] == job_id), None)
+            self.assertIsNotNone(match)
+            assert match is not None
+            last = match
+            if match["status"] == "done":
+                return match
+            if match["status"] == "error":
+                self.fail(match.get("error") or "read job error")
+            time.sleep(0.04)
+        self.fail(f"read job not done: {last}")
+
+    def test_read_file_saves_wav_and_downloads(self) -> None:
+        self._enable_tts()
+        seen: list[dict] = []
+        wav = _tiny_wav(frames=2400)
+        with patch("dock_hub.companion.urllib.request.urlopen", _fake_read_tts(wav, seen)):
+            status, body = self._request(
+                "POST",
+                "/v1/companion/read",
+                {"text": "今晚睡前。先听这一段。", "mode": "file"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(body["mode"], "file")
+            self.assertIn(body["status"], {"queued", "running", "done"})
+            job_id = body["id"]
+            self.assertTrue(job_id)
+            job = self._wait_read_job(job_id)
+            audio_id = job["audio_id"]
+            self.assertTrue(audio_id)
+            self.assertEqual(job["format"], "audio/wav")
+            self.assertAlmostEqual(job["duration_sec"], 0.1, places=3)
+            self.assertTrue(any(item.get("play") is False for item in seen))
+            self.assertFalse(any(item.get("play_only") for item in seen))
+            saved = Path(self.tmp.name) / "reads" / f"{audio_id}.wav"
+            self.assertTrue(saved.is_file())
+            wav_status, ctype, payload = self._raw("GET", f"/v1/companion/audio/{audio_id}?download=1")
+        self.assertEqual(wav_status, 200)
+        self.assertEqual(ctype, "audio/wav")
+        self.assertEqual(payload, wav)
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request(
+            "GET",
+            f"/v1/companion/audio/{audio_id}?download=1",
+            headers={"Authorization": "Bearer secret-token-value"},
+        )
+        resp = conn.getresponse()
+        disp = resp.getheader("Content-Disposition") or ""
+        resp.read()
+        conn.close()
+        self.assertIn("attachment", disp)
+        self.assertIn(".wav", disp)
+
+    def test_read_jobs_empty_then_lists_play(self) -> None:
+        self._enable_tts()
+        status, body = self._request("GET", "/v1/companion/read/jobs")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["items"], [])
+        with patch("dock_hub.companion.urllib.request.urlopen", _fake_read_tts(_tiny_wav(), [])):
+            status, posted = self._request(
+                "POST",
+                "/v1/companion/read",
+                {"text": "今晚睡前。", "mode": "play"},
+            )
+        self.assertEqual(status, 200)
+        status, body = self._request("GET", "/v1/companion/read/jobs")
+        self.assertEqual(status, 200)
+        job = self._wait_read_job(posted["id"])
+        self.assertEqual(job["id"], posted["id"])
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["mode"], "play")
+        self.assertNotIn("text", job)
+
+    def test_read_job_cancel_delete_and_replay(self) -> None:
+        self._enable_tts()
+        seen: list[dict] = []
+        with patch("dock_hub.companion.urllib.request.urlopen", _fake_read_tts(_tiny_wav(), seen)):
+            status, posted = self._request(
+                "POST",
+                "/v1/companion/read",
+                {"text": "今晚睡前。先听这一段。", "mode": "file"},
+            )
+            self.assertEqual(status, 200)
+            job = self._wait_read_job(posted["id"])
+            audio_id = job["audio_id"]
+            self.assertTrue(audio_id)
+            status, replayed = self._request(
+                "POST", f"/v1/companion/read/jobs/{posted['id']}/replay", {}
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(replayed["mode"], "play")
+            play_job = self._wait_read_job(replayed["id"])
+            self.assertEqual(play_job["status"], "done")
+            status, cancelled = self._request(
+                "POST", f"/v1/companion/read/jobs/{posted['id']}/cancel", {}
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(cancelled["status"], "done")
+            status, deleted = self._request(
+                "POST", f"/v1/companion/read/jobs/{posted['id']}/delete", {}
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(deleted["ok"])
+            status, body = self._request("GET", "/v1/companion/read/jobs")
+            self.assertEqual(status, 200)
+            self.assertFalse(any(item["id"] == posted["id"] for item in body["items"]))
+            saved = Path(self.tmp.name) / "reads" / f"{audio_id}.wav"
+            self.assertFalse(saved.exists())
 
 
 if __name__ == "__main__":

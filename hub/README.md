@@ -1,6 +1,6 @@
-# 岸亭 Hub（Windows）
+# 岸亭 Hub（Mac Mini）
 
-电脑上的 Python 服务：对内调 [mijia-api](https://github.com/Do1e/mijia-api)、采集本机性能、按白名单启动本机程序，并作为本地大脑 / TTS 的客户端；对外只提供 [Shoreting LAN Protocol v1](../docs/lan-protocol.md) 的 HTTP 接口。
+Python 服务：对内调 [mijia-api](https://github.com/Do1e/mijia-api)、收 Windows 探针的 CPU、把启动项转发到 Windows；对外只提供 [Shoreting LAN Protocol v1](../docs/lan-protocol.md) 的 HTTP 接口。Windows 上用 `dock-hub --probe` 只做 CPU 上报和开程序。
 
 安卓不直连米家，也看不到 `did` / 可执行文件路径。依赖 GPL-3.0 的 mijia-api：自用没问题；若分发 Hub，需要同样开源。
 
@@ -28,18 +28,39 @@ hub/
 
 | 路径 | 用途 |
 |------|------|
-| `%USERPROFILE%\.config\dock-hub\hub.yaml` | 主配置 + token |
-| `%USERPROFILE%\.config\dock-hub\hub.log` | 无控制台时的运行日志 |
-| `%USERPROFILE%\.config\mijia-api\auth.json` | 米家登录缓存（勿发给手机） |
+| `~/.config/dock-hub/hub.yaml` | 主配置 + token（Mini） |
+| `~/.config/dock-hub/companion-chats.jsonl` | 守岸人对话原文（查看页 `/chats`） |
+| `~/.config/dock-hub/reads/` | 朗读页生成的 wav |
+| `~/.config/dock-hub/books/` | 睡前朗读的 txt 和 `progress.json` |
+| `~/.config/mijia-api/auth.json` | 米家登录缓存（勿发给手机） |
 
 ## 要求
 
-- Windows 10/11
-- Python 3.10+（推荐 [uv](https://github.com/astral-sh/uv)）
-- 防火墙放行入站 **TCP 17890**
-- CPU 温度（可选）：见下方 [PawnIO 安装](#pawnio-cpu-温度可选)
+- Mac Mini：Python 3.10+（推荐 [uv](https://github.com/astral-sh/uv)），LaunchAgent `cn.weiekko.dock-hub`
+- Windows 探针：同一套源码 `uv run dock-hub --probe`，防火墙放行入站 **TCP 17892**
+- 安卓 Hub 栏填 Mini `10.83.22.121:17890`
 
-## 日常用法（推荐 exe）
+## Mini 日常
+
+```bash
+cd hub
+uv sync
+./install-launchd.sh
+```
+
+配置向导：`http://127.0.0.1:17890/setup`（本机直接开；局域网先打开 `/chats` 登录或带 Token）。
+
+## Windows 探针
+
+```powershell
+cd hub
+uv sync
+powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
+```
+
+产物：`hub\dist\DockHub.exe`（无黑窗口 + 系统托盘，开机由计划任务 `HelmDockHub` 拉起）。托盘右键可打开 Mini 上的配置向导 / 聊天 / 朗读。
+
+不要再让 Windows 占 `:17890`。探针端口是 **17892**。
 
 ```powershell
 cd hub
@@ -51,17 +72,15 @@ powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 1. **右键 → 以管理员身份运行**（或 `.\run-admin.ps1`，有 exe 时会优先启动它）
 2. 托盘右键：**打开配置向导** 或 **退出**（首次启动会自动打开向导）
 3. 配置向导地址：`http://127.0.0.1:17890/setup`（**仅本机**可访问）
-4. 安卓填向导里显示的 IP、端口 `17890`、Token
+4. 聊天记录：托盘 **打开聊天记录**，或浏览器打开 `http://127.0.0.1:17890/chats`（本机不用 Token；局域网填手机那枚 Token）
+5. 朗读：托盘 **打开朗读**，或 `http://127.0.0.1:17890/read`。贴文稿或导入 txt，可只读选区；播放 / 生成 / 停止 / 再播 / 下载都在任务列表里
+6. 安卓填向导里显示的 IP、端口 `17890`、Token
 
 重新打包前先退出托盘里的旧进程。改 `dock_hub/companion.py` 后必须重新打 exe：正在跑的是 `dist\DockHub.exe`，只拷 `.py` 不会生效。
 
 ## 桌面伴侣
 
-默认 `companion.tts.deliver: false`：Hub 流式读 Ollama（`think: false`），每写出一句（`。！？`）就 cue Mini TTS（`play_only`）。`POST /v1/companion/chat` 仍等全文再返回给安卓字幕。打断走 `POST /v1/companion/stop`。
-
-温度 / 灯 / 电脑占用写成 system 里的「后台状态」，不要拼进用户这句话（否则 4B 会用「台灯」当开场白）。
-
-Hub 在 Windows 时，`companion.llm.base_url` / `tts.base_url` 填 Mini 的局域网地址，不要填 `127.0.0.1`。完整说明见 [docs/companion.md](../docs/companion.md)。
+默认 `companion.tts.deliver: false`：Hub 流式读 LLM，每写出一句（`。！？`）就 cue Mini TTS（`play_only`）。`POST /v1/companion/chat` 仍等全文再返回给安卓字幕。`companion.llm.base_url` 可填 OpenAI 兼容地址（如阿里云 MaaS `qwen3.8-flash`），`api_key` 只写本机 yaml；请求顶层带 `enable_thinking: false`（推理型模型不关会把额度花在思考上）。未配密钥且 base 是 Ollama 时仍走 `/api/chat`（`think: false`）。TTS 仍指向 Mini。对话不预先读米家状态。白名单灯/开关/灯带可口头开关（`ACTION: id.on|off` 或「关灯」「开灯带」「开空调」兜底），真正执行仍走 devices/command。打断走 `POST /v1/companion/stop`。另有 `POST /v1/companion/announce` 让外部脚本（如微信机器人）直接让书桌喇叭说话；天气由 `GET /v1/weather` 代取。说明见 [docs/companion.md](../docs/companion.md)。
 
 ## 源码开发
 
@@ -100,7 +119,7 @@ powershell -ExecutionPolicy Bypass -File .\run-admin.ps1
 
 - `token`：安卓 Bearer；`--init` 已生成
 - `temperature`：只允许一个；没有就删整段
-- `devices`：`light` / `switch` 用 `mijia_name`；`action` 用本机 `run.program`（路径不发给手机）
+- `devices`：`light` / `switch` 用 `mijia_name`；`action` 用本机 `run.program`（路径不发给手机）；`ws2812` 用灯带 `base_url`（口头开关，Windows 开机亮、关机灭）
 - `icon`：Remix 短名（如 `steam`、`cursor`、`computer`）；安卓据此画图标
 - `pc.enabled: true`：snapshot 带 CPU / 内存；有 NVIDIA 再带 GPU；CPU 温度需管理员 + PawnIO（见下）
 

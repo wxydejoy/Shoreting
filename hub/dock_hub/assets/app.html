@@ -1,0 +1,1844 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>守岸人</title>
+  <link rel="stylesheet" href="/assets/litera.min.css" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" />
+  <link rel="stylesheet" href="/assets/shell.css" />
+  <script>
+    document.documentElement.dataset.view = location.pathname.indexOf("/chats") === 0 ? "chats" : location.pathname.indexOf("/setup") === 0 ? "setup" : "read";
+  </script>
+</head>
+<body>
+  <aside class="side" id="side">
+    <a class="brand" href="/read">守岸人</a>
+    <div class="side-label">应用</div>
+    <a data-nav="read" href="/read">朗读</a>
+    <a data-nav="chats" href="/chats">对话</a>
+    <a data-nav="setup" href="/setup">配置</a>
+  </aside>
+  <div class="shell">
+    <header class="topbar">
+      <button class="btn btn-outline-secondary btn-sm phone-only" id="menuToggle" type="button">菜单</button>
+      <span class="page-title" id="pageTitle">朗读</span>
+      <button class="btn btn-outline-danger btn-sm" id="stop" type="button">停止</button>
+    </header>
+    <div id="panel">
+    <div data-pane="read">
+<div class="layout">
+      <section>
+        <div id="story">
+          <div class="meta">
+            <span id="bookTitle">还没有书</span>
+            <span id="chapterTitle"></span>
+            <span id="progressLabel"></span>
+          </div>
+          <div id="chapterBody" class="reader">把 txt 放进书架，或从下面导入。也可以把文件拖到这里。</div>
+          <div class="bar controls" style="margin-top:12px">
+            <button class="btn btn-primary" id="storyPlay" type="button">播放</button>
+            <button class="btn btn-outline-secondary btn-sm" id="storyPause" type="button">暂停</button>
+            <button class="btn btn-outline-secondary btn-sm" id="prevChapter" type="button">上一章</button>
+            <button class="btn btn-outline-secondary btn-sm" id="nextChapter" type="button">下一章</button>
+            <button class="btn btn-outline-secondary btn-sm phone-only" id="tocToggle" type="button">目录</button>
+            <select id="timer" aria-label="定时">
+              <option value="0">关</option>
+              <option value="15">15 分钟</option>
+              <option value="30">30 分钟</option>
+              <option value="45">45 分钟</option>
+              <option value="60">60 分钟</option>
+            </select>
+            <span id="timerLeft" class="hint"></span>
+          </div>
+          <div class="voice">
+            <label>音量 <input id="voiceVolume" type="range" min="0" max="100" step="1" value="50" aria-label="系统音量" /><b id="voiceVolumeVal">50</b></label>
+            <label>语速 <input id="voiceSpeed" type="range" min="0.7" max="1.5" step="0.1" value="1" aria-label="语速" /><b id="voiceSpeedVal">1.0×</b></label>
+          </div>
+          <p id="storyStatus" class="ok"></p>
+          <div class="bar">
+            <button class="btn btn-outline-secondary btn-sm" id="importBtn" type="button">导入文本</button>
+            <input id="import" class="hide" type="file" accept=".txt,text/plain" />
+            <button class="btn btn-outline-secondary btn-sm" id="showShort" type="button">短稿</button>
+          </div>
+          <div id="importBox" class="hide">
+            <div class="progress" id="importTrack"><span id="importBar"></span></div>
+            <p id="importLabel" class="hint"></p>
+          </div>
+          <ol id="readLog" class="read-log"></ol>
+        </div>
+        <div id="short" class="hide">
+        <textarea id="text" placeholder="贴讲书稿，或拖入一份 txt。划选一段则只读选区。" maxlength="8000"></textarea>
+        <div class="meta">
+          <span>字数 <strong id="chars">0</strong> / 8000</span>
+          <span>预估 <strong id="estimate">0 秒</strong></span>
+          <span class="scope" id="scope"></span>
+        </div>
+        <div class="bar">
+          <button class="btn btn-primary" id="play" type="button">播放</button>
+          <button class="btn btn-outline-secondary btn-sm" id="file" type="button">生成 WAV</button>
+          <button class="btn btn-outline-secondary btn-sm" id="clear" type="button">清空</button>
+          <button class="btn btn-outline-secondary btn-sm" id="showStory" type="button">回到这本书</button>
+          <label class="toggle"><input type="checkbox" id="autodl" /> 完成后自动下载</label>
+        </div>
+        </div>
+        <p class="hint wide-only">Ctrl/⌘ + Enter 播放 · Shift + Enter 生成 · Esc 停止</p>
+        <p id="status" class="ok"></p>
+        <p id="err" class="err"></p>
+      </section>
+      <section>
+        <div id="tocPane">
+          <div class="toc-head">
+            <h2>目录</h2>
+            <button class="btn btn-outline-secondary btn-sm phone-only" id="tocClose" type="button">关闭</button>
+          </div>
+          <input id="tocQuery" type="search" enterkeyhint="go" placeholder="章名或序号，回车跳转" autocomplete="off" />
+          <p id="splitNote" class="hint"></p>
+          <div id="toc" class="toc"><p class="empty">还没有目录。</p></div>
+        </div>
+        <div id="jobPane" class="hide">
+        <h2>任务</h2>
+        <div id="jobs" class="jobs"><p class="empty">还没有任务。</p></div>
+        </div>
+      </section>
+    </div>
+  
+    </div>
+    <div data-pane="chats" class="container py-4">
+      <p class="text-secondary">只从今晚起记下原文。更早的对话只留了字数。</p>
+      <div class="bar mb-3" id="searchBar">
+        <input class="form-control" type="search" id="q" placeholder="搜索她或你说过的话" autocomplete="off" />
+      </div>
+      <div id="feed"></div>
+    </div>
+    <div data-pane="setup">
+<div class="container py-4">
+    <div class="title-row">
+      <h1>配置</h1>
+      <span id="saveStatus" class="pill pending">同步中…</span>
+    </div>
+    <p class="sub">只在本机打开。改动会自动保存并生效。<a href="/read">回到朗读</a></p>
+
+    <!-- ① 连接安卓 -->
+    <article class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2"><span class="num">1</span><h2>连接安卓</h2></div>
+      <div class="card-body">
+        <p class="hint" style="margin-top:0">下面三项就是安卓「岸亭 → 设置」里要填的<strong>地址 / 端口 / Token</strong>。手机和这台机器要在同一局域网。</p>
+
+        <div class="grid-2">
+          <div class="field">
+            <label>地址（只填 IP，不带端口）</label>
+            <div class="copybox"><input id="lanIp" readonly /><button class="btn btn-outline-secondary btn-sm" type="button" onclick="copy('lanIp')">复制</button></div>
+          </div>
+          <div class="field">
+            <label>端口</label>
+            <div class="copybox"><input id="port" type="number" min="1" max="65535" /><button class="btn btn-outline-secondary btn-sm" type="button" onclick="copy('port')">复制</button></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Token（保密，别发给别人）</label>
+          <div class="copybox">
+            <input id="token" />
+            <button class="btn btn-outline-secondary btn-sm" type="button" onclick="copy('token')">复制</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" onclick="newToken()">重新生成</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>这台 Hub 的名字（安卓连上后会显示）</label>
+          <div class="inline-name"><input id="name" placeholder="study" /></div>
+        </div>
+
+        <div class="badge-line">
+          <span class="hint" style="margin:0">安卓里填</span>
+          <code class="k" id="guideIp">…</code>
+          <code class="k" id="guidePort">17890</code>
+          <span class="hint" style="margin:0">名称显示为</span>
+          <code class="k" id="guideName">study</code>
+        </div>
+
+        <details class="guide">
+          <summary>安卓端怎么填？连不上怎么排查？</summary>
+          <ol class="steps">
+            <li>装 APK：从 <a href="https://github.com/wxydejoy/Shoreting/releases" target="_blank" rel="noopener" >GitHub Release</a> 下载（旧包名可能还是 <code>Helm-*.apk</code>），允许「安装未知应用」。</li>
+            <li>打开岸亭（横屏全屏）。没连上 Hub 前是<strong>预览模式</strong>，数据是假的。</li>
+            <li>点主屏顶部<strong> PC 监控条</strong>（CPU / 内存那一行）进入<strong>设置</strong>。</li>
+            <li>依次填：地址 = <code id="guideIp2">…</code>，端口 = <code id="guidePort2">17890</code>，Token = 上面复制的那个。</li>
+            <li>点 <strong>测试连接</strong>，成功会提示「已连接」。</li>
+          </ol>
+          <div class="note">
+            <strong>连不上排查</strong>
+            <ul>
+              <li>运行 Hub 的那台机器（<strong>Mac</strong> 或 Windows）上，岸亭 Hub 进程是否在跑</li>
+              <li>手机和它是否同一网段（别一个 Wi‑Fi 一个有线不同段）</li>
+              <li>运行 Hub 的机器防火墙要放行 TCP <code id="guidePort3">17890</code></li>
+              <li>Token 是否完全一致（重新生成后安卓也要改）</li>
+            </ul>
+          </div>
+        </details>
+      </div>
+    </article>
+
+    <!-- ② 伴侣大模型 -->
+    <article class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2">
+        <span class="num">2</span><h2>伴侣大模型</h2>
+        <span class="right"><span class="pill" id="llmPill">读取中…</span></span>
+      </div>
+      <div class="card-body">
+        <p class="hint" style="margin-top:0">守岸人说话 / 思考用的模型。选<strong>服务商预设</strong>会自动填好地址；也可以手填任意 <strong>OpenAI 兼容</strong>服务。</p>
+
+        <div class="grid-2">
+          <div class="field">
+            <label>服务商</label>
+            <select id="llmProvider"></select>
+          </div>
+          <div class="field">
+            <label>模型名</label>
+            <input id="llmModel" list="llmModelList" placeholder="deepseek-chat" />
+            <datalist id="llmModelList"></datalist>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>API 地址（base_url）</label>
+          <input id="llmBaseUrl" placeholder="https://api.deepseek.com/v1" />
+        </div>
+
+        <div class="field">
+          <label>API Key（留空 = 保持现有；不回显）</label>
+          <input id="llmApiKey" type="password" autocomplete="new-password" placeholder="sk-…" />
+        </div>
+
+        <p class="hint" id="llmCurrent"></p>
+        <div class="actions">
+          <button class="btn btn-outline-secondary btn-sm" type="button" onclick="fetchLlmModels()">拉取模型列表</button>
+          <button class="btn btn-outline-secondary btn-sm" type="button" onclick="testLlm()">测试连接</button>
+          <button class="btn btn-primary btn-sm" type="button" onclick="saveLlm()">保存并清空 Key 输入</button>
+        </div>
+        <p class="hint" id="llmStatus"></p>
+      </div>
+    </article>
+
+    <!-- ③ 米家 -->
+    <article class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2">
+        <span class="num">3</span><h2>米家账号</h2>
+        <span class="right">
+          <span id="mijiaBadge" class="pill">检查中…</span>
+          <span id="mijiaCount" class="pill" style="display:none"></span>
+        </span>
+      </div>
+      <div class="card-body">
+        <p class="hint" style="margin-top:0">控制灯 / 插座 / 温湿度需要米家账号。点「扫码登录」，二维码就在本页显示（不会跳浏览器）。</p>
+        <div class="actions" style="margin-top:0">
+          <button class="btn btn-outline-secondary btn-sm" type="button" onclick="relogin()">扫码登录米家</button>
+          <button class="btn btn-outline-secondary btn-sm" type="button" onclick="refresh(true)">刷新设备列表</button>
+        </div>
+        <div id="mijiaQrBox" class="qrbox">
+          <img id="mijiaQrImg" alt="米家登录二维码" />
+          <p id="mijiaQrHint" class="hint" style="margin:0;text-align:center"></p>
+        </div>
+        <div class="devlist" id="mijiaDeviceList">
+          <div class="devlist-head">
+            <span id="mijiaListTitle">米家设备</span>
+            <input id="mijiaFilter" type="search" placeholder="搜索设备名…" oninput="renderMijiaList()" />
+          </div>
+          <div class="devlist-body" id="mijiaListBody">
+            <div class="empty">正在加载…</div>
+          </div>
+        </div>
+        <p class="hint" id="mijiaListHint"></p>
+      </div>
+    </article>
+
+    <!-- ④ 主屏内容 -->
+    <article class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2"><span class="num">4</span><h2>安卓主屏内容</h2></div>
+      <div class="card-body">
+        <p class="hint" style="margin-top:0">决定安卓主屏上出现哪些方块，以及它们的顺序。</p>
+
+        <div class="subcard">
+          <h3>室内温湿度</h3>
+          <p class="hint">选一个温湿度计，主屏会多一块传感器。也可以在下面米家表格里勾「主屏」。</p>
+          <div class="grid-2">
+            <div class="field">
+              <label>显示名称（安卓上看到的）</label>
+              <input id="tempName" placeholder="卧室" />
+            </div>
+            <div class="field">
+              <label>米家设备</label>
+              <select id="tempMijia"><option value="">不显示温度</option></select>
+            </div>
+          </div>
+        </div>
+
+        <div class="subcard">
+          <h3>方块列表</h3>
+          <p class="hint">顺序 = 安卓上的顺序。米家设备请在上面表格勾「主屏」，或在这里手动添加；启动程序填本机 exe。</p>
+          <div id="devices"></div>
+          <div class="actions">
+            <button class="btn btn-outline-secondary btn-sm" type="button" onclick="addDevice('light')">＋ 灯</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" onclick="addDevice('switch')">＋ 开关</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" onclick="addDevice('sensor')">＋ 传感器</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" onclick="addDevice('action')">＋ 启动程序</button>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- ⑤ 电脑监控 -->
+    <article class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2"><span class="num">5</span><h2>电脑监控</h2></div>
+      <div class="card-body">
+        <label class="check"><input id="pcEnabled" type="checkbox" />在安卓显示 CPU / 内存 / GPU</label>
+        <p class="hint">不需要额外软件就能显示 <strong>CPU / 内存占用</strong>；有 NVIDIA 显卡还会显示 GPU。要显示 <strong>CPU 温度</strong>看下面的说明。</p>
+        <details class="guide">
+          <summary>CPU 温度：为什么读不到？怎么修？</summary>
+          <p class="hint" style="margin-top:0">
+            <strong>PawnIO</strong> 是 Windows 上的小驱动，让普通程序能读到 CPU 温度传感器。
+            不装也不影响开关灯、启动程序，只是主屏上没有温度数字。
+          </p>
+          <p class="hint"><strong>两个前提：</strong>① 装 PawnIO；② 岸亭 Hub <strong>以管理员身份运行</strong>（右键 exe → 以管理员身份运行，或用 <code>run-admin.ps1</code>）。</p>
+          <ol>
+            <li>右键「终端 / PowerShell」→ <strong>以管理员身份运行</strong></li>
+            <li>执行：<br><code>winget install -e --id namazso.PawnIO</code></li>
+            <li>没有 winget：从 <a href="https://github.com/namazso/PawnIO/releases" target="_blank" rel="noopener" >GitHub Release</a> 或 <a href="https://pawnio.eu/" target="_blank" rel="noopener" >pawnio.eu</a> 下载安装</li>
+            <li>装完<strong>退出 Hub</strong>，再<strong>以管理员身份</strong>启动</li>
+            <li>看主屏温度是否出现；不行就查日志 <code>%USERPROFILE%\\.config\\dock-hub\\hub.log</code></li>
+          </ol>
+        </details>
+      </div>
+    </article>
+
+    <!-- ⑥ 安卓端说明 -->
+    <article class="card mb-3">
+      <div class="card-header d-flex align-items-center gap-2"><span class="num">6</span><h2>安卓端还有这些设置</h2></div>
+      <div class="card-body">
+        <p class="hint" style="margin-top:0">都在岸亭的<strong>设置页</strong>（同样是点主屏顶部 PC 监控条进入）：</p>
+        <ul class="hint" style="padding-left:18px; margin-top:8px">
+          <li><strong>视频背景</strong>：选本地横屏视频，循环静音播放</li>
+          <li><strong>方块样式 / 字体 / 字号</strong>：调整主屏外观</li>
+          <li><strong>插电亮屏 / 拔电熄屏</strong>：需要授予设备管理员（只用于锁屏）</li>
+          <li><strong>电脑关机后熄屏</strong>：以 Windows 探针的在线状态为准</li>
+          <li><strong>媒体控制</strong>：需要在系统里开启岸亭的<strong>通知使用权</strong></li>
+        </ul>
+      </div>
+    </article>
+
+    <p class="foot">岸亭 Hub 配置向导 · 本页只在本机打开</p>
+  </div>
+
+  
+    </div>
+  </div>
+  </div>
+  <div id="gate" class="gate hide">
+    <div class="card">
+      <div class="card-body">
+        <h2 class="h4">局域网使用</h2>
+        <p class="text-secondary">填手机设置里同一枚 Hub Token。本机打开不用填。</p>
+        <div class="bar">
+          <input class="form-control" id="gateToken" type="password" placeholder="Token" autocomplete="off" />
+          <button class="btn btn-primary" id="login" type="button">进入</button>
+        </div>
+        <p id="gateErr" class="err"></p>
+      </div>
+    </div>
+  </div>
+  <div id="toast"></div>
+  <script>
+    function viewFromPath() {
+      if (location.pathname.indexOf("/chats") === 0) return "chats";
+      if (location.pathname.indexOf("/setup") === 0) return "setup";
+      return "read";
+    }
+    const pageTitles = { read: "朗读", chats: "对话", setup: "配置" };
+    function showView(name) {
+      document.documentElement.dataset.view = name;
+      document.body.classList.remove("menu-open");
+      document.querySelectorAll("[data-nav]").forEach((a) => {
+        a.classList.toggle("active", a.getAttribute("data-nav") === name);
+      });
+      const title = document.getElementById("pageTitle");
+      if (title) title.textContent = pageTitles[name] || "守岸人";
+      document.dispatchEvent(new CustomEvent("shore-show", { detail: name }));
+    }
+    document.querySelectorAll("[data-nav]").forEach((a) => {
+      a.addEventListener("click", (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        history.pushState(null, "", a.getAttribute("href"));
+        showView(a.getAttribute("data-nav"));
+      });
+    });
+    const menuToggle = document.getElementById("menuToggle");
+    if (menuToggle) menuToggle.onclick = () => document.body.classList.toggle("menu-open");
+    document.addEventListener("click", (e) => {
+      if (!document.body.classList.contains("menu-open")) return;
+      if (e.target.closest("#side") || e.target.closest("#menuToggle")) return;
+      document.body.classList.remove("menu-open");
+    });
+    window.addEventListener("popstate", () => showView(viewFromPath()));
+    showView(viewFromPath());
+  </script>
+  <script>
+
+    const feed = document.getElementById("feed");
+    const gate = document.getElementById("gate");
+    const q = document.getElementById("q");
+    let timer = null;
+
+    function authHeaders() {
+      const t = sessionStorage.getItem("helm_chats_token") || "";
+      return t ? { Authorization: "Bearer " + t } : {};
+    }
+
+    function skillLabel(s) {
+      const name = s.name || s.id;
+      if (!name) return s.route || "";
+      const verb = s.on === false ? "关" : (s.id && /wegame|douyin|steam|cursor/i.test(s.id) ? "启动" : "开");
+      const ok = s.ok === false ? "失败" : "";
+      return verb + name + (ok ? " · " + ok : "");
+    }
+
+    function dayLabel(ts) {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return ts || "";
+      return d.toLocaleDateString("zh-CN", { weekday: "short", month: "numeric", day: "numeric" });
+    }
+
+    function timeLabel(ts) {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function bubble(side, who, text, rec) {
+      const row = document.createElement("div");
+      row.className = "row " + side;
+      const b = document.createElement("article");
+      b.className = "bubble";
+      const w = document.createElement("div");
+      w.className = "who";
+      w.textContent = who;
+      b.appendChild(w);
+      const p = document.createElement("div");
+      p.textContent = text || "（无原文）";
+      b.appendChild(p);
+      if (rec && rec.skills && rec.skills.length) {
+        rec.skills.forEach((s) => {
+          const pill = document.createElement("span");
+          pill.className = "pill" + (s.ok === false ? " bad" : "");
+          pill.textContent = skillLabel(s);
+          b.appendChild(pill);
+        });
+      }
+      if (rec && rec.error) {
+        const e = document.createElement("div");
+        e.className = "err";
+        e.textContent = rec.error;
+        b.appendChild(e);
+      }
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = timeLabel(rec && rec.ts) + (rec && rec.ms ? " · " + rec.ms + "ms" : "");
+      b.appendChild(meta);
+      row.appendChild(b);
+      return row;
+    }
+
+    function render(items) {
+      feed.innerHTML = "";
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "还没有记下原文。对脸说一句之后会出现在这里。";
+        feed.appendChild(empty);
+        return;
+      }
+      let lastDay = "";
+      items.forEach((rec) => {
+        const day = dayLabel(rec.ts);
+        if (day !== lastDay) {
+          const h = document.createElement("div");
+          h.className = "day";
+          h.textContent = day;
+          feed.appendChild(h);
+          lastDay = day;
+        }
+        feed.appendChild(bubble("you", "你", rec.user, rec));
+        feed.appendChild(bubble("her", "守岸人", rec.reply, rec));
+      });
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function nextPath() {
+      const next = new URLSearchParams(location.search).get("next") || "";
+      if (!next.startsWith("/") || next.startsWith("//") || next.includes("://") || next.includes("\\")) {
+        return "";
+      }
+      return next;
+    }
+
+    function goNextOrLoad() {
+      const next = nextPath();
+      if (next) {
+        location.replace(next);
+        return;
+      }
+      load();
+    }
+
+    async function load() {
+      const query = encodeURIComponent(q.value.trim());
+      const resp = await fetch("/v1/companion/chats?limit=400&q=" + query, {
+        headers: { Accept: "application/json", ...authHeaders() },
+        credentials: "include",
+      });
+      if (resp.status === 401) {
+        document.body.classList.add("gated");
+        document.getElementById("panel").classList.add("hide");
+        gate.classList.remove("hide");
+        feed.innerHTML = "";
+        return;
+      }
+      const next = nextPath();
+      if (next) {
+        location.replace(next);
+        return;
+      }
+      gate.classList.add("hide");
+      document.getElementById("searchBar").classList.remove("hide");
+      const body = await resp.json();
+      render(body.items || []);
+    }
+
+    q.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(load, 200);
+    });
+    if (nextPath() === "/setup") {
+      const h = document.querySelector(".gate h2");
+      const p = document.querySelector(".gate p");
+      if (h) h.textContent = "打开配置向导";
+      if (p) p.textContent = "填手机设置里同一枚 Hub Token，登录后跳到配置页。";
+    }
+    load();
+    setInterval(() => { if (document.visibilityState === "visible") load(); }, 4000);
+  
+  </script>
+  <script>
+
+    const DRAFT_KEY = "helm_read_draft";
+    const AUTODL_KEY = "helm_read_autodl";
+    const textBox = document.getElementById("text");
+    const charsEl = document.getElementById("chars");
+    const estimateEl = document.getElementById("estimate");
+    const scopeEl = document.getElementById("scope");
+    const statusEl = document.getElementById("status");
+    const errEl = document.getElementById("err");
+    const jobsEl = document.getElementById("jobs");
+    const panel = document.getElementById("panel");
+    const loginGate = document.getElementById("gate");
+    const playBtn = document.getElementById("play");
+    const fileBtn = document.getElementById("file");
+    const stopBtn = document.getElementById("stop");
+    const autodlEl = document.getElementById("autodl");
+    const importInput = document.getElementById("import");
+    const mine = new Set();
+    const downloaded = new Set();
+    let pollTimer = 0;
+    let jobSpeaking = false;
+    let storyState = null;
+
+    function syncStop() {
+      stopBtn.disabled = !(jobSpeaking || (storyState && storyState.playing));
+    }
+
+    function spokenChars(t) {
+      return (t || "").replace(/\s+/g, "").length;
+    }
+    function fmtSec(sec) {
+      const s = Math.max(0, Math.round(Number(sec) || 0));
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      if (!s) return "0 秒";
+      if (m <= 0) return r + " 秒";
+      return m + " 分 " + String(r).padStart(2, "0") + " 秒";
+    }
+    function estimateSec(t) {
+      const n = spokenChars(t);
+      if (!n) return 0;
+      return Math.max(1, Math.round(n / 4));
+    }
+    function authHeaders() {
+      const t = sessionStorage.getItem("helm_chats_token") || "";
+      return t ? { Authorization: "Bearer " + t } : {};
+    }
+    function selectedText() {
+      const start = textBox.selectionStart;
+      const end = textBox.selectionEnd;
+      if (end > start) return textBox.value.slice(start, end);
+      return "";
+    }
+    function manuscript() {
+      const sel = selectedText();
+      return (sel || textBox.value).trim();
+    }
+    function refreshMeta() {
+      const all = spokenChars(textBox.value);
+      const sel = spokenChars(selectedText());
+      const using = sel || all;
+      charsEl.textContent = String(all);
+      estimateEl.textContent = fmtSec(estimateSec(sel ? selectedText() : textBox.value));
+      scopeEl.textContent = sel ? ("将朗读选区 " + sel + " 字") : (all ? "将朗读全文" : "");
+      localStorage.setItem(DRAFT_KEY, textBox.value);
+    }
+    function statusLabel(job) {
+      if (job.mode === "play" && job.status === "queued") return "等待播放";
+      if (job.mode === "play" && job.status === "running") return "正在送到书桌";
+      if (job.mode === "play" && job.status === "done") return "已送到书桌";
+      if (job.status === "queued") return "排队中";
+      if (job.status === "running") return "合成中";
+      if (job.status === "done") return "已完成";
+      if (job.status === "cancelled") return "已取消";
+      if (job.status === "error") return "失败";
+      return job.status || "";
+    }
+    function progressPct(job) {
+      const n = Number(job.chunks) || 0;
+      const d = Number(job.done) || 0;
+      if (job.status === "done") return 100;
+      if (!n) return 0;
+      return Math.max(0, Math.min(100, Math.round((d / n) * 100)));
+    }
+    function escapeHtml(s) {
+      return String(s || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+    function jobButtons(job) {
+      const btns = [];
+      if (job.status === "queued" || job.status === "running") {
+        btns.push('<button type="button" class="btn btn-outline-secondary btn-sm act" data-act="cancel" data-id="' + escapeHtml(job.id) + '">取消</button>');
+      }
+      if (job.status === "done" && job.audio_id) {
+        btns.push('<button type="button" class="btn btn-outline-secondary btn-sm dl" data-id="' + escapeHtml(job.audio_id) + '" data-name="' + escapeHtml(job.filename || "") + '">下载</button>');
+      }
+      if ((job.status === "done" || job.status === "cancelled" || job.status === "error") && job.id) {
+        btns.push('<button type="button" class="btn btn-outline-secondary btn-sm act" data-act="replay" data-id="' + escapeHtml(job.id) + '">再播</button>');
+      }
+      if (job.status !== "queued" && job.status !== "running") {
+        btns.push('<button type="button" class="btn btn-outline-secondary btn-sm act" data-act="delete" data-id="' + escapeHtml(job.id) + '">删除</button>');
+      }
+      return btns.length ? '<div class="bar">' + btns.join("") + "</div>" : "";
+    }
+    function renderJobs(items) {
+      if (!items || !items.length) {
+        jobsEl.innerHTML = '<p class="empty">还没有任务。播放或生成后会出现在这里。</p>';
+        return;
+      }
+      jobsEl.innerHTML = items.map((job) => {
+        const pct = progressPct(job);
+        const bits = [];
+        if (job.mode === "play") bits.push("播放");
+        else bits.push("文件");
+        if (job.chars) bits.push(job.chars + " 字");
+        if (job.chunks) bits.push((job.done || 0) + " / " + job.chunks + " 段");
+        if (job.duration_sec != null) bits.push("实际 " + fmtSec(job.duration_sec));
+        else if (job.estimate_sec) bits.push("约 " + fmtSec(job.estimate_sec));
+        if (job.status === "running" && job.chunks && job.done < job.chunks && job.estimate_sec) {
+          const left = Math.max(0, job.estimate_sec * (1 - progressPct(job) / 100));
+          bits.push("剩余约 " + fmtSec(left));
+        }
+        if (job.error) bits.push(job.error);
+        return (
+          '<div class="job" data-id="' + escapeHtml(job.id) + '">' +
+            '<div class="job-top">' +
+              '<div class="job-preview">' + escapeHtml(job.preview || job.id) + "</div>" +
+              '<div class="job-status ' + escapeHtml(job.status) + '">' + escapeHtml(statusLabel(job)) + "</div>" +
+            "</div>" +
+            '<div class="job-meta">' + bits.map(escapeHtml).join(" · ") + "</div>" +
+            '<div class="progress"><span style="width:' + pct + '%"></span></div>' +
+            jobButtons(job) +
+          "</div>"
+        );
+      }).join("");
+      jobsEl.querySelectorAll("button.dl").forEach((btn) => {
+        btn.onclick = () => downloadJob(btn.getAttribute("data-id"), btn.getAttribute("data-name"));
+      });
+      jobsEl.querySelectorAll("button.act").forEach((btn) => {
+        btn.onclick = () => jobAction(btn.getAttribute("data-id"), btn.getAttribute("data-act"));
+      });
+    }
+    async function api(path, opts) {
+      const resp = await fetch(path, {
+        credentials: "include",
+        ...opts,
+        headers: {
+          Accept: "application/json",
+          ...authHeaders(),
+          ...(opts && opts.headers ? opts.headers : {}),
+        },
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (resp.status === 401) {
+        document.body.classList.add("gated");
+        panel.classList.add("hide");
+        loginGate.classList.remove("hide");
+        return { resp, body, gated: true };
+      }
+      return { resp, body, gated: false };
+    }
+    async function downloadJob(audioId, filename) {
+      if (!audioId) return;
+      const wav = await fetch("/v1/companion/audio/" + encodeURIComponent(audioId) + "?download=1", {
+        headers: { Accept: "audio/wav", ...authHeaders() },
+        credentials: "include",
+      });
+      if (!wav.ok) {
+        errEl.textContent = "文件在，下载失败。";
+        return;
+      }
+      const blob = await wav.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename || ("shorekeeper-" + audioId + ".wav");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    async function jobAction(id, action) {
+      errEl.textContent = "";
+      const { resp, body, gated } = await api("/v1/companion/read/jobs/" + encodeURIComponent(id) + "/" + action, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (gated) return;
+      if (!resp.ok) {
+        errEl.textContent = (body.error && body.error.message) || "这次没做成。";
+        return;
+      }
+      if (action === "replay" && body.id) mine.add(body.id);
+      if (action === "delete") statusEl.textContent = "已从列表拿掉。";
+      if (action === "cancel") statusEl.textContent = "已取消。";
+      if (action === "replay") statusEl.textContent = "正在再送到书桌。";
+      await refreshJobs();
+    }
+    async function refreshJobs() {
+      const { resp, body, gated } = await api("/v1/companion/read/jobs");
+      if (gated) return false;
+      if (!resp.ok) return true;
+      const items = body.items || [];
+      renderJobs(items);
+      for (const job of items) {
+        if (autodlEl.checked && job.mode === "file" && job.status === "done" && job.audio_id && mine.has(job.id) && !downloaded.has(job.id)) {
+          downloaded.add(job.id);
+          statusEl.textContent = "已完成，开始下载 " + (job.filename || "wav") + "。";
+          downloadJob(job.audio_id, job.filename);
+        }
+        if (job.status === "error" && mine.has(job.id)) {
+          errEl.textContent = job.error || "这次没做成。";
+        }
+      }
+      const speaking = items.some((j) => j.status === "queued" || j.status === "running");
+      jobSpeaking = speaking;
+      syncStop();
+      return true;
+    }
+    function startPoll() {
+      if (pollTimer) return;
+      pollTimer = setInterval(() => {
+        refreshJobs().catch(() => {});
+        refreshStory().catch(() => {});
+      }, 1000);
+    }
+    async function submit(mode) {
+      errEl.textContent = "";
+      statusEl.textContent = "";
+      const text = manuscript();
+      if (!spokenChars(text)) {
+        errEl.textContent = selectedText() ? "选区是空的。" : "先贴一段文字。";
+        return;
+      }
+      if (text.length > 8000) {
+        errEl.textContent = "一次最多八千字。";
+        return;
+      }
+      statusEl.textContent = mode === "play" ? "已加入播放队列。" : "已加入合成队列。";
+      const { resp, body, gated } = await api("/v1/companion/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, mode }),
+      });
+      if (gated) return;
+      if (!resp.ok) {
+        errEl.textContent = (body.error && body.error.message) || "这次没做成。";
+        return;
+      }
+      if (body.id) mine.add(body.id);
+      await refreshJobs();
+      startPoll();
+    }
+    async function stopAll() {
+      errEl.textContent = "";
+      const { resp, body, gated } = await api("/v1/companion/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (gated) return;
+      if (!resp.ok) {
+        errEl.textContent = (body.error && body.error.message) || "没停住。";
+        return;
+      }
+      statusEl.textContent = "已经停下。";
+      await refreshJobs();
+      await refreshStory();
+    }
+    function loadFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const raw = String(reader.result || "");
+        textBox.value = raw.slice(0, 8000);
+        refreshMeta();
+        statusEl.textContent = file.name + (raw.length > 8000 ? " · 已截到八千字" : " · 已读入");
+      };
+      reader.readAsText(file, "utf-8");
+    }
+
+    const storyPane = document.getElementById("story");
+    const shortPane = document.getElementById("short");
+    const tocPane = document.getElementById("tocPane");
+    const jobPane = document.getElementById("jobPane");
+    const chapterBody = document.getElementById("chapterBody");
+    const bookTitle = document.getElementById("bookTitle");
+    const chapterTitle = document.getElementById("chapterTitle");
+    const progressLabel = document.getElementById("progressLabel");
+    const storyStatus = document.getElementById("storyStatus");
+    const timerEl = document.getElementById("timer");
+    const timerLeft = document.getElementById("timerLeft");
+    const importBtn = document.getElementById("importBtn");
+    const importBox = document.getElementById("importBox");
+    const importTrack = document.getElementById("importTrack");
+    const importBar = document.getElementById("importBar");
+    const importLabel = document.getElementById("importLabel");
+    const readLog = document.getElementById("readLog");
+    const tocEl = document.getElementById("toc");
+    const tocQuery = document.getElementById("tocQuery");
+    const splitNote = document.getElementById("splitNote");
+    const TOC_ROW = 44;
+    let shelfBook = null;
+    let chapterDoc = null;
+    let importBusy = false;
+    let notedStory = null;
+    let tocActive = 0;
+    let tocFilter = "";
+    let tocRendering = false;
+    let tocScrollQueued = 0;
+    let lastPaint = { index: -1, rel: -1, sentence: "" };
+
+    function showStoryView(on) {
+      storyPane.classList.toggle("hide", !on);
+      shortPane.classList.toggle("hide", on);
+      tocPane.classList.toggle("hide", !on);
+      jobPane.classList.toggle("hide", on);
+    }
+    function chapterOf(offset) {
+      const chapters = (shelfBook && shelfBook.chapters) || [];
+      if (!chapters.length) return null;
+      const chars = Number(shelfBook.chars) || 0;
+      if (offset >= chars) return chapters[chapters.length - 1];
+      let lo = 0;
+      let hi = chapters.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const ch = chapters[mid];
+        if (offset < ch.start) hi = mid - 1;
+        else if (offset >= ch.end) lo = mid + 1;
+        else return ch;
+      }
+      return chapters[Math.max(0, Math.min(chapters.length - 1, lo))];
+    }
+    function scrollMarkIntoReader(mark) {
+      const top = mark.offsetTop;
+      const bottom = top + Math.max(mark.offsetHeight, 24);
+      const viewTop = chapterBody.scrollTop;
+      const viewBottom = viewTop + chapterBody.clientHeight;
+      if (top >= viewTop + 32 && bottom <= viewBottom - 32) return;
+      chapterBody.scrollTop = Math.max(0, top - chapterBody.clientHeight * 0.35);
+    }
+    function paintChapter(text, highlightStart, highlight) {
+      const rel = Math.max(0, highlightStart || 0);
+      const sentence = highlight || "";
+      const index = chapterDoc ? chapterDoc.index : -1;
+      if (lastPaint.index === index && lastPaint.rel === rel && lastPaint.sentence === sentence && chapterBody.querySelector("#here")) return;
+      const chapterChanged = lastPaint.index !== index;
+      lastPaint = { index, rel, sentence };
+      chapterBody.replaceChildren();
+      const source = text || "";
+      const before = source.slice(0, rel);
+      const mid = sentence ? source.slice(rel, rel + sentence.length) : "";
+      const after = source.slice(rel + mid.length);
+      const mark = document.createElement(sentence ? "mark" : "span");
+      mark.id = "here";
+      mark.textContent = mid;
+      chapterBody.append(document.createTextNode(before), mark, document.createTextNode(after));
+      if (chapterChanged || sentence) scrollMarkIntoReader(mark);
+    }
+    function tocRows() {
+      const chapters = (shelfBook && shelfBook.chapters) || [];
+      const q = tocFilter.trim().toLowerCase();
+      if (!q) return chapters;
+      return chapters.filter((ch) => {
+        const title = (ch.title || "").toLowerCase();
+        const label = String(ch.index + 1);
+        return title.includes(q) || label.includes(q);
+      });
+    }
+    function closeTocIfPhone() {
+      document.body.classList.remove("toc-open");
+    }
+    function renderTocWindow() {
+      const chapters = (shelfBook && shelfBook.chapters) || [];
+      const note = shelfBook && shelfBook.problem_label ? shelfBook.problem_label : "";
+      const rows = tocRows();
+      splitNote.textContent = chapters.length
+        ? ((tocFilter ? ("匹配 " + rows.length + " / ") : "") + chapters.length + " 章" + (note ? " · " + note : ""))
+        : note;
+      if (!chapters.length) {
+        tocEl.innerHTML = '<p class="empty">还没有目录。</p>';
+        return;
+      }
+      if (!rows.length) {
+        tocEl.innerHTML = '<p class="empty">没有这一章。</p>';
+        return;
+      }
+      const height = tocEl.clientHeight || 320;
+      const start = Math.max(0, Math.floor(tocEl.scrollTop / TOC_ROW) - 6);
+      const count = Math.ceil(height / TOC_ROW) + 14;
+      const slice = rows.slice(start, start + count);
+      const html = '<div style="height:' + (rows.length * TOC_ROW) + 'px;position:relative">' + slice.map((ch, i) => {
+        const top = (start + i) * TOC_ROW;
+        const on = ch.index === tocActive ? " on" : "";
+        const title = ch.title || ("第 " + (ch.index + 1) + " 章");
+        const prefix = ch.volume ? (ch.volume + " · ") : "";
+        return '<button type="button" class="' + on + '" style="position:absolute;top:' + top + 'px;left:0;right:0;height:' + TOC_ROW + 'px" data-start="' + ch.start + '" data-index="' + ch.index + '">' + escapeHtml(prefix + title) + "</button>";
+      }).join("") + "</div>";
+      const keep = tocEl.scrollTop;
+      tocRendering = true;
+      tocEl.innerHTML = html;
+      if (tocEl.scrollTop !== keep) tocEl.scrollTop = keep;
+      tocRendering = false;
+    }
+    function setTocActive(index) {
+      const changed = index !== tocActive;
+      tocActive = index;
+      if (changed && !tocFilter) {
+        const pos = ((shelfBook && shelfBook.chapters) || []).findIndex((ch) => ch.index === index);
+        if (pos >= 0) tocEl.scrollTop = Math.max(0, pos * TOC_ROW - (tocEl.clientHeight || 320) / 2 + TOC_ROW);
+      }
+      renderTocWindow();
+      if (!tocEl.clientHeight) requestAnimationFrame(renderTocWindow);
+    }
+    async function loadChapter(index, highlightStart, sentence) {
+      if (!shelfBook) return;
+      const { resp, body, gated } = await api("/v1/companion/books/" + encodeURIComponent(shelfBook.id) + "/chapter/" + index);
+      if (gated || !resp.ok) return;
+      chapterDoc = body;
+      const rel = highlightStart == null ? 0 : highlightStart - body.start;
+      paintChapter(body.text, rel, sentence || "");
+      chapterTitle.textContent = body.title || "";
+    }
+    async function openShelfBook(id) {
+      const { resp, body, gated } = await api("/v1/companion/books/" + encodeURIComponent(id));
+      if (gated || !resp.ok) {
+        errEl.textContent = (body.error && body.error.message) || "这本书打不开。";
+        return;
+      }
+      shelfBook = body;
+      lastPaint = { index: -1, rel: -1, sentence: "" };
+      bookTitle.textContent = body.title || id;
+      const ch = chapterOf(body.bookmark || 0);
+      setTocActive(ch ? ch.index : 0);
+      if (ch) await loadChapter(ch.index, null, "");
+      const percent = body.chars ? Math.round(((body.bookmark || 0) / body.chars) * 100) : 0;
+      progressLabel.textContent = ch ? ((ch.index + 1) + " / " + body.chapters.length + " · " + percent + "%") : "";
+    }
+    function paintTimer(story) {
+      const left = story && story.timer_remaining_sec;
+      if (left == null) {
+        timerLeft.textContent = "";
+        return;
+      }
+      timerLeft.textContent = left >= 60 ? ("还剩 " + Math.ceil(left / 60) + " 分") : ("还剩 " + left + " 秒");
+    }
+    function pushLog(line) {
+      const now = new Date();
+      const stamp = [now.getHours(), now.getMinutes(), now.getSeconds()]
+        .map((n) => String(n).padStart(2, "0"))
+        .join(":");
+      const li = document.createElement("li");
+      li.textContent = stamp + "  " + line;
+      readLog.appendChild(li);
+      while (readLog.children.length > 12) readLog.removeChild(readLog.firstChild);
+      readLog.scrollTop = readLog.scrollHeight;
+    }
+    function noteStory(prev, story) {
+      if (!story) return;
+      if (!prev || prev.book_id !== story.book_id) {
+        if (story.book_id && !importBusy) pushLog("打开 " + story.book_id.replace(/\.txt$/, ""));
+        return;
+      }
+      if (story.timer_min !== prev.timer_min) {
+        pushLog(story.timer_min ? "定时 " + story.timer_min + " 分钟" : "定时已关");
+      }
+      if (story.playing && !prev.playing) {
+        pushLog("开始读 " + (story.chapter_title || ""));
+        return;
+      }
+      if (!story.playing && prev.playing) {
+        if (story.stopped_by === "timer") pushLog("到时间了，已停下");
+        else if (story.stopped_by === "end") pushLog("已读完");
+        else if (story.stopped_by === "error") pushLog(story.error || "这次没读成");
+        else pushLog("已暂停");
+        return;
+      }
+      if (story.playing && story.chapter !== prev.chapter) pushLog("进入 " + (story.chapter_title || ""));
+    }
+    async function applyStory(story) {
+      const prev = notedStory;
+      notedStory = story;
+      storyState = story;
+      try {
+      noteStory(prev, story);
+      if (!story) return;
+      if (story.timer_min != null) timerEl.value = String(story.timer_min);
+      paintTimer(story);
+      if (story.stopped_by === "timer") storyStatus.textContent = "到时间了，已停下。";
+      else if (story.stopped_by === "end") storyStatus.textContent = "已读完。";
+      else if (story.stopped_by === "error") storyStatus.textContent = story.error || "这次没读成。";
+      else if (story.playing) storyStatus.textContent = "正在读。";
+      else storyStatus.textContent = "";
+      if (!story.book_id) return;
+      if (!shelfBook || shelfBook.id !== story.book_id) await openShelfBook(story.book_id);
+      const ch = story.chapter != null ? shelfBook.chapters[story.chapter] : chapterOf(story.offset || 0);
+      if (!ch) return;
+      const percent = story.chars ? Math.round(((story.offset || 0) / story.chars) * 100) : 0;
+      progressLabel.textContent = (ch.index + 1) + " / " + (story.chapters || shelfBook.chapters.length) + " · " + percent + "%";
+      if (tocActive !== ch.index || tocFilter) setTocActive(ch.index);
+      else if (!tocEl.querySelector("button")) renderTocWindow();
+      const sentence = story.playing ? (story.sentence || "") : "";
+      const start = story.playing ? story.sentence_start : (story.offset || 0);
+      if (!chapterDoc || chapterDoc.index !== ch.index) await loadChapter(ch.index, start, sentence);
+      else paintChapter(chapterDoc.text, start == null ? 0 : start - chapterDoc.start, sentence);
+      } finally {
+        syncStop();
+      }
+    }
+    async function refreshStory() {
+      const { resp, body, gated } = await api("/v1/companion/story");
+      if (gated || !resp.ok) return;
+      await applyStory(body);
+    }
+    async function storyPlay(offset) {
+      if (!shelfBook && offset == null) return;
+      const id = (storyState && storyState.book_id) || (shelfBook && shelfBook.id);
+      if (!id) return;
+      const payload = offset == null ? {} : { offset: offset };
+      const { resp, body, gated } = await api("/v1/companion/books/" + encodeURIComponent(id) + "/play", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (gated) return;
+      if (!resp.ok) {
+        errEl.textContent = (body.error && body.error.message) || "这次没读成。";
+        return;
+      }
+      await applyStory(body);
+    }
+    async function jumpChapter(start, index) {
+      const id = shelfBook && shelfBook.id;
+      if (!id) return;
+      if (storyState && storyState.playing) {
+        await storyPlay(start);
+        return;
+      }
+      const { resp, body, gated } = await api("/v1/companion/books/" + encodeURIComponent(id) + "/bookmark", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offset: start }),
+      });
+      if (gated || !resp.ok) return;
+      await applyStory(body);
+    }
+    function finishImport(message) {
+      importBusy = false;
+      importBtn.disabled = false;
+      importTrack.classList.remove("busy");
+      importBar.style.width = "0%";
+      importBox.classList.add("hide");
+      importLabel.textContent = "";
+      if (message) pushLog(message);
+    }
+    function importFailure(xhr, body) {
+      const message = (body && body.error && body.error.message) || "";
+      const status = xhr ? xhr.status : 0;
+      const line = message
+        ? ("没放进书架：" + message)
+        : (status ? ("没放进书架（HTTP " + status + "）") : "没放进书架：连接被中断");
+      errEl.textContent = message || line;
+      finishImport(line);
+    }
+    function uploadBook(file) {
+      if (!file || importBusy) return;
+      importBusy = true;
+      importBtn.disabled = true;
+      errEl.textContent = "";
+      importBox.classList.remove("hide");
+      importTrack.classList.remove("busy");
+      importBar.style.width = "0%";
+      importLabel.textContent = "正在上传 0%";
+      let importMark = 0;
+      pushLog("开始导入 " + file.name + " · " + Math.max(1, Math.round(file.size / 1024)) + " KB");
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/v1/companion/books");
+      xhr.withCredentials = true;
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name));
+      const headers = authHeaders();
+      Object.keys(headers).forEach((key) => xhr.setRequestHeader(key, headers[key]));
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable || !event.total) return;
+        const pct = Math.min(100, Math.round((event.loaded / event.total) * 100));
+        importBar.style.width = pct + "%";
+        importLabel.textContent = "正在上传 " + pct + "%";
+        const step = pct >= 100 ? 100 : Math.floor(pct / 25) * 25;
+        if (step >= 25 && step > importMark) {
+          importMark = step;
+          pushLog("已上传 " + step + "%");
+        }
+      };
+      xhr.onload = async () => {
+        let body = {};
+        try { body = JSON.parse(xhr.responseText || "{}"); } catch (e) { body = {}; }
+        if (xhr.status === 401) {
+          document.body.classList.add("gated");
+          panel.classList.add("hide");
+          loginGate.classList.remove("hide");
+          finishImport("需要 Token。");
+          return;
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          importFailure(xhr, body);
+          return;
+        }
+        importBar.style.width = "100%";
+        importTrack.classList.add("busy");
+        importLabel.textContent = "正在识别章节";
+        pushLog("正在识别章节");
+        await openShelfBook(body.id);
+        if (!shelfBook || shelfBook.id !== body.id) {
+          finishImport(errEl.textContent || "这本书没打开。");
+          return;
+        }
+        const count = shelfBook && shelfBook.chapters ? shelfBook.chapters.length : 0;
+        storyStatus.textContent = file.name + " · 已放进书架。";
+        notedStory = { book_id: body.id, playing: false, chapter: null, timer_min: notedStory && notedStory.timer_min, stopped_by: null };
+        finishImport("已放进书架" + (count ? " · " + count + " 章" : ""));
+      };
+      xhr.onerror = () => importFailure(xhr, {});
+      xhr.send(file);
+    }
+
+    document.getElementById("storyPlay").onclick = () => storyPlay(null);
+    document.getElementById("storyPause").onclick = () => stopAll();
+    document.getElementById("prevChapter").onclick = () => {
+      const current = chapterDoc ? chapterDoc.index : 0;
+      const prev = Math.max(0, current - 1);
+      const ch = shelfBook && shelfBook.chapters[prev];
+      if (ch) jumpChapter(ch.start, ch.index);
+    };
+    document.getElementById("nextChapter").onclick = () => {
+      const current = chapterDoc ? chapterDoc.index : 0;
+      const next = shelfBook ? Math.min(shelfBook.chapters.length - 1, current + 1) : 0;
+      const ch = shelfBook && shelfBook.chapters[next];
+      if (ch) jumpChapter(ch.start, ch.index);
+    };
+    const voiceVolume = document.getElementById("voiceVolume");
+    const voiceSpeed = document.getElementById("voiceSpeed");
+    const voiceVolumeVal = document.getElementById("voiceVolumeVal");
+    const voiceSpeedVal = document.getElementById("voiceSpeedVal");
+    let voiceTimer = 0;
+    function paintVoice() {
+      voiceVolumeVal.textContent = voiceVolume.value;
+      voiceSpeedVal.textContent = Number(voiceSpeed.value).toFixed(1) + "×";
+    }
+    function scheduleVoice() {
+      paintVoice();
+      clearTimeout(voiceTimer);
+      voiceTimer = setTimeout(saveVoice, 200);
+    }
+    async function loadVoice() {
+      const { resp, body, gated } = await api("/setup/api/state");
+      if (gated || !resp.ok || !body.voice) return;
+      if (document.activeElement !== voiceVolume && body.voice.volume != null) voiceVolume.value = String(body.voice.volume);
+      if (document.activeElement !== voiceSpeed && body.voice.speed != null) voiceSpeed.value = String(body.voice.speed);
+      paintVoice();
+    }
+    async function saveVoice() {
+      const { resp, body, gated } = await api("/setup/api/voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          volume: Number(voiceVolume.value),
+          speed: Number(voiceSpeed.value),
+        }),
+      });
+      if (gated || resp.ok) {
+        if (resp.ok && body.message && body.message !== "已生效") storyStatus.textContent = body.message;
+        return;
+      }
+      errEl.textContent = body.message || (body.error && body.error.message) || "音量没改成。";
+    }
+    voiceVolume.addEventListener("input", scheduleVoice);
+    voiceSpeed.addEventListener("input", scheduleVoice);
+    paintVoice();
+    timerEl.onchange = async () => {
+      const { resp, body, gated } = await api("/v1/companion/story/timer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minutes: Number(timerEl.value) }),
+      });
+      if (!gated && resp.ok) await applyStory(body);
+    };
+    document.getElementById("showShort").onclick = () => { closeTocIfPhone(); showStoryView(false); };
+    document.getElementById("showStory").onclick = () => showStoryView(true);
+    document.getElementById("tocToggle").onclick = () => {
+      document.body.classList.add("toc-open");
+      requestAnimationFrame(renderTocWindow);
+      tocQuery.focus();
+    };
+    document.getElementById("tocClose").onclick = () => closeTocIfPhone();
+    tocEl.addEventListener("scroll", () => {
+      if (tocRendering || tocScrollQueued) return;
+      tocScrollQueued = requestAnimationFrame(() => {
+        tocScrollQueued = 0;
+        renderTocWindow();
+      });
+    });
+    tocEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button");
+      if (!btn || !tocEl.contains(btn)) return;
+      jumpChapter(Number(btn.getAttribute("data-start")), Number(btn.getAttribute("data-index")));
+      closeTocIfPhone();
+    });
+    tocQuery.addEventListener("input", () => {
+      tocFilter = tocQuery.value || "";
+      tocEl.scrollTop = 0;
+      renderTocWindow();
+    });
+    tocQuery.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const raw = tocQuery.value.trim();
+      const n = Number(raw);
+      let ch = null;
+      if (raw && Number.isInteger(n) && shelfBook && n >= 1 && n <= shelfBook.chapters.length) ch = shelfBook.chapters[n - 1];
+      if (!ch) ch = tocRows()[0];
+      if (!ch) return;
+      jumpChapter(ch.start, ch.index);
+      closeTocIfPhone();
+    });
+
+    autodlEl.checked = localStorage.getItem(AUTODL_KEY) === "1";
+    autodlEl.onchange = () => localStorage.setItem(AUTODL_KEY, autodlEl.checked ? "1" : "0");
+    const draft = localStorage.getItem(DRAFT_KEY);
+    if (draft) textBox.value = draft.slice(0, 8000);
+    textBox.addEventListener("input", refreshMeta);
+    textBox.addEventListener("select", refreshMeta);
+    textBox.addEventListener("keyup", refreshMeta);
+    textBox.addEventListener("mouseup", refreshMeta);
+    textBox.addEventListener("dragover", (e) => e.preventDefault());
+    textBox.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) loadFile(file);
+    });
+    playBtn.onclick = () => submit("play");
+    fileBtn.onclick = () => submit("file");
+    stopBtn.onclick = () => stopAll();
+    document.getElementById("clear").onclick = () => {
+      textBox.value = "";
+      refreshMeta();
+      statusEl.textContent = "";
+      errEl.textContent = "";
+    };
+    chapterBody.addEventListener("dragover", (e) => e.preventDefault());
+    chapterBody.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) uploadBook(file);
+    });
+    document.getElementById("importBtn").onclick = () => importInput.click();
+    importInput.onchange = () => {
+      const file = importInput.files && importInput.files[0];
+      if (file) uploadBook(file);
+      importInput.value = "";
+    };
+    document.addEventListener("keydown", (e) => {
+      const tag = document.activeElement && document.activeElement.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (e.key === "Escape") {
+        e.preventDefault();
+        stopAll();
+        return;
+      }
+      if (!typing && e.key === " " && !e.repeat) {
+        e.preventDefault();
+        if (storyState && storyState.playing) stopAll();
+        else storyPlay(null);
+        return;
+      }
+      if (typing && (e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        submit(e.shiftKey ? "file" : "play");
+      }
+    });
+    document.getElementById("login").onclick = async () => {
+      const token = document.getElementById("gateToken").value.trim();
+      document.getElementById("gateErr").textContent = "";
+      const resp = await fetch("/chats/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ token }),
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        document.getElementById("gateErr").textContent = (body.error && body.error.message) || "Token 不对";
+        return;
+      }
+      sessionStorage.setItem("helm_chats_token", token);
+      document.getElementById("gateToken").value = "";
+      if (typeof nextPath === "function" && nextPath()) {
+        location.replace(nextPath());
+        return;
+      }
+      document.body.classList.remove("gated");
+      loginGate.classList.add("hide");
+      panel.classList.remove("hide");
+      refreshJobs().then((ok) => { if (ok) startPoll(); });
+    };
+    refreshMeta();
+    stopBtn.disabled = true;
+    (async function probe() {
+      await loadVoice();
+      const listed = await api("/v1/companion/books");
+      if (!listed.gated && listed.resp.ok && listed.body.timer_min != null) {
+        timerEl.value = String(listed.body.timer_min);
+        if (listed.body.current_id) await openShelfBook(listed.body.current_id);
+      }
+      const ok = await refreshJobs();
+      await refreshStory();
+      if (ok || (listed.resp && listed.resp.ok)) startPoll();
+    })();
+  
+  </script>
+  <script>
+
+    let state = { mijia_devices: [], devices: [] };
+    let loading = true;
+    let saveTimer = null;
+    let saveInFlight = false;
+    let saveQueued = false;
+    let mijiaPollTimer = null;
+    const icons = ["douyin","cursor","computer","chrome","vscode","terminal","folder","music","steam"];
+
+    // ------------------------------------------------ 伴侣大模型配置
+    const LLM_PRESETS = [
+      { id: 'openrouter', name: 'OpenRouter（聚合，含免费模型）',
+        base: 'https://openrouter.ai/api/v1',
+        models: ['openrouter/free', 'deepseek/deepseek-chat', 'qwen/qwen3.8-27b:free', 'google/gemma-4-26b-a4b-it:free'],
+        hint: '免费模型有每日次数上限；免费额度用尽时可换付费模型' },
+      { id: 'aliyun', name: '阿里云百炼（MaaS）',
+        base: 'https://llm-d5gfe8wcya3xedgk.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+        models: ['qwen3.8-flash'],
+        hint: '控制台里「仅用免费额度」关掉才会走付费' },
+      { id: 'deepseek', name: 'DeepSeek 官方',
+        base: 'https://api.deepseek.com/v1',
+        models: ['deepseek-chat', 'deepseek-reasoner'], hint: '' },
+      { id: 'moonshot', name: '月之暗面 Kimi',
+        base: 'https://api.moonshot.cn/v1',
+        models: ['kimi-k2-0905-preview', 'moonshot-v1-8k'], hint: '' },
+      { id: 'zhipu', name: '智谱 GLM',
+        base: 'https://open.bigmodel.cn/api/paas/v4',
+        models: ['glm-4-flash', 'glm-4-plus'], hint: '' },
+      { id: 'siliconflow', name: '硅基流动 SiliconFlow',
+        base: 'https://api.siliconflow.cn/v1',
+        models: ['Qwen/Qwen2.5-7B-Instruct'], hint: '' },
+      { id: 'ollama', name: '本地 Ollama（Mac，无限额）',
+        base: 'http://127.0.0.1:11434/v1',
+        models: ['qwen3.5:4b'], hint: '需要在 Mac 上先 ollama serve 并拉好模型' },
+      { id: 'custom', name: '自定义 / 其他 OpenAI 兼容',
+        base: '', models: [], hint: '手填 base_url 与模型名即可' },
+    ];
+
+    function setLlmStatus(text, kind) {
+      const el = document.getElementById('llmStatus');
+      el.textContent = text || '';
+      el.style.color = kind === 'err' ? '#fca5a5' : (kind === 'ok' ? '#86efac' : '');
+    }
+    function initLlmPresets() {
+      const sel = document.getElementById('llmProvider');
+      sel.innerHTML = '<option value="">— 选择预设 —</option>' +
+        LLM_PRESETS.map(p => '<option value="' + p.id + '">' + p.name + '</option>').join('');
+      sel.addEventListener('change', applyLlmPreset);
+    }
+    function applyLlmPreset() {
+      const p = LLM_PRESETS.find(x => x.id === document.getElementById('llmProvider').value);
+      if (!p) return;
+      if (p.base) document.getElementById('llmBaseUrl').value = p.base;
+      refreshLlmDatalist(p.models);
+      if (p.models.length && !document.getElementById('llmModel').value.trim()) {
+        document.getElementById('llmModel').value = p.models[0];
+      }
+      setLlmStatus(p.hint || '');
+      scheduleSave();
+    }
+    function refreshLlmDatalist(models) {
+      document.getElementById('llmModelList').innerHTML =
+        (models || []).map(m => '<option value="' + String(m).replace(/"/g, '&quot;') + '"></option>').join('');
+    }
+    function fillLlm(data) {
+      const llm = (data && data.llm) || {};
+      const baseEl = document.getElementById('llmBaseUrl');
+      const modelEl = document.getElementById('llmModel');
+      if (!baseEl.value.trim()) baseEl.value = llm.base_url || '';
+      if (!modelEl.value.trim()) modelEl.value = llm.model || '';
+      const hit = LLM_PRESETS.find(p => p.base && llm.base_url && p.base.replace(/\/$/, '') === String(llm.base_url).replace(/\/$/, ''));
+      if (hit) {
+        document.getElementById('llmProvider').value = hit.id;
+        refreshLlmDatalist(hit.models);
+      } else if (llm.base_url) {
+        document.getElementById('llmProvider').value = 'custom';
+      }
+      document.getElementById('llmCurrent').textContent =
+        '当前生效：' + (llm.base_url || '（未配置）') + '  ·  Key ' +
+        (llm.has_key ? ('已配置 ' + (llm.key_hint || '')) : '未配置');
+      const llmPill = document.getElementById('llmPill');
+      if (llmPill) {
+        llmPill.textContent = llm.model || '未配置';
+        llmPill.className = 'right pill' + (llm.has_key ? ' ok' : '');
+      }
+    }
+    async function fetchLlmModels() {
+      setLlmStatus('正在拉取模型列表…');
+      try {
+        const r = await fetch('/setup/api/llm-models', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: document.getElementById('llmBaseUrl').value.trim(),
+            api_key: document.getElementById('llmApiKey').value.trim(),
+          }),
+        });
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.message || '拉取失败');
+        refreshLlmDatalist(d.models);
+        setLlmStatus('拉到 ' + d.count + ' 个模型，点模型名输入框就能挑', 'ok');
+      } catch (e) { setLlmStatus(e.message || '拉取失败', 'err'); }
+    }
+    async function testLlm() {
+      setLlmStatus('正在测试…');
+      try {
+        const r = await fetch('/setup/api/llm-test', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: document.getElementById('llmBaseUrl').value.trim(),
+            model: document.getElementById('llmModel').value.trim(),
+            api_key: document.getElementById('llmApiKey').value.trim(),
+          }),
+        });
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.message || '测试失败');
+        setLlmStatus('✅ 通了（' + d.message + '）：' + (d.sample || ''), 'ok');
+      } catch (e) { setLlmStatus('❌ ' + (e.message || '测试失败'), 'err'); }
+    }
+    async function saveLlm() {
+      const keyEl = document.getElementById('llmApiKey');
+      setLlmStatus('保存中…');
+      await flushSave();
+      const had = keyEl.value.trim();
+      keyEl.value = '';
+      await refresh(false);
+      setLlmStatus(had ? '已保存（Key 已写入 hub.yaml，输入框已清空）' : '已保存', 'ok');
+    }
+    function setSaveStatus(text, kind='pending') {
+      const el = document.getElementById('saveStatus');
+      el.textContent = text;
+      el.className = 'pill' + (kind === 'ok' ? ' ok' : kind === 'err' ? ' warn' : ' pending');
+    }
+    function collectPayload() {
+      const body = {
+        name: document.getElementById('name').value.trim() || 'study',
+        port: +document.getElementById('port').value || 17890,
+        token: document.getElementById('token').value.trim(),
+        pc: { enabled: document.getElementById('pcEnabled').checked, sample_ms: 1000, cpu_temp: true, gpu: true },
+        devices: state.devices,
+        llmBaseUrl: document.getElementById('llmBaseUrl').value.trim(),
+        llmModel: document.getElementById('llmModel').value.trim(),
+        llmApiKey: document.getElementById('llmApiKey').value.trim(),
+      };
+      const tm = document.getElementById('tempMijia').value;
+      const tn = document.getElementById('tempName').value.trim();
+      if (tm) body.temperature = { id: slug(tn||tm), name: tn||tm, mijia_name: tm, celsius_prop: 'temperature', humidity_prop: 'humidity' };
+      else body.temperature = null;
+      return body;
+    }
+    function scheduleSave() {
+      if (loading) return;
+      setSaveStatus('待保存…', 'pending');
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => flushSave(), 600);
+    }
+    async function flushSave() {
+      if (loading) return;
+      if (saveInFlight) { saveQueued = true; return; }
+      saveInFlight = true;
+      setSaveStatus('保存中…', 'pending');
+      try {
+        const r = await fetch('/setup/api/save', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(collectPayload()),
+        });
+        const data = await r.json();
+        if (!r.ok || data.ok === false) throw new Error(data.message || '保存失败');
+        setSaveStatus('已自动保存', 'ok');
+        if (data.port_changed) toast('端口已改，请退出 Hub 后重新启动', true);
+      } catch (err) {
+        setSaveStatus(err.message || '保存失败', 'err');
+        toast(err.message || '保存失败', true);
+      } finally {
+        saveInFlight = false;
+        if (saveQueued) { saveQueued = false; scheduleSave(); }
+      }
+    }
+
+    function toast(msg, err=false) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = err ? 'err' : '';
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 3200);
+    }
+    function copy(id) {
+      const el = document.getElementById(id);
+      el.select();
+      document.execCommand('copy');
+      toast('已复制');
+    }
+    function slug(s) {
+      return (s || 'item').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
+    }
+    function esc(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+    }
+    function renderMijiaList() {
+      const body = document.getElementById('mijiaListBody');
+      const hint = document.getElementById('mijiaListHint');
+      const countEl = document.getElementById('mijiaCount');
+      const filter = (document.getElementById('mijiaFilter').value || '').trim().toLowerCase();
+      const list = state.mijia_devices || [];
+      if (!list.length) {
+        body.innerHTML = '<div class="empty">暂无设备。请先点「扫码登录米家」，扫完码后再点「刷新设备列表」。</div>';
+        countEl.style.display = 'none';
+        hint.textContent = state.mijia_devices_error || (state.mijia_status === 'ok' ? '已登录但未拉到设备，请再点刷新。' : '尚未登录米家。');
+        return;
+      }
+      const filtered = filter ? list.filter(d => (d.name||'').toLowerCase().includes(filter) || (d.model||'').toLowerCase().includes(filter)) : list;
+      countEl.style.display = 'inline-block';
+      countEl.textContent = `${list.length} 个设备`;
+      document.getElementById('mijiaListTitle').textContent = filter ? `米家设备（${filtered.length}/${list.length}）` : `米家设备（${list.length}）`;
+      if (!filtered.length) {
+        body.innerHTML = '<div class="empty">没有匹配的设备，换个关键词试试。</div>';
+      } else {
+        body.innerHTML = `<table><thead><tr><th>主屏</th><th>名称</th><th>型号</th><th>状态</th></tr></thead><tbody>${
+          filtered.map(d => {
+            const online = d.online === true || d.online === 'true';
+            const onHome = state.devices.some(x => x.mijia_name === d.name);
+            return `<tr>
+              <td><input type="checkbox" ${onHome?'checked':''} onchange="toggleHome(${JSON.stringify(d.name)})" /></td>
+              <td>${esc(d.name)}</td>
+              <td><code>${esc(d.model)}</code></td>
+              <td><span class="dot ${online?'on':'off'}"></span>${online?'在线':'离线'}</td>
+            </tr>`;
+          }).join('')
+        }</tbody></table>`;
+      }
+      hint.textContent = '勾选「主屏」就会出现在安卓方块里。点开下面卡片可勾选这个设备要暴露的属性（开关、亮度、温湿度、模式等）。';
+    }
+    function mijiaOptions(selected='') {
+      let html = '<option value="">请选择</option>';
+      for (const d of state.mijia_devices) {
+        const n = d.name || '';
+        html += `<option value="${n.replace(/"/g,'&quot;')}" ${n===selected?'selected':''}>${n}</option>`;
+      }
+      return html;
+    }
+    function renderDevices() {
+      const root = document.getElementById('devices');
+      root.innerHTML = '';
+      state.devices.forEach((d, i) => {
+        const box = document.createElement('div');
+        box.className = 'device';
+        const typeLabel = {light:'灯', switch:'开关', action:'启动', ws2812:'灯带', sensor:'传感器'}[d.type] || d.type;
+        box.innerHTML = `<div class="device-head"><strong>${typeLabel}</strong><button class="btn btn-outline-danger btn-sm" type="button" data-i="${i}">删除</button></div>`;
+        box.querySelector('button').onclick = () => { state.devices.splice(i,1); renderDevices(); renderMijiaList(); scheduleSave(); };
+        if (d.type === 'action') {
+          box.innerHTML += `
+            <label>显示名称</label><input data-k="name" data-i="${i}" value="${d.name||''}" />
+            <div class="row"><div><label>图标</label><select data-k="icon" data-i="${i}">${icons.map(x=>`<option ${d.icon===x?'selected':''}>${x}</option>`).join('')}</select></div>
+            <div><label>程序 id</label><input data-k="id" data-i="${i}" value="${d.id||''}" /></div></div>
+            <label>本机程序路径 (.exe)</label><input data-k="program" data-i="${i}" value="${(d.run&&d.run.program)||d.program||''}" />`;
+        } else if (d.type === 'ws2812') {
+          box.innerHTML += `
+            <div class="row"><div><label>显示名称</label><input data-k="name" data-i="${i}" value="${d.name||''}" /></div>
+            <div><label>id</label><input data-k="id" data-i="${i}" value="${d.id||''}" /></div></div>
+            <label>灯带地址</label><input data-k="base_url" data-i="${i}" value="${d.base_url||''}" />`;
+        } else {
+          const props = Array.isArray(d.props) ? d.props : [];
+          const propHtml = props.length
+            ? `<div class="proplist">${props.map((p, pi) => `<label class="prop"><input type="checkbox" checked data-prop="${i}" data-pi="${pi}" /> ${esc(p.name||p.id)} <code>${esc(p.prop)}</code>${p.write===false?'（只读）':''}</label>`).join('')}</div>`
+            : `<p class="hint">保存后会按类型带上默认属性。点「加载属性」可从米家勾选。</p>`;
+          box.innerHTML += `
+            <div class="row"><div><label>显示名称</label><input data-k="name" data-i="${i}" value="${d.name||''}" /></div>
+            <div><label>id</label><input data-k="id" data-i="${i}" value="${d.id||''}" /></div></div>
+            <label>米家设备名</label><select data-k="mijia_name" data-i="${i}">${mijiaOptions(d.mijia_name||'')}</select>
+            <div class="actions" style="margin-top:8px"><button class="btn btn-outline-secondary btn-sm" type="button" data-load="${i}">加载属性</button></div>
+            ${propHtml}`;
+        }
+        root.appendChild(box);
+      });
+      root.querySelectorAll('button[data-i]').forEach(btn => {
+        btn.onclick = () => {
+          state.devices.splice(+btn.dataset.i, 1);
+          renderDevices();
+          renderMijiaList();
+          scheduleSave();
+        };
+      });
+      root.querySelectorAll('button[data-load]').forEach(btn => {
+        btn.onclick = () => loadProps(+btn.dataset.load);
+      });
+      root.querySelectorAll('input,select').forEach(el => {
+        el.oninput = el.onchange = () => {
+          if (el.dataset.prop != null) {
+            const i = +el.dataset.prop, pi = +el.dataset.pi;
+            if (!el.checked) state.devices[i].props.splice(pi, 1);
+            renderDevices();
+            scheduleSave();
+            return;
+          }
+          const i = +el.dataset.i, k = el.dataset.k;
+          if (!k || Number.isNaN(i)) return;
+          const d = state.devices[i];
+          if (k === 'program') {
+            d.run = d.run || {}; d.run.program = el.value; d.run.args = d.run.args || []; d.run.wait = false;
+          } else { d[k] = el.value; if (k==='name' && !d.id) d.id = slug(el.value); }
+          scheduleSave();
+        };
+      });
+    }
+    function guessType(name) {
+      const n = name || '';
+      if (/温湿|湿度|温度/.test(n)) return 'sensor';
+      if (/灯/.test(n) && !/开关/.test(n)) return 'light';
+      return 'switch';
+    }
+    function toggleHome(name) {
+      const idx = state.devices.findIndex(x => x.mijia_name === name);
+      if (idx >= 0) state.devices.splice(idx, 1);
+      else {
+        const type = guessType(name);
+        state.devices.push({
+          id: slug(name),
+          name,
+          type,
+          mijia_name: name,
+          ...(type === 'sensor' ? {} : { on_prop: 'on' }),
+        });
+      }
+      renderDevices();
+      renderMijiaList();
+      scheduleSave();
+    }
+    async function loadProps(i) {
+      const d = state.devices[i];
+      if (!d || !d.mijia_name) { toast('先选米家设备名', true); return; }
+      try {
+        const r = await fetch('/setup/api/mijia-props?name=' + encodeURIComponent(d.mijia_name));
+        const data = await r.json();
+        if (!r.ok || data.ok === false) throw new Error(data.message || '拉取属性失败');
+        d.props = (data.props || []).map(p => ({
+          id: slug(p.name),
+          prop: p.name,
+          name: p.description || p.name,
+          write: !!p.writable,
+        }));
+        if (d.type !== 'sensor' && d.props.some(p => /temp|humid|湿度|温度/.test(p.prop))) {
+          /* keep type */
+        }
+        renderDevices();
+        scheduleSave();
+        toast(`已加载 ${d.props.length} 个属性，去掉勾选即可不上主屏`);
+      } catch (err) {
+        toast(err.message || '拉取属性失败', true);
+      }
+    }
+    function addDevice(type) {
+      const row = type==='action'
+        ? {id:'app', name:'程序', type, icon:'computer', run:{program:'', args:[], wait:false}}
+        : type==='sensor'
+          ? {id:'sensor', name:'传感器', type, mijia_name:''}
+          : {id:'dev', name:'设备', type, mijia_name:'', on_prop:'on'};
+      state.devices.push(row);
+      renderDevices();
+      scheduleSave();
+    }
+    function updateAndroidGuide() {
+      const ip = document.getElementById('lanIp').value || '192.168.x.x';
+      const port = document.getElementById('port').value || '17890';
+      const hubName = document.getElementById('name').value.trim() || 'study';
+      const put = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+      put('guideIp', ip);
+      put('guideIp2', ip);
+      put('guidePort', port);
+      put('guidePort2', port);
+      put('guidePort3', port);
+      put('guideName', hubName);
+    }
+    function fillForm(data) {
+      loading = true;
+      document.getElementById('lanIp').value = (data.lan_ips && data.lan_ips[0]) || '127.0.0.1';
+      document.getElementById('port').value = data.config.port || 17890;
+      document.getElementById('token').value = data.config.token || '';
+      document.getElementById('name').value = data.config.name || 'study';
+      document.getElementById('pcEnabled').checked = !!(data.config.pc && data.config.pc.enabled !== false);
+      const t = data.config.temperature;
+      document.getElementById('tempName').value = t ? t.name : '';
+      document.getElementById('tempMijia').innerHTML = '<option value="">不显示温度</option>' +
+        state.mijia_devices.map(d=>`<option value="${(d.name||'').replace(/"/g,'&quot;')}" ${t&&t.mijia_name===d.name?'selected':''}>${d.name||''}</option>`).join('');
+      state.devices = JSON.parse(JSON.stringify(data.config.devices || []));
+      renderDevices();
+      updateAndroidGuide();
+      renderMijiaList();
+      const badge = document.getElementById('mijiaBadge');
+      if (data.mijia === 'ok') { badge.textContent = '已登录'; badge.className = 'pill ok'; }
+      else { badge.textContent = data.mijia_message || '未登录'; badge.className = 'pill warn'; }
+      fillLlm(data);
+      loading = false;
+      updateMijiaQr(data.mijia_login);
+    }
+    function stopMijiaPoll() {
+      if (mijiaPollTimer) { clearInterval(mijiaPollTimer); mijiaPollTimer = null; }
+    }
+    function updateMijiaQr(login) {
+      const box = document.getElementById('mijiaQrBox');
+      const img = document.getElementById('mijiaQrImg');
+      const hint = document.getElementById('mijiaQrHint');
+      if (!login || login.phase === 'idle' || login.phase === 'done') {
+        box.style.display = 'none';
+        return;
+      }
+      box.style.display = 'flex';
+      if (login.qr_url) img.src = login.qr_url;
+      else img.removeAttribute('src');
+      hint.textContent = login.message || '请用米家 App 扫码';
+    }
+    async function pollMijiaLoginOnce() {
+      const r = await fetch('/setup/api/mijia-login/status');
+      const login = await r.json();
+      updateMijiaQr(login);
+      if (login.phase === 'done') {
+        stopMijiaPoll();
+        await refresh(true);
+        toast('米家登录成功');
+        return true;
+      }
+      if (login.phase === 'error') {
+        stopMijiaPoll();
+        toast(login.message || '登录失败', true);
+        return true;
+      }
+      return false;
+    }
+    function startMijiaPoll() {
+      if (mijiaPollTimer) return;
+      mijiaPollTimer = setInterval(async () => { await pollMijiaLoginOnce(); }, 2000);
+    }
+    async function refresh(showToast=false) {
+      loading = true;
+      setSaveStatus('同步中…', 'pending');
+      const r = await fetch('/setup/api/state', { credentials: 'include' });
+      const data = await r.json();
+      if (!r.ok) {
+        loading = false;
+        setSaveStatus('加载失败', 'err');
+        toast(data.message || '加载失败', true);
+        return;
+      }
+      state.mijia_devices = data.mijia_devices || [];
+      state.mijia_devices_error = data.mijia_devices_error || '';
+      state.mijia_status = data.mijia;
+      fillForm(data);
+      setSaveStatus('已同步', 'ok');
+      if (data.mijia_login && (data.mijia_login.phase === 'qr' || data.mijia_login.phase === 'starting')) {
+        updateMijiaQr(data.mijia_login);
+        startMijiaPoll();
+      }
+      if (showToast && state.mijia_devices.length) toast(`已加载 ${state.mijia_devices.length} 个米家设备`);
+    }
+    function newToken() {
+      const bytes = crypto.getRandomValues(new Uint8Array(24));
+      document.getElementById('token').value = btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+      scheduleSave();
+    }
+    initLlmPresets();
+    ['port','name','token','tempName','pcEnabled','llmBaseUrl','llmModel'].forEach(id => {
+      const el = document.getElementById(id);
+      el.addEventListener('input', () => { if (id === 'port' || id === 'name') updateAndroidGuide(); scheduleSave(); });
+      el.addEventListener('change', () => { if (id === 'port' || id === 'name') updateAndroidGuide(); scheduleSave(); });
+    });
+    document.getElementById('tempMijia').addEventListener('change', scheduleSave);
+    async function relogin() {
+      stopMijiaPoll();
+      updateMijiaQr({ phase: 'starting', message: '正在获取二维码…' });
+      const r = await fetch('/setup/api/mijia-login/start', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
+      const login = await r.json();
+      updateMijiaQr(login);
+      startMijiaPoll();
+    }
+    document.addEventListener("shore-show", (ev) => {
+      if (ev.detail === "setup") refresh(false);
+    });
+    if (location.pathname === "/setup") refresh(false);
+  
+  </script>
+</body>
+</html>

@@ -12,7 +12,7 @@ from dock_hub import DEFAULT_PORT
 from dock_hub.errors import HubError
 
 ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-DEVICE_TYPES = {"switch", "light", "action"}
+DEVICE_TYPES = {"switch", "light", "action", "ws2812", "sensor"}
 
 
 @dataclass
@@ -47,6 +47,18 @@ class MiniLinkConfig:
 
 
 @dataclass
+class PropConfig:
+    id: str
+    prop: str
+    name: str | None = None
+    role: str = "auto"
+    write: bool = True
+    unit: str | None = None
+    min: float | None = None
+    max: float | None = None
+
+
+@dataclass
 class DeviceConfig:
     id: str
     name: str
@@ -61,29 +73,53 @@ class DeviceConfig:
     wait: bool = False
     timeout_sec: float = 8.0
     process: list[str] = field(default_factory=list)
+    base_url: str | None = None
+    on_brightness: int = 48
+    follow_pc: bool = False
+    props: list[PropConfig] = field(default_factory=list)
 
     @property
     def is_action(self) -> bool:
         return self.type == "action"
 
     @property
+    def is_sensor(self) -> bool:
+        return self.type == "sensor"
+
+    @property
     def is_mijia(self) -> bool:
-        return self.type in {"switch", "light"}
+        return self.type in {"switch", "light", "sensor"}
 
+    @property
+    def is_ws2812(self) -> bool:
+        return self.type == "ws2812"
 
-@dataclass
-class TethysConfig:
-    enabled: bool = False
-    base_url: str = "http://127.0.0.1:8642/v1"
-    model: str = "hermes-agent"
-    api_key: str | None = None
-    timeout_sec: float = 120.0
-    polish: bool = True
-    speak: bool = True
-    ack: str | None = "好。"
-    weixin_notify: bool = True
-    session_key: str = "tethys:wanderer"
-    notify_url: str | None = None
+    def effective_props(self) -> list[PropConfig]:
+        if self.props:
+            return list(self.props)
+        if self.is_sensor:
+            return [
+                PropConfig(id="celsius", prop="temperature", name="温度", write=False, unit="°C"),
+                PropConfig(id="humidity", prop="humidity", name="湿度", write=False, unit="%"),
+            ]
+        if self.type == "light":
+            items = [PropConfig(id="on", prop=self.on_prop, name="开关", role="toggle")]
+            if self.brightness_prop:
+                items.append(
+                    PropConfig(
+                        id="brightness",
+                        prop=self.brightness_prop,
+                        name="亮度",
+                        role="number",
+                        min=1,
+                        max=100,
+                        unit="%",
+                    )
+                )
+            return items
+        if self.type == "switch":
+            return [PropConfig(id="on", prop=self.on_prop, name="开关", role="toggle")]
+        return []
 
 
 @dataclass
@@ -99,7 +135,22 @@ class CompanionConfig:
     tts_timeout_sec: float = 20.0
     tts_deliver: bool = False
     persona: str | None = None
-    tethys: TethysConfig | None = None
+    voice_volume: int | None = None
+    voice_speed: float = 1.0
+
+
+DEFAULT_PROBE_PORT = 17892
+DEFAULT_PROBE_LISTEN = "0.0.0.0:17892"
+DEFAULT_PROBE_HUB_URL = "http://10.83.22.121:17890"
+
+
+@dataclass
+class ProbeConfig:
+    url: str = ""
+    token: str = ""
+    stale_ms: int = 4000
+    hub_url: str = DEFAULT_PROBE_HUB_URL
+    listen: str = DEFAULT_PROBE_LISTEN
 
 
 @dataclass
@@ -114,6 +165,7 @@ class HubConfig:
     devices: list[DeviceConfig] = field(default_factory=list)
     companion: CompanionConfig | None = None
     mini: MiniLinkConfig | None = None
+    probe: ProbeConfig = field(default_factory=ProbeConfig)
     path: Path | None = None
 
     def device(self, device_id: str) -> DeviceConfig:
@@ -193,6 +245,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     media = _parse_media(raw.get("media"))
     companion = _parse_companion(raw.get("companion"))
     mini = _parse_mini(raw.get("mini"))
+    probe = _parse_probe(raw.get("probe"))
 
     devices: list[DeviceConfig] = []
     seen: set[str] = set()
@@ -214,6 +267,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         devices=devices,
         companion=companion,
         mini=mini,
+        probe=probe,
         path=path,
     )
 
@@ -268,10 +322,45 @@ def _parse_device(raw: dict[str, Any]) -> DeviceConfig:
             process=process,
         )
 
+    if dtype == "ws2812":
+        base_url = str(raw.get("base_url") or raw.get("url") or "").strip().rstrip("/")
+        if not base_url:
+            raise ValueError(f"ws2812 {ident} 需要 base_url")
+        on_brightness = int(raw.get("on_brightness") if raw.get("on_brightness") is not None else 48)
+        if not 1 <= on_brightness <= 255:
+            raise ValueError(f"ws2812 {ident} 的 on_brightness 必须是 1–255")
+        follow_pc = True if raw.get("follow_pc") is None else bool(raw.get("follow_pc"))
+        timeout_sec = float(raw.get("timeout_sec") or 2.0)
+        return DeviceConfig(
+            id=ident,
+            name=name,
+            type=dtype,
+            icon=icon,
+            base_url=base_url,
+            on_brightness=on_brightness,
+            follow_pc=follow_pc,
+            timeout_sec=timeout_sec,
+        )
+
     if not mijia_name:
         raise ValueError(f"{dtype} {ident} 需要 mijia_name")
     if dtype == "switch" and brightness:
         raise ValueError(f"switch {ident} 不能配置 brightness_prop")
+    props = _parse_props(raw.get("props"))
+    if dtype == "sensor":
+        if not props:
+            props = [
+                PropConfig(id="celsius", prop="temperature", name="温度", write=False, unit="°C"),
+                PropConfig(id="humidity", prop="humidity", name="湿度", write=False, unit="%"),
+            ]
+        return DeviceConfig(
+            id=ident,
+            name=name,
+            type=dtype,
+            mijia_name=mijia_name,
+            icon=icon,
+            props=props,
+        )
     return DeviceConfig(
         id=ident,
         name=name,
@@ -280,6 +369,22 @@ def _parse_device(raw: dict[str, Any]) -> DeviceConfig:
         on_prop=_prop_name(raw.get("on_prop"), default="on"),
         brightness_prop=brightness,
         icon=icon,
+        props=props,
+    )
+
+
+def _parse_probe(raw: Any) -> ProbeConfig:
+    if raw is None or raw is False:
+        return ProbeConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("probe 必须是对象")
+    stale = int(raw.get("stale_ms") or 4000)
+    return ProbeConfig(
+        url=str(raw.get("url") or "").strip(),
+        token=str(raw.get("token") or "").strip(),
+        stale_ms=max(200, stale),
+        hub_url=str(raw.get("hub_url") or DEFAULT_PROBE_HUB_URL).strip() or DEFAULT_PROBE_HUB_URL,
+        listen=str(raw.get("listen") or DEFAULT_PROBE_LISTEN).strip() or DEFAULT_PROBE_LISTEN,
     )
 
 
@@ -345,29 +450,12 @@ def _parse_companion(raw: Any) -> CompanionConfig | None:
     persona = str(raw["persona"]).strip() if raw.get("persona") else None
     tts_url = str(tts.get("base_url") or "").strip() or None
     api_key = str(llm.get("api_key") or "").strip() or None
-    tethys_raw = raw.get("tethys") if isinstance(raw.get("tethys"), dict) else None
-    tethys: TethysConfig | None = None
-    if tethys_raw is not None:
-        tethys_enabled = tethys_raw.get("enabled", True)
-        if tethys_enabled is not False:
-            ack_raw = tethys_raw.get("ack", "好。")
-            ack = None if ack_raw is False or ack_raw is None else str(ack_raw).strip() or None
-            tethys_key = str(tethys_raw.get("api_key") or "").strip() or None
-            session_key = str(tethys_raw.get("session_key") or "tethys:wanderer").strip() or "tethys:wanderer"
-            notify_url = str(tethys_raw.get("notify_url") or "").strip() or None
-            tethys = TethysConfig(
-                enabled=True,
-                base_url=str(tethys_raw.get("base_url") or "http://127.0.0.1:8642/v1").strip(),
-                model=str(tethys_raw.get("model") or "hermes-agent").strip(),
-                api_key=tethys_key,
-                timeout_sec=float(tethys_raw.get("timeout_sec") or 120),
-                polish=bool(tethys_raw.get("polish", True)),
-                speak=bool(tethys_raw.get("speak", True)),
-                ack=ack,
-                weixin_notify=bool(tethys_raw.get("weixin_notify", True)),
-                session_key=session_key,
-                notify_url=notify_url,
-            )
+    voice = raw.get("voice") if isinstance(raw.get("voice"), dict) else {}
+    voice_volume = voice.get("volume")
+    if voice_volume is not None:
+        voice_volume = max(0, min(100, int(voice_volume)))
+    voice_speed = float(voice.get("speed") or 1.0)
+    voice_speed = max(0.7, min(1.5, voice_speed))
     return CompanionConfig(
         enabled=True,
         llm_base_url=str(llm.get("base_url") or "http://127.0.0.1:11434").strip(),
@@ -380,7 +468,8 @@ def _parse_companion(raw: Any) -> CompanionConfig | None:
         tts_timeout_sec=float(tts.get("timeout_sec") or 20),
         tts_deliver=bool(tts.get("deliver", False)),
         persona=persona or None,
-        tethys=tethys,
+        voice_volume=voice_volume,
+        voice_speed=voice_speed,
     )
 
 
@@ -423,6 +512,45 @@ def _parse_process(raw: dict[str, Any]) -> list[str]:
     return [str(item).strip() for item in items if str(item).strip()]
 
 
+def _parse_props(raw: Any) -> list[PropConfig]:
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("props 必须是列表")
+    items: list[PropConfig] = []
+    seen: set[str] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            raise ValueError("props[] 必须是对象")
+        ident = str(row.get("id") or row.get("prop") or "").strip()
+        prop = str(row.get("prop") or row.get("id") or "").strip()
+        if not ident or not prop:
+            raise ValueError("props[] 需要 id 和 prop")
+        _check_id(ident)
+        if ident in seen:
+            raise ValueError(f"重复的属性 id：{ident}")
+        seen.add(ident)
+        write = True if row.get("write") is None else bool(row.get("write"))
+        role = str(row.get("role") or "auto").strip() or "auto"
+        unit = str(row["unit"]).strip() if row.get("unit") else None
+        name = str(row["name"]).strip() if row.get("name") else None
+        min_v = float(row["min"]) if row.get("min") is not None else None
+        max_v = float(row["max"]) if row.get("max") is not None else None
+        items.append(
+            PropConfig(
+                id=ident,
+                prop=prop,
+                name=name,
+                role=role,
+                write=write,
+                unit=unit,
+                min=min_v,
+                max=max_v,
+            )
+        )
+    return items
+
+
 def _prop_name(value: Any, default: str) -> str:
     if value is True:
         return "on"
@@ -456,11 +584,37 @@ def device_to_raw(device: DeviceConfig) -> dict[str, Any]:
             run["process"] = list(device.process)
         raw["run"] = run
         return raw
+    if device.is_ws2812:
+        raw["base_url"] = device.base_url
+        raw["on_brightness"] = device.on_brightness
+        raw["follow_pc"] = device.follow_pc
+        if device.timeout_sec != 2.0:
+            raw["timeout_sec"] = device.timeout_sec
+        return raw
     raw["mijia_name"] = device.mijia_name
-    if device.on_prop != "on":
+    if device.on_prop != "on" and not device.is_sensor:
         raw["on_prop"] = device.on_prop
     if device.brightness_prop:
         raw["brightness_prop"] = device.brightness_prop
+    if device.props:
+        raw["props"] = [prop_to_raw(item) for item in device.props]
+    return raw
+
+
+def prop_to_raw(item: PropConfig) -> dict[str, Any]:
+    raw: dict[str, Any] = {"id": item.id, "prop": item.prop}
+    if item.name:
+        raw["name"] = item.name
+    if item.role != "auto":
+        raw["role"] = item.role
+    if not item.write:
+        raw["write"] = False
+    if item.unit:
+        raw["unit"] = item.unit
+    if item.min is not None:
+        raw["min"] = item.min
+    if item.max is not None:
+        raw["max"] = item.max
     return raw
 
 
@@ -519,28 +673,13 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
                 companion["tts"] = tts
             if config.companion.persona:
                 companion["persona"] = config.companion.persona
-            if config.companion.tethys and config.companion.tethys.enabled:
-                tethys: dict[str, Any] = {
-                    "enabled": True,
-                    "base_url": config.companion.tethys.base_url,
-                    "model": config.companion.tethys.model,
-                    "timeout_sec": config.companion.tethys.timeout_sec,
-                    "polish": config.companion.tethys.polish,
-                    "speak": config.companion.tethys.speak,
-                }
-                if config.companion.tethys.api_key:
-                    tethys["api_key"] = config.companion.tethys.api_key
-                if config.companion.tethys.ack is None:
-                    tethys["ack"] = False
-                elif config.companion.tethys.ack != "好。":
-                    tethys["ack"] = config.companion.tethys.ack
-                if not config.companion.tethys.weixin_notify:
-                    tethys["weixin_notify"] = False
-                if config.companion.tethys.session_key != "tethys:wanderer":
-                    tethys["session_key"] = config.companion.tethys.session_key
-                if config.companion.tethys.notify_url:
-                    tethys["notify_url"] = config.companion.tethys.notify_url
-                companion["tethys"] = tethys
+            voice: dict[str, Any] = {}
+            if config.companion.voice_volume is not None:
+                voice["volume"] = int(config.companion.voice_volume)
+            if abs(float(config.companion.voice_speed) - 1.0) > 0.001:
+                voice["speed"] = round(float(config.companion.voice_speed), 2)
+            if voice:
+                companion["voice"] = voice
         raw["companion"] = companion
     if config.mini is not None:
         mini: dict[str, Any] = {"enabled": config.mini.enabled}
@@ -552,6 +691,21 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             if config.mini.mijia_ms != 15000:
                 mini["mijia_ms"] = config.mini.mijia_ms
         raw["mini"] = mini
+    probe = config.probe
+    if probe.url or probe.token or probe.stale_ms != 4000 or probe.hub_url != DEFAULT_PROBE_HUB_URL or probe.listen != DEFAULT_PROBE_LISTEN:
+        dumped: dict[str, Any] = {}
+        if probe.url:
+            dumped["url"] = probe.url
+        if probe.token:
+            dumped["token"] = probe.token
+        if probe.stale_ms != 4000:
+            dumped["stale_ms"] = probe.stale_ms
+        if probe.hub_url != DEFAULT_PROBE_HUB_URL:
+            dumped["hub_url"] = probe.hub_url
+        if probe.listen != DEFAULT_PROBE_LISTEN:
+            dumped["listen"] = probe.listen
+        if dumped:
+            raw["probe"] = dumped
     return raw
 
 

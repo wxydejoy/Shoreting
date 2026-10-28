@@ -93,9 +93,17 @@ def _clip(value: str | None) -> str:
     return text[: MAX_TEXT - 1] + "…"
 
 
-def chats_page_html() -> bytes:
+def asset_page_html(name: str) -> bytes:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        bundled = Path(sys._MEIPASS) / "chats.html"  # type: ignore[attr-defined]
+        bundled = Path(sys._MEIPASS) / name  # type: ignore[attr-defined]
         if bundled.is_file():
             return bundled.read_bytes()
-    return (Path(__file__).resolve().parent / "assets" / "chats.html").read_bytes()
+    return (Path(__file__).resolve().parent / "assets" / name).read_bytes()
+
+
+def chats_page_html() -> bytes:
+    return asset_page_html("app.html")
+
+
+def read_page_html() -> bytes:
+    return asset_page_html("app.html")
