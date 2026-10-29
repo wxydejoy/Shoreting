@@ -75,8 +75,10 @@ def post_telemetry(config: MiniLinkConfig, windows: dict[str, Any]) -> dict[str,
     if config.token:
         headers["Authorization"] = f"Bearer {config.token}"
     req = urllib.request.Request(url, data=raw, method="POST", headers=headers)
+    # 0.4s 太紧：Windows 解析 *.local（mDNS）经常要数秒，超时后 Hub 认为 PC 离线，
+    # 安卓 CPU 就会一会有一会没有。
     try:
-        with urllib.request.urlopen(req, timeout=0.4) as resp:
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except (TimeoutError, urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
         return None

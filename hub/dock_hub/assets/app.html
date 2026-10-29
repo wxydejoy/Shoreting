@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>守岸人</title>
   <link rel="stylesheet" href="/assets/litera.min.css" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" />
   <link rel="stylesheet" href="/assets/shell.css" />
   <script>
     document.documentElement.dataset.view = location.pathname.indexOf("/chats") === 0 ? "chats" : location.pathname.indexOf("/setup") === 0 ? "setup" : "read";
@@ -14,14 +14,15 @@
 <body>
   <aside class="side" id="side">
     <a class="brand" href="/read">守岸人</a>
-    <div class="side-label">应用</div>
-    <a data-nav="read" href="/read">朗读</a>
-    <a data-nav="chats" href="/chats">对话</a>
-    <a data-nav="setup" href="/setup">配置</a>
+    <div id="rareSide"></div>
+    <a class="hide" data-nav="read" href="/read">朗读</a>
+    <a class="hide" data-nav="chats" href="/chats">对话</a>
+    <a class="hide" data-nav="setup" href="/setup">配置</a>
   </aside>
   <div class="shell">
     <header class="topbar">
       <button class="btn btn-outline-secondary btn-sm phone-only" id="menuToggle" type="button">菜单</button>
+      <div id="rareGooey"></div>
       <span class="page-title" id="pageTitle">朗读</span>
       <button class="btn btn-outline-danger btn-sm" id="stop" type="button">停止</button>
     </header>
@@ -36,13 +37,16 @@
             <span id="progressLabel"></span>
           </div>
           <div id="chapterBody" class="reader">把 txt 放进书架，或从下面导入。也可以把文件拖到这里。</div>
+          <div id="rareScroll" class="rare-scroll"></div>
+          <div id="rareVoice"></div>
           <div class="bar controls" style="margin-top:12px">
-            <button class="btn btn-primary" id="storyPlay" type="button">播放</button>
-            <button class="btn btn-outline-secondary btn-sm" id="storyPause" type="button">暂停</button>
+            <button class="btn btn-primary rare-clip" id="storyPlay" type="button">播放</button>
+            <button class="btn btn-outline-secondary btn-sm rare-clip" id="storyPause" type="button">暂停</button>
             <button class="btn btn-outline-secondary btn-sm" id="prevChapter" type="button">上一章</button>
             <button class="btn btn-outline-secondary btn-sm" id="nextChapter" type="button">下一章</button>
             <button class="btn btn-outline-secondary btn-sm phone-only" id="tocToggle" type="button">目录</button>
-            <select id="timer" aria-label="定时">
+            <div id="rareTimer"></div>
+            <select class="rare-clip" id="timer" aria-label="定时">
               <option value="0">关</option>
               <option value="15">15 分钟</option>
               <option value="30">30 分钟</option>
@@ -94,6 +98,7 @@
           </div>
           <input id="tocQuery" type="search" enterkeyhint="go" placeholder="章名或序号，回车跳转" autocomplete="off" />
           <p id="splitNote" class="hint"></p>
+          <div id="rareToc"></div>
           <div id="toc" class="toc"><p class="empty">还没有目录。</p></div>
         </div>
         <div id="jobPane" class="hide">
@@ -340,7 +345,7 @@
         <h2 class="h4">局域网使用</h2>
         <p class="text-secondary">填手机设置里同一枚 Hub Token。本机打开不用填。</p>
         <div class="bar">
-          <input class="form-control" id="gateToken" type="password" placeholder="Token" autocomplete="off" />
+          <div id="rareGate"></div>
           <button class="btn btn-primary" id="login" type="button">进入</button>
         </div>
         <p id="gateErr" class="err"></p>
@@ -937,15 +942,24 @@
       if (tocEl.scrollTop !== keep) tocEl.scrollTop = keep;
       tocRendering = false;
     }
+    function placeToc(index, tries) {
+      if (tocFilter || tocActive !== index) return;
+      const pos = ((shelfBook && shelfBook.chapters) || []).findIndex((ch) => ch.index === index);
+      if (pos < 0) return;
+      const view = tocEl.clientHeight;
+      if (!view) {
+        if ((tries || 0) > 8) return;
+        requestAnimationFrame(() => placeToc(index, (tries || 0) + 1));
+        return;
+      }
+      tocEl.scrollTop = Math.max(0, pos * TOC_ROW - (view - TOC_ROW) / 2);
+      renderTocWindow();
+    }
     function setTocActive(index) {
       const changed = index !== tocActive;
       tocActive = index;
-      if (changed && !tocFilter) {
-        const pos = ((shelfBook && shelfBook.chapters) || []).findIndex((ch) => ch.index === index);
-        if (pos >= 0) tocEl.scrollTop = Math.max(0, pos * TOC_ROW - (tocEl.clientHeight || 320) / 2 + TOC_ROW);
-      }
       renderTocWindow();
-      if (!tocEl.clientHeight) requestAnimationFrame(renderTocWindow);
+      if (changed) placeToc(index);
     }
     async function loadChapter(index, highlightStart, sentence) {
       if (!shelfBook) return;
@@ -963,6 +977,7 @@
         return;
       }
       shelfBook = body;
+      document.dispatchEvent(new Event("shore-shelf"));
       lastPaint = { index: -1, rel: -1, sentence: "" };
       bookTitle.textContent = body.title || id;
       const ch = chapterOf(body.bookmark || 0);
@@ -1019,7 +1034,11 @@
       try {
       noteStory(prev, story);
       if (!story) return;
-      if (story.timer_min != null) timerEl.value = String(story.timer_min);
+      if (story.timer_min != null) {
+        timerEl.value = String(story.timer_min);
+        timerEl.dispatchEvent(new Event("shore-timer"));
+      }
+      document.dispatchEvent(new Event("shore-story"));
       paintTimer(story);
       if (story.stopped_by === "timer") storyStatus.textContent = "到时间了，已停下。";
       else if (story.stopped_by === "end") storyStatus.textContent = "已读完。";
@@ -1063,6 +1082,15 @@
         return;
       }
       await applyStory(body);
+    }
+    function shoreChapters() {
+      return (shelfBook && shelfBook.chapters) || [];
+    }
+    function shoreActiveChapter() {
+      return tocActive;
+    }
+    function shoreStory() {
+      return storyState;
     }
     async function jumpChapter(start, index) {
       const id = shelfBook && shelfBook.id;
@@ -1344,6 +1372,7 @@
       const listed = await api("/v1/companion/books");
       if (!listed.gated && listed.resp.ok && listed.body.timer_min != null) {
         timerEl.value = String(listed.body.timer_min);
+        timerEl.dispatchEvent(new Event("shore-timer"));
         if (listed.body.current_id) await openShelfBook(listed.body.current_id);
       }
       const ok = await refreshJobs();
@@ -1840,5 +1869,7 @@
     if (location.pathname === "/setup") refresh(false);
   
   </script>
+  <link rel="stylesheet" href="/assets/rare.css" />
+  <script src="/assets/rare.js"></script>
 </body>
 </html>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>cn.weiekko.tethys-notify</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/weiekko/dock/companion/tethys</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/weiekko/dock/companion/tethys/.venv/bin/python</string>
+    <string>/Users/weiekko/dock/companion/tethys/notify.py</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>LimitLoadToSessionType</key>
+  <array>
+    <string>Aqua</string>
+    <string>Background</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HERMES_HOME</key>
+    <string>/Users/weiekko/.hermes</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/weiekko/dock/companion/tethys/tethys-notify.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/weiekko/dock/companion/tethys/tethys-notify.log</string>
+</dict>
+</plist>

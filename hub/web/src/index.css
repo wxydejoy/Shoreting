@@ -1,0 +1,20 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-background: #000;
+  --color-foreground: #e8e8e8;
+  --color-muted-foreground: #a3a3a3;
+}
+
+#rareTimer button,
+#rareVoice button,
+#rareToc button,
+#rareGate button,
+#rareScroll button {
+  font: inherit;
+  color: inherit;
+}

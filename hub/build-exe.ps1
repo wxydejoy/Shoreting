@@ -13,5 +13,4 @@ if (-not (Test-Path $exe)) {
 }
 Write-Host ""
 Write-Host "OK: $exe"
-Write-Host "Right-click Run as administrator (CPU temp needs admin + PawnIO)."
-Write-Host "Tray: open setup wizard, quit."
+Write-Host "Tray: open Mini Hub setup (LAN), quit."

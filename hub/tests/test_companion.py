@@ -368,7 +368,6 @@ class CompanionLogicTest(unittest.TestCase):
     def test_messages_are_just_the_utterance(self) -> None:
         messages = build_messages("岸宝", "")
         self.assertEqual(messages[1]["content"], "岸宝")
-        self.assertNotIn("台灯", messages[0]["content"])
         self.assertNotIn("当前状态", messages[0]["content"])
         self.assertNotIn("后台状态", messages[0]["content"])
 

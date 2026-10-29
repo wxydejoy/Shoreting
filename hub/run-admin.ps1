@@ -24,7 +24,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 try {
     Write-Boot "elevated start from $here"
-    Get-NetTCPConnection -LocalPort 17890 -ErrorAction SilentlyContinue |
+    Get-NetTCPConnection -LocalPort 17892 -ErrorAction SilentlyContinue |
         ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
     Get-CimInstance Win32_Process |
         Where-Object {

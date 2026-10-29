@@ -7,6 +7,42 @@ import threading
 from pathlib import Path
 
 LOG_PATH = Path.home() / ".config" / "dock-hub" / "hub.log"
+_SHUTDOWN_HANDLERS: list[object] = []
+
+
+def _install_shutdown_hook(fn) -> None:
+    """Windows 关机/注销时尽量把灯带关掉。重复调用会被吞掉。"""
+    state = {"done": False}
+
+    def run() -> None:
+        if state["done"]:
+            return
+        state["done"] = True
+        try:
+            fn()
+        except Exception:
+            pass
+
+    import atexit
+
+    atexit.register(run)
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    HandlerRoutine = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+    def handler(ctrl_type: int) -> bool:
+        # 2=CLOSE 5=LOGOFF 6=SHUTDOWN
+        if ctrl_type in {2, 5, 6}:
+            run()
+            return True
+        return False
+
+    cb = HandlerRoutine(handler)
+    _SHUTDOWN_HANDLERS.append(cb)
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(cb, True)
 
 
 def _attach_background_log() -> None:
@@ -59,6 +95,16 @@ def _run(argv: list[str] | None) -> int:
         action="store_true",
         help="强制重新扫码登录米家后退出（会打开浏览器二维码）",
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="Windows 探针：上报 CPU 并远程开程序（不上米家）",
+    )
+    parser.add_argument(
+        "--hub",
+        action="store_true",
+        help="跑完整 Hub（米家）。打包后的 exe 默认是探针",
+    )
     args = parser.parse_args(argv)
 
     if args.init:
@@ -78,6 +124,11 @@ def _run(argv: list[str] | None) -> int:
     except Exception as exc:
         print(exc, file=sys.stderr)
         return 1
+
+    frozen = bool(getattr(sys, "frozen", False))
+    want_probe = args.probe or (frozen and not args.hub)
+    if want_probe:
+        return _run_probe(config, tray=sys.platform == "win32" and not args.no_tray)
 
     hub = DockHub(config)
     use_tray = sys.platform == "win32" and not args.no_tray
@@ -101,6 +152,47 @@ def _force_login() -> int:
         print(f"登录失败：{exc}", file=sys.stderr)
         return 1
     print("完成。可重新启动岸亭 Hub。", flush=True)
+    return 0
+
+
+def _run_probe(config, *, tray: bool) -> int:
+    from dock_hub.probe import serve_probe, start_probe
+    from dock_hub.setup_ui import SETUP_FLAG
+
+    if not tray:
+        return serve_probe(config)
+
+    from dock_hub.probe import _hide_windows_console
+    from dock_hub.tray import run_probe_tray
+
+    _hide_windows_console()
+
+    runtime = start_probe(config)
+    runtime.start_background()
+    local = f"http://127.0.0.1:{runtime.port}"
+    pages = {
+        "setup": f"{local}/v1/open-setup",
+        "setup_login": f"{local}/v1/open-setup",
+        "chats": f"{local}/v1/open-chats",
+        "read": f"{local}/v1/open-read",
+    }
+    if not SETUP_FLAG.is_file():
+        SETUP_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        SETUP_FLAG.write_text("1", encoding="utf-8")
+        import webbrowser
+
+        try:
+            webbrowser.open(pages["setup"])
+        except Exception as exc:
+            print(f"无法打开配置向导：{exc}", flush=True)
+            print(f"请手动打开 {pages['setup']}", flush=True)
+
+    def stop() -> None:
+        print("探针已停止", flush=True)
+        runtime.shutdown()
+
+    status = f"探针 :{runtime.port} · 托盘打开配置"
+    run_probe_tray(config, stop, status, pages=pages)
     return 0
 
 
@@ -133,12 +225,17 @@ def _run_with_tray(hub: DockHub, *, login_async: bool = False) -> int:
     def stop() -> None:
         print("Hub 已停止", flush=True)
         try:
+            hub.follow_pc(False)
+        except Exception:
+            pass
+        try:
             hub.pc.stop()
         except Exception:
             pass
         server.shutdown()
         server.server_close()
 
+    _install_shutdown_hook(lambda: hub.follow_pc(False))
     run_tray(hub, stop, status)
     return 0
 

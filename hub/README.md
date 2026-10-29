@@ -9,17 +9,25 @@ Python 服务：对内调 [mijia-api](https://github.com/Do1e/mijia-api)、收 W
 ```
 hub/
   dock_hub/           # 源码包
-    __main__.py       # CLI 入口（托盘 / 控制台）
-    tray.py           # 系统托盘
+    __main__.py       # CLI 入口（--hub 完整 Hub / --probe Windows 探针 / 托盘）
     server.py         # HTTP
     service.py        # snapshot / command
+    companion.py      # 守岸人：LLM 调度、口头技能
+    books.py          # 睡前朗读
+    probe.py          # 探针模式（CPU 上报 + 远程开程序）
     pc.py             # CPU / 内存 / GPU / CPU 温度
-    assets/           # 托盘与 exe 图标
+    ledstrip.py       # 书桌 WS2812 灯带（ESP32 HTTP）
+    mijia_bridge.py   # 米家设备
+    setup_ui.py       # 配置向导（/setup）
+    assets/           # 托盘与 exe 图标；rare.* 是 web/ 的构建产物
+  web/                # 向导 / 朗读 / 睡前朗读页面前端源码（vite → dock_hub/assets/rare.*）
   dock_hub_entry.py   # PyInstaller 入口
   dock-hub.spec       # PyInstaller 规格
   build-exe.ps1       # 打成 dist/DockHub.exe
   run-admin.ps1       # 管理员启动（优先 exe）
   run_hub.pyw         # 无控制台源码启动（旧路径兼容）
+  run-probe.bat / .vbs # Windows 计划任务静默拉起探针（pythonw，无黑窗）
+  install-launchd.sh  # Mini 上装 LaunchAgent（开机自启）
   hub.yaml.example
   tests/
 ```

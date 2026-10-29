@@ -35,6 +35,8 @@ class BoundDevice:
     model: str | None = None
     on_prop: PropRef | None = None
     brightness_prop: PropRef | None = None
+    extra_props: dict[str, PropRef] = field(default_factory=dict)
+    extra_values: dict[str, Any] = field(default_factory=dict)
     last_on: bool | None = None
     last_brightness: int | None = None
     missing: str | None = None
@@ -176,6 +178,24 @@ def _bind_device(cfg: DeviceConfig, listed: dict[str, dict[str, Any]]) -> BoundD
     except GetDeviceInfoError:
         return BoundDevice(cfg=cfg, missing=f"无法获取 {cfg.mijia_name} 的规格（{raw.get('model')}）")
     props = _alias_props(info.get("properties", []))
+    extra_props: dict[str, PropRef] = {}
+    missing_extra: list[str] = []
+    for item in cfg.effective_props():
+        found = _find_prop(props, item.prop)
+        if found is None:
+            missing_extra.append(item.prop)
+            continue
+        extra_props[item.id] = found
+    if cfg.is_sensor:
+        if not extra_props:
+            detail = "、".join(missing_extra) or "可读属性"
+            return BoundDevice(cfg=cfg, missing=f"{cfg.mijia_name} 没有属性 {detail}")
+        return BoundDevice(
+            cfg=cfg,
+            did=str(raw["did"]),
+            model=raw.get("model"),
+            extra_props=extra_props,
+        )
     on_prop = _find_prop(props, cfg.on_prop)
     if on_prop is None:
         return BoundDevice(cfg=cfg, missing=f"{cfg.mijia_name} 没有属性 {cfg.on_prop}")
@@ -190,6 +210,7 @@ def _bind_device(cfg: DeviceConfig, listed: dict[str, dict[str, Any]]) -> BoundD
         model=raw.get("model"),
         on_prop=on_prop,
         brightness_prop=brightness_prop,
+        extra_props=extra_props,
     )
 
 
@@ -240,6 +261,36 @@ def discover_switchable(
             )
         )
     return extras
+
+
+def list_device_props(api: Any, name: str) -> list[dict[str, Any]]:
+    listed = _device_index(api)
+    raw = listed.get(name)
+    if raw is None or not isinstance(raw.get("model"), str):
+        return []
+    try:
+        info = get_device_info(raw["model"], cache_path=_spec_cache())
+    except GetDeviceInfoError:
+        return []
+    items: list[dict[str, Any]] = []
+    for prop in info.get("properties") or []:
+        pname = str(prop.get("name") or "").strip()
+        if not pname:
+            continue
+        access = prop.get("access") or prop.get("rw") or []
+        if isinstance(access, str):
+            writable = "w" in access.lower()
+        else:
+            writable = any(str(flag).lower() in {"write", "w", "set"} for flag in access)
+        items.append(
+            {
+                "name": pname,
+                "type": str(prop.get("type") or ""),
+                "writable": writable,
+                "description": str(prop.get("description") or prop.get("desc") or ""),
+            }
+        )
+    return items
 
 
 def _voice_device_id(did: str, used: set[str]) -> str:
@@ -335,6 +386,8 @@ def query_params(session: MijiaSession) -> list[dict[str, Any]]:
             params.append(_param(bound.did, bound.on_prop))
         if bound.brightness_prop:
             params.append(_param(bound.did, bound.brightness_prop))
+        for prop in bound.extra_props.values():
+            params.append(_param(bound.did, prop))
     return params
 
 

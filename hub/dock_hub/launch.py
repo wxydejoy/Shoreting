@@ -31,6 +31,9 @@ def expand_path(path: str) -> str:
 
 
 def is_url(path: str) -> bool:
+    lower = path.strip().lower()
+    if lower.startswith(("http://", "https://", "steam://", "wegame://", "mailto:")):
+        return True
     return "://" in path and not Path(path).exists()
 
 
@@ -126,6 +129,9 @@ def launch(cfg: DeviceConfig) -> None:
         return
 
     command = [str(resolved), *extra]
+    if os.name == "nt" and not cfg.wait:
+        _startfile_exe(resolved, extra, workdir)
+        return
     _popen(command, workdir, console=False, wait=cfg.wait, timeout_sec=cfg.timeout_sec)
 
 
@@ -149,7 +155,25 @@ def _startfile(target: str, cwd: str | None) -> None:
     try:
         os.startfile(target, **kwargs)  # type: ignore[attr-defined]
     except OSError as exc:
-        raise HubError("action_error", f"无法启动：{exc}") from exc
+        raise HubError("action_error", _launch_os_error(exc)) from exc
+
+
+def _startfile_exe(resolved: Path, extra: list[str], cwd: str | None) -> None:
+    kwargs: dict = {}
+    if extra:
+        kwargs["arguments"] = subprocess.list2cmdline(extra)
+    if cwd:
+        kwargs["cwd"] = cwd
+    try:
+        os.startfile(str(resolved), **kwargs)  # type: ignore[attr-defined]
+    except OSError as exc:
+        raise HubError("action_error", _launch_os_error(exc)) from exc
+
+
+def _launch_os_error(exc: OSError) -> str:
+    if getattr(exc, "winerror", None) == 740:
+        return "需要管理员权限才能启动"
+    return f"无法启动：{exc}"
 
 
 def _popen(
@@ -179,7 +203,7 @@ def _popen(
     try:
         proc = subprocess.Popen(command, **kwargs)
     except OSError as exc:
-        raise HubError("action_error", f"无法启动：{exc}") from exc
+        raise HubError("action_error", _launch_os_error(exc)) from exc
     if not wait:
         return
     try:

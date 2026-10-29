@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>API_SERVER_ENABLED</key>
+		<string>true</string>
+		<key>API_SERVER_HOST</key>
+		<string>0.0.0.0</string>
+		<key>API_SERVER_KEY</key>
+		<string>Iy-zhSZm3cXaMK5o8RQu0v1sUpLNLHZQ</string>
+		<key>API_SERVER_PORT</key>
+		<string>8642</string>
+		<key>HERMES_HOME</key>
+		<string>/Users/weiekko/.hermes</string>
+		<key>PATH</key>
+		<string>/Users/weiekko/dock/companion/tethys/.venv/bin:/opt/homebrew/bin:/Users/weiekko/.cursor-server/bin/darwin-arm64/0c32194e3fb5ffaced9fb36430b860ec301e1fc0/node_modules/@vscode/ripgrep/bin:/Users/weiekko/.cursor-server/bin/darwin-arm64/0c32194e3fb5ffaced9fb36430b860ec301e1fc0/bin/remote-cli:/Users/weiekko/.local/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Applications/VMware Fusion.app/Contents/Public:/Users/weiekko/.cargo/bin</string>
+		<key>VIRTUAL_ENV</key>
+		<string>/Users/weiekko/dock/companion/tethys/.venv</string>
+	</dict>
+	<key>ExitTimeOut</key>
+	<integer>25</integer>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>ai.hermes.gateway</string>
+	<key>LimitLoadToSessionType</key>
+	<array>
+		<string>Aqua</string>
+		<string>Background</string>
+	</array>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/weiekko/dock/companion/tethys/.venv/bin/python</string>
+		<string>-m</string>
+		<string>hermes_cli.main</string>
+		<string>gateway</string>
+		<string>run</string>
+		<string>--replace</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/weiekko/.hermes/logs/gateway.error.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/weiekko/.hermes/logs/gateway.log</string>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/weiekko/.hermes</string>
+</dict>
+</plist>

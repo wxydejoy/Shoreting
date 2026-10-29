@@ -18,6 +18,8 @@ MAX_BODY = 64 * 1024
 _STATIC = {
     "litera.min.css": "text/css; charset=utf-8",
     "shell.css": "text/css; charset=utf-8",
+    "rare.css": "text/css; charset=utf-8",
+    "rare.js": "text/javascript; charset=utf-8",
 }
 
 

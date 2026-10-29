@@ -7,44 +7,47 @@ host: 0.0.0.0
 port: 17890
 token: "replace-with-a-long-random-string"
 
-# 电脑监控（只读）。整段删掉或 enabled: false → snapshot.pc = null
+# 电脑监控。Hub 在 Mini 上时不要本机采样，改走 Windows 探针上报
 pc:
-  enabled: true
-  sample_ms: 1000
-  cpu_temp: true
-  gpu: true
+  enabled: false
 
-# 系统媒体。整段删掉则默认开启；enabled: false → snapshot.media = null
+# Windows 探针（CPU 上报 + 远程开程序）。整段删掉则本机采样、本机开程序
+probe:
+  url: "http://10.83.22.31:17892"          # Mini Hub 转发启动到这里
+  stale_ms: 4000
+  hub_url: "http://10.83.22.121:17890"     # Windows --probe 往这里 POST /v1/telemetry
+  listen: "0.0.0.0:17892"
+
+# 系统媒体。Hub 在 Mini 上建议关掉；安卓用手机自己的媒体
 media:
-  enabled: true
+  enabled: false
 
 # 把 Windows / 米家状态报到 Mini 落盘。对话时 Hub 只读内存，不再现拉。
 # 整段删掉则用下面默认值；enabled: false 关闭上报
 mini:
   enabled: true
-  base_url: "http://10.83.22.121:17891"
+  base_url: "http://127.0.0.1:17891"
   token: helm-mini-weiekko
   pc_ms: 1000          # 电脑约 1 秒一次
   mijia_ms: 15000      # 米家约 15 秒一次
 
 # 桌面伴侣（本地 LLM + Mini TTS）。整段删掉或 enabled: false → snapshot.companion = null
-# Hub 在 Windows 时填 Mini 局域网 IP，不要填 127.0.0.1
+# Hub 在 Mini 上填 127.0.0.1
 # 默认 tts.deliver 为 false：Mini 本机出声；Hub 按句 cue，chat 仍等全文
-# 灯/温度由 Hub 定时上报 Mini；对话只读缓存，没问不要提
 # companion:
 #   enabled: true
 #   llm:
-#     base_url: "http://10.83.22.121:11434"
+#     base_url: "http://127.0.0.1:11434"
 #     model: qwen3.5:4b
 #     timeout_sec: 30
 #   tts:
-#     base_url: "http://10.83.22.121:18100"
+#     base_url: "http://127.0.0.1:18100"
 #     timeout_sec: 20
 #     # deliver: true   # 才把 wav 交给手机。默认 false：Mini 本机出声
 #   # 泰缇斯：Mini 上 Hermes API（复杂任务）。见 companion/tethys/README.md
 #   tethys:
 #     enabled: true
-#     base_url: "http://10.83.22.121:8642/v1"
+#     base_url: "http://127.0.0.1:8642/v1"
 #     model: hermes-agent
 #     api_key: "与 Hermes API_SERVER_KEY 相同"
 #     timeout_sec: 120
@@ -65,9 +68,18 @@ temperature:
 
 # 主屏控件，顺序 = 安卓显示顺序
 devices:
+  # 书桌 WS2812 灯带（ESP32 HTTP）。主屏当灯用；守岸人可口头开关。
+  # Windows 开机随 Hub 亮，关机/退出 Hub 时关掉。亮度按固件 0–255。
+  - id: desk-led
+    name: 灯带
+    type: ws2812
+    base_url: "http://192.168.14.33"
+    on_brightness: 48          # 没有上次亮度时用这个
+    follow_pc: true
+
   - id: lamp
     name: 台灯
-    type: light                 # light | switch | action
+    type: light                 # light | switch | action | ws2812
     mijia_name: 书桌台灯
     on_prop: "on"
     brightness_prop: brightness # 仅 light；没有就删掉，只显示开关
@@ -79,12 +91,20 @@ devices:
     on_prop: "on"
 
   # 口头「开空调」不必再写这条：登录米家后，账号里带开关的设备会自动进口头技能
-  # 主屏要显示时才加进 devices
+  # 主屏要显示时才加进 devices；设定温度用米家 target-temperature
   # - id: ac
   #   name: 空调
   #   type: switch
   #   mijia_name: 客厅空调
   #   on_prop: "on"
+  #   props:
+  #   - id: temp
+  #     prop: target-temperature
+  #     name: 设定温度
+  #     write: true
+  #     unit: °C
+  #     min: 16
+  #     max: 30
 
   # action：点 logo 在本机启动。program 只留在电脑上，不会发给手机
   - id: steam

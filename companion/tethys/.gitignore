@@ -1,0 +1,4 @@
+.venv/
+tethys.log
+tethys-notify.log
+*.env
