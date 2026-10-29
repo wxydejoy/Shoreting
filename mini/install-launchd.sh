@@ -28,6 +28,11 @@ cat > "$DEST" <<EOF
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>LimitLoadToSessionType</key>
+  <array>
+    <string>Aqua</string>
+    <string>Background</string>
+  </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HELM_MINI_TOKEN</key>
@@ -40,10 +45,17 @@ cat > "$DEST" <<EOF
 </dict>
 </plist>
 EOF
-launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || true
+UID_NUM="$(id -u)"
+launchctl bootout "gui/${UID_NUM}/${LABEL}" 2>/dev/null || true
+launchctl bootout "user/${UID_NUM}/${LABEL}" 2>/dev/null || true
 sleep 0.4
-launchctl bootstrap "gui/$(id -u)" "$DEST"
-launchctl enable "gui/$(id -u)/${LABEL}" 2>/dev/null || true
-launchctl kickstart -k "gui/$(id -u)/${LABEL}"
+if launchctl bootstrap "gui/${UID_NUM}" "$DEST" 2>/dev/null; then
+  DOMAIN="gui/${UID_NUM}"
+else
+  launchctl bootstrap "user/${UID_NUM}" "$DEST"
+  DOMAIN="user/${UID_NUM}"
+fi
+launchctl enable "${DOMAIN}/${LABEL}" 2>/dev/null || true
+launchctl kickstart -k "${DOMAIN}/${LABEL}"
 echo "已安装 LaunchAgent：$DEST"
 echo "日志：$ROOT/helm-mini.log"
