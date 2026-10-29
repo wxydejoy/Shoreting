@@ -2,11 +2,11 @@
 
 Hub 当客户端：POST /v1/speak、POST /v1/stop。安卓不直连本服务。
 
-默认：Qwen3-TTS Base 6bit + 守岸人 ref_audio 克隆。
+默认：Qwen3-TTS 1.7B Base 8bit + 守岸人 ref_audio 克隆。
 Serena / CustomVoice 用 --no-clone 和对应 --model 切回去。
 
---play：合成过程中在本机喇叭/耳机出声。Mac Mini 没有内置喇叭，
-接了输出才听得到。play_only 时给 Hub 的是 202，不把 wav 回给手机。
+--play：合成过程中在本机喇叭出声。默认用 Mac Mini 自带扬声器，
+跳过 Background Music / NoMachine 虚拟设备。play_only 时给 Hub 的是 202，不把 wav 回给手机。
 
 同轮多次 /v1/speak（边写边念）接到同一条播放队列，不要互相 flush。
 只有 /v1/stop 才清空缓冲并打断这一轮合成。
@@ -17,6 +17,9 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import re
+import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,13 +32,109 @@ from mlx_audio.tts.audio_player import AudioPlayer
 from mlx_audio.tts.utils import load_model
 
 HERE = Path(__file__).resolve().parent
-MODEL_ID = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-6bit"
+MODEL_ID = str(HERE / "models" / "Qwen3-TTS-12Hz-1.7B-Base-8bit")
 CUSTOMVOICE_MODEL_ID = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit"
 DEFAULT_VOICE = "shorekeeper"
 DEFAULT_LANG = "chinese"
 DEFAULT_REF_AUDIO = HERE / "voices" / "shorekeeper" / "clone.wav"
 MAX_BODY = 16_384
 STREAM_INTERVAL = 0.4
+_VIRTUAL_AUDIO = re.compile(
+    r"background music|nomachine|blackhole|soundflower|loopback|ui sounds",
+    re.I,
+)
+_BUILTIN_MINI = re.compile(r"mac mini\s*扬声器|mac mini speakers|mac mini speaker", re.I)
+SPEED_MIN = 0.7
+SPEED_MAX = 1.5
+
+
+def clamp_speed(value: object, default: float = 1.0) -> float:
+    try:
+        speed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return min(SPEED_MAX, max(SPEED_MIN, speed))
+
+
+def stretch_audio(audio: np.ndarray, speed: float) -> np.ndarray:
+    """语速。克隆模型的 speed 参数无效，所以在播放前用叠窗把声音拉长或压短，音高不动。"""
+    wave = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if wave.size < 16 or abs(speed - 1.0) < 0.03:
+        return wave
+    speed = clamp_speed(speed)
+    win = 960
+    hop_out = 480
+    hop_in = max(1, int(round(hop_out * speed)))
+    window = np.hanning(win).astype(np.float32)
+    out_len = int(wave.size / speed) + win
+    mixed = np.zeros(out_len, dtype=np.float32)
+    weight = np.zeros(out_len, dtype=np.float32)
+    pos_in = 0
+    pos_out = 0
+    while pos_in + win <= wave.size and pos_out + win <= out_len:
+        frame = wave[pos_in : pos_in + win] * window
+        mixed[pos_out : pos_out + win] += frame
+        weight[pos_out : pos_out + win] += window
+        pos_in += hop_in
+        pos_out += hop_out
+    if pos_out <= 0:
+        return wave
+    return mixed[:pos_out] / np.maximum(weight[:pos_out], 1e-6)
+
+
+def read_output_volume() -> int | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+        raw = subprocess.check_output(
+            ["osascript", "-e", "output volume of (get volume settings)"],
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        return max(0, min(100, int(raw.strip())))
+    except ValueError:
+        return None
+
+
+def write_output_volume(level: int) -> None:
+    level = max(0, min(100, int(level)))
+    if sys.platform != "darwin":
+        raise OSError("这台系统还不能直接设音量")
+    subprocess.check_call(
+        ["osascript", "-e", f"set volume output volume {level} without output muted"],
+        timeout=3,
+    )
+
+
+def pick_output_device(sd) -> int | None:
+    """Prefer Mac Mini built-in speakers. Skip Background Music / NoMachine."""
+    devices = list(sd.query_devices())
+    default = sd.default.device
+    default_out = default[1] if isinstance(default, (list, tuple)) else default
+    builtin: list[int] = []
+    other: list[int] = []
+    for i, item in enumerate(devices):
+        if int(item.get("max_output_channels") or 0) < 1:
+            continue
+        name = str(item.get("name") or "")
+        if _VIRTUAL_AUDIO.search(name):
+            continue
+        if _BUILTIN_MINI.search(name):
+            builtin.append(i)
+            continue
+        other.append(i)
+    if builtin:
+        return builtin[0]
+    if isinstance(default_out, int) and 0 <= default_out < len(devices):
+        name = str(devices[default_out].get("name") or "")
+        if not _VIRTUAL_AUDIO.search(name):
+            return default_out
+    if other:
+        return other[0]
+    return None
 
 
 class _LocalSpeaker(AudioPlayer):
@@ -46,11 +145,20 @@ class _LocalSpeaker(AudioPlayer):
     def start_stream(self):
         import sounddevice as sd
 
+        device = pick_output_device(sd)
+        name = ""
+        if device is not None:
+            try:
+                name = str(sd.query_devices(device).get("name") or "")
+            except Exception:
+                name = str(device)
+        print(f"tts play device={device} {name}", flush=True)
         self.stream = sd.OutputStream(
             samplerate=self.sample_rate,
             channels=1,
             callback=self.callback,
             blocksize=self.buffer_size,
+            device=device,
         )
         self.stream.start()
         self.playing = True
@@ -83,6 +191,7 @@ class Engine:
         self._gate = threading.Lock()
         self._gen = 0
         self.speaker = _LocalSpeaker(sample_rate=24000) if play else None
+        self.speed = 1.0
 
     def clone(self) -> bool:
         return bool(self.ref_audio and self.ref_text)
@@ -137,14 +246,24 @@ class Engine:
         with self._gate:
             return self._gen
 
-    def speak(self, text: str, voice: str | None, language: str | None, expected_gen: int | None = None) -> tuple[bytes, int]:
+    def speak(
+        self,
+        text: str,
+        voice: str | None,
+        language: str | None,
+        expected_gen: int | None = None,
+        allow_play: bool | None = None,
+        speed: float | None = None,
+    ) -> tuple[bytes, int]:
         if self.model is None:
             raise RuntimeError(self.error or "模型还没就绪")
         spoken = text.strip()
         if not spoken:
             raise ValueError("text 不能为空")
         lang = (language or DEFAULT_LANG).strip() or DEFAULT_LANG
-        use_stream = bool(self.play)
+        rate = self.speed if speed is None else clamp_speed(speed, self.speed)
+        playing = bool(self.play) if allow_play is None else bool(self.play and allow_play)
+        use_stream = playing
         kwargs: dict = {
             "text": spoken,
             "lang_code": lang,
@@ -171,7 +290,7 @@ class Engine:
                     my = self._gen
             for result in self.model.generate(**kwargs):
                 sample_rate = int(getattr(result, "sample_rate", sample_rate) or sample_rate)
-                audio = np.asarray(result.audio, dtype=np.float32)
+                audio = stretch_audio(np.asarray(result.audio, dtype=np.float32), rate)
                 if not chunks:
                     first_ms = max(0, int((time.monotonic() - t0) * 1000))
                 chunks.append(audio)
@@ -181,7 +300,7 @@ class Engine:
                             if self.speaker is not None:
                                 self.speaker.flush()
                             raise InterruptedError("stopped")
-                    if self.speaker is not None:
+                    if playing and self.speaker is not None:
                         self.speaker.queue_audio(audio)
         if not chunks:
             raise RuntimeError("模型没有发出声音")
@@ -231,10 +350,14 @@ def make_handler(engine: Engine):
                         "voice": engine.voice,
                         "clone": engine.clone(),
                         "play": engine.play,
+                        "speed": engine.speed,
                         "ref_audio": engine.ref_audio,
                         "error": engine.error,
                     },
                 )
+                return
+            if path == "/v1/settings":
+                self._json(200, {"ok": True, "speed": engine.speed, "volume": read_output_volume()})
                 return
             self._json(404, {"error": {"code": "not_found", "message": "未知接口"}})
 
@@ -246,6 +369,13 @@ def make_handler(engine: Engine):
                     engine.stop()
                     print("tts latency turn=- stage=stopped", flush=True)
                     self._json(200, {"ok": True, "stopped": True})
+                    return
+                if path == "/v1/settings":
+                    if "speed" in body:
+                        engine.speed = clamp_speed(body.get("speed"))
+                    if body.get("volume") is not None:
+                        write_output_volume(int(body.get("volume")))
+                    self._json(200, {"ok": True, "speed": engine.speed, "volume": read_output_volume()})
                     return
                 if path != "/v1/speak":
                     self._json(404, {"error": {"code": "not_found", "message": "未知接口"}})
@@ -261,13 +391,27 @@ def make_handler(engine: Engine):
                 language = body.get("language")
                 turn = str(body.get("turn_id") or "").strip() or "-"
                 play_only = bool(body.get("play_only"))
+                play_value = body["play"] if "play" in body else None
+                allow_play = True if play_only else (None if play_value is None else bool(play_value))
+                speed = clamp_speed(body.get("speed"), engine.speed) if "speed" in body else None
+                if speed is not None:
+                    engine.speed = speed
                 if play_only:
                     spoken = text.strip()
                     if not spoken:
                         raise ValueError("text 不能为空")
                     threading.Thread(
                         target=_play_only,
-                        args=(engine, spoken, str(voice) if voice else None, str(language) if language else None, turn, engine.speak_token()),
+                        args=(
+                            engine,
+                            spoken,
+                            str(voice) if voice else None,
+                            str(language) if language else None,
+                            turn,
+                            engine.speak_token(),
+                            allow_play,
+                            speed,
+                        ),
                         name=f"tts-play-{turn}",
                         daemon=True,
                     ).start()
@@ -278,6 +422,8 @@ def make_handler(engine: Engine):
                     text,
                     str(voice) if voice else None,
                     str(language) if language else None,
+                    allow_play=allow_play,
+                    speed=speed,
                 )
             except ValueError as exc:
                 self._json(400, {"error": {"code": "bad_request", "message": str(exc)}})
@@ -334,10 +480,19 @@ def _play_only(
     language: str | None,
     turn: str,
     expected_gen: int,
+    allow_play: bool | None = True,
+    speed: float | None = None,
 ) -> None:
     t0 = time.monotonic()
     try:
-        wav, first_ms = engine.speak(text, voice, language, expected_gen=expected_gen)
+        wav, first_ms = engine.speak(
+            text,
+            voice,
+            language,
+            expected_gen=expected_gen,
+            allow_play=allow_play,
+            speed=speed,
+        )
     except InterruptedError:
         ms = max(0, int((time.monotonic() - t0) * 1000))
         print(f"tts latency turn={turn} stage=play_stopped ms={ms}", flush=True)
@@ -373,7 +528,7 @@ def main() -> None:
     parser.add_argument(
         "--play",
         action="store_true",
-        help="合成时在本机播放。Mini 需接耳机或外接音箱",
+        help="合成时在本机播放。默认走 Mac Mini 自带扬声器",
     )
     args = parser.parse_args()
 

@@ -1,7 +1,7 @@
 [project]
 name = "helm-companion-tts"
 version = "0.1.0"
-description = "Mini 上的守岸人 TTS（Qwen3-TTS 0.6B / MLX）。独立于 dock_hub。"
+description = "Mini 上的守岸人 TTS（Qwen3-TTS 1.7B Base 8bit / MLX）。独立于 dock_hub。"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "mlx-audio",
