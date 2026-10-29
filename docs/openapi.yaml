@@ -91,6 +91,87 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /v1/companion/announce:
+    post:
+      summary: Speak a short line on Mini speakers without a full chat turn
+      operationId: postCompanionAnnounce
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+      responses:
+        "200":
+          description: Spoken (or cued) text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanionChatResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/companion/read:
+    post:
+      summary: Hub reading page — play on Mini speakers or generate a downloadable wav
+      operationId: postCompanionRead
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  maxLength: 8000
+                mode:
+                  type: string
+                  enum: [play, file]
+                  default: play
+      responses:
+        "200":
+          description: Play is done (or cued); file mode is queued and listed in GET /v1/companion/read/jobs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadJob"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /v1/companion/read/jobs:
+    get:
+      summary: Hub reading-page job list (progress / download). Android must not call this.
+      operationId: getCompanionReadJobs
+      responses:
+        "200":
+          description: Newest jobs first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ReadJob"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /v1/companion/audio/{id}:
     get:
       summary: Fetch one companion wav (home LAN only)
@@ -379,6 +460,49 @@ components:
           type: string
           nullable: true
           description: Null unless companion.tts.deliver is true and TTS succeeded. Default home setup leaves this null; Mini plays locally while Hub streams sentences.
+    ReadJob:
+      type: object
+      properties:
+        id:
+          type: string
+        job_id:
+          type: string
+        text:
+          type: string
+          description: Full manuscript; only on POST /v1/companion/read
+        mode:
+          type: string
+          enum: [play, file]
+        status:
+          type: string
+          enum: [queued, running, done, error]
+        chars:
+          type: integer
+        estimate_sec:
+          type: integer
+        chunks:
+          type: integer
+        done:
+          type: integer
+        preview:
+          type: string
+        audio_id:
+          type: string
+          nullable: true
+        duration_sec:
+          type: number
+          nullable: true
+        bytes:
+          type: integer
+          nullable: true
+        filename:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        format:
+          type: string
     Device:
       type: object
       required: [id, name, type, online]

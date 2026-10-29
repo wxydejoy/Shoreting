@@ -1,6 +1,6 @@
 # 守岸人 Companion
 
-桌上的小人：K20 听你说话并出字幕，Windows Hub 当门口，LLM 写字，Mac Mini 在本机喇叭出声。
+桌上的小人：K20 听你说话并出字幕，Mac Mini Hub 当门口，LLM 写字，Mini 在本机喇叭出声。
 
 只做**在家**。手机只连 Hub（局域网 IP + token），不直连 LLM / TTS / 米家 / 在线 API。
 
@@ -12,52 +12,52 @@
 
 ```
 K20 岸亭（脸+耳+字幕）
-   Bearer ──►  Windows Hub :17890（门口）
-                  ├─ 米家 / 开程序 / pc / 媒体
-                  ├─ chat → 配置的 LLM（Ollama 或 OpenAI 兼容，如阿里云 MaaS）
-                  ├─ 复杂 → Mini Hermes API :8642（泰缇斯）→ 润色 → TTS
-                  │            └─ 全文 → Mini :8643 → 微信
+   Bearer ──►  Mac Mini Hub :17890（门口）
+                  ├─ 米家 / companion / 配置向导
+                  ├─ 收 Windows 探针 CPU；开程序转发到 Windows :17892
+                  ├─ chat → 配置的 LLM（本机 Ollama 或 OpenAI 兼容）
+                  ├─ 天气 → Hub 代取（Open‑Meteo），手机无需外网
                   └─ cue  → Mini TTS :18100（本机喇叭；不把 wav 回给手机）
-                  └─ stop → Mini TTS /v1/stop（再喊「岸宝」打断）
 
-微信 iLink → Mini Hermes gateway（同一进程上的 :8642）
-                  └─ 家居相关 → Hub /v1/companion/announce → 守岸人短播
+Windows 探针 :17892
+                  ├─ POST Mini /v1/telemetry（CPU / 是否开机 / 正在运行）
+                  └─ 接收 {run:true} 启动本机程序
 ```
 
 | 谁 | 地址 | 干什么 | 不干什么 |
 |---|---|---|---|
 | **K20 安卓** | `10.83.22.150`，包名 `cn.weiekko.dock` | 主屏、点灯、开程序、听你说话、显示字幕 | 不播守岸人声音；不直连 LLM / TTS / 在线 API |
-| **Windows Hub** | **`10.83.22.31:17890`** `service=dock-hub` `name=study` | 米家、Steam 等、电脑监控；把对话转给 LLM | 不跑模型、不合成语音 |
+| **Mac Mini Hub** | **`10.83.22.121:17890`** `service=dock-hub` `name=study` | 米家、伴侣、配置；转发开程序 | 不跑 Windows 程序路径 |
+| **Windows 探针** | **`10.83.22.31:17892`** `service=dock-probe` | CPU、开机探测、开程序 | 不上米家、不当 Hub |
 | **Mac Mini 监控** | `10.83.22.121:17891` `service=helm-mini` | 主屏 CPU 块第二行 | **不是 Hub** |
-| **Mac Mini 嘴** | TTS **`:18100 --play`** | 本机出声 | 不当 Hub；安卓不连它。本地 Ollama 仅作可选备用大脑 |
+| **Mac Mini 嘴** | TTS **`:18100 --play`** | 本机出声 | 不当 Hub；安卓不连它 |
 
-**安卓设置不要填反：** Hub 栏填 Windows `10.83.22.31`，Mini 监控填 `10.83.22.121:17891`。Mini 上如果还开着一份 dock-hub `:17890`（`name=mini`），Hub 栏填错 IP 时健康检查会误报成功，真正拉米家 / 对话会失败。安卓若检测到 Hub 栏是 Mini 的 IP，测试连接会直接拒绝。
+**安卓设置：** Hub 栏填 Mini `10.83.22.121:17890`，Mini CPU 填 `10.83.22.121:17891`。健康检查若 `name=mini` 会拒绝。
 
-Hub 若改到 Mini 上跑，`hub.yaml` 里 llm / tts 才用 `127.0.0.1`。现在 Hub 在 Windows。
+Hub 在 Mini 上，`hub.yaml` 里 llm / tts 用 `127.0.0.1`。
 
 ## 启动顺序（本宅）
 
-1. **Windows**：管理员运行 `hub/dist/DockHub.exe`（计划任务名 `HelmDockHub`）。探活：`curl -s http://10.83.22.31:17890/health` 应为 `service=dock-hub`、`name=study`。
-2. **大脑**：默认走 Hub 本机 yaml 里的 OpenAI 兼容地址（如阿里云 MaaS `qwen3.8-flash`）。`api_key` 只写本机 yaml，不要写进 git / 安卓 / 文档示例。也仍可改回 Mini Ollama `:11434`。
-3. **Mini 嘴**：见下方 TTS。Mac Mini 没有内置喇叭，要接耳机或音箱。TTS **必须**仍指向 Mini `http://10.83.22.121:18100`。
-4. **Mini 监控**（可选，主屏第二行 CPU）：`mini/` 的 `helm-mini`，`:17891`。
-5. **K20**：设置里 Hub 填 Windows IP / `17890` / token；Mini 填 `10.83.22.121:17891`。主屏 `companion.ready` 后可点人物或喊「岸宝」。
+1. **Mini Hub**：`hub/install-launchd.sh`。探活：`curl -s http://10.83.22.121:17890/health` 应为 `service=dock-hub`、`name=study`。
+2. **Windows 探针**：`uv run dock-hub --probe`。探活：`curl -s http://10.83.22.31:17892/health` 应为 `service=dock-probe`。停掉旧的 `HelmDockHub`。
+3. **大脑**：默认走 Hub 本机 yaml 里的 OpenAI 兼容地址（如阿里云 MaaS `qwen3.8-flash`）。`api_key` 只写本机 yaml，不要写进 git / 安卓 / 文档示例。也仍可改回 Mini Ollama `:11434`。
+4. **Mini 嘴**：见下方 TTS。TTS **必须**仍指向 Mini 本机喇叭。
+5. **Mini 监控**（主屏第二行 CPU）：`mini/` 的 `helm-mini`，`:17891`。
+6. **K20**：设置里 Hub 填 Mini IP / `17890` / token；Mini CPU 填 `10.83.22.121:17891`。
 
-对话原文从接上之后记在 Windows `%USERPROFILE%\.config\dock-hub\companion-chats.jsonl`。本机打开 `http://127.0.0.1:17890/chats`，局域网（Mac / 手机）开 `http://10.83.22.31:17890/chats` 并填同一枚 Hub Token。更早只记了字数的轮次不会出现在这里。
-
-改 `hub/dock_hub/companion.py` 之后必须在 Windows **重新打 exe** 再启动。正在跑的是 `DockHub.exe`，只拷 `.py` 不会生效。
+对话原文记在 Mini `~/.config/dock-hub/companion-chats.jsonl`。本机打开 `http://127.0.0.1:17890/chats`，局域网开 `http://10.83.22.121:17890/chats` 并填同一枚 Hub Token。朗读页：`http://127.0.0.1:17890/read`。
 
 ## 安卓
 
-当前 debug 包 **versionName `0.3.15`**（`versionCode` 18）。横屏设置页两栏。
+当前 debug 包 **versionName `0.4.6`**（`versionCode` 27）。主屏方块数量跟 Hub `devices[]` 一致，室内温湿度是传感器方块。
 
 - 设置只填 Hub 的 host / port / token。不要填 LLM、TTS、在线 API Key
 - Hub 占位默认 `10.83.22.31`；粘贴 `IP:端口` 时会丢掉端口，避免拼成双端口
-- `companion != null && ready`：主屏可点人物（时钟区域）说话；说「岸宝」同样开听
+- `companion != null && ready`：主屏可点人物（时钟区域）说话；说「小岸」同样开听
 - `null` 或 `ready == false`：不打开对话。`ready` 表示 LLM 探活成功（Ollama `/api/tags` 或 OpenAI 兼容 `/models`）
-- `POST /v1/companion/chat`，超时 30s；可带 `turn_id`
+- `POST /v1/companion/chat`，超时 90s；可带 `turn_id`
 - 默认 `tts.deliver: false`：Hub **边写边 cue** Mini TTS，HTTP 仍等全文再 `200` 给字幕
-- 她正在说话时再喊「岸宝」：立刻 `POST /v1/companion/stop`，Mini 喇叭停，旧轮不再开口，然后重新听
+- 她正在说话时再喊「小岸」：立刻 `POST /v1/companion/stop`，Mini 喇叭停，旧轮不再开口，然后重新听
 - 字幕显示 `text`。声音从 Mini 喇叭出，安卓不要播 wav
 - 只有 `companion.tts.deliver: true` 时才整段合成、chat 才带 `audio_id`，手机才去拉音频
 
@@ -85,13 +85,13 @@ HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
 
 - `POST /v1/speak` + `play_only: true` → **202**，本机边合成边播
 - 同一轮可以多次 speak（边写边念）：音频接到**同一条播放队列**，下一句不要 `flush` 上一句
-- `POST /v1/stop` → 立刻清缓冲并丢掉这一轮合成（再喊「岸宝」走这条）
+- `POST /v1/stop` → 立刻清缓冲并丢掉这一轮合成（再喊「小岸」走这条）
 - 安卓不要直连 `:18100`
 
 ## 一轮说话
 
 ```
-喊「岸宝」
+喊「小岸」
   → K20 切 ASR，听完一句（约 2.5s）
   → POST Hub /v1/companion/chat
   → Hub 先 /v1/stop 清上一轮
@@ -100,7 +100,7 @@ HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
   → chat HTTP 等全文 200，K20 出字幕
 ```
 
-典型：喊「岸宝」→ **Mini 开口约 4～5s**，字幕稍晚（等全文）。
+典型：喊「小岸」→ **Mini 开口约 4～5s**，字幕稍晚（等全文）。
 
 | 阶段 | 大约 | 说明 |
 |---|---:|---|
@@ -111,22 +111,22 @@ HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
 
 `tts.deliver: true` 时仍整段合成，不边写边念，并把 wav 交给手机。本宅默认 false。
 
-再喊「岸宝」走 stop，不走完整这一轮。Hub 用序号丢掉旧轮还没 cue 的句子。
+再喊「小岸」走 stop，不走完整这一轮。Hub 用序号丢掉旧轮还没 cue 的句子。
 
 ## 人设与技能
 
 默认人设在 `hub/dock_hub/companion.py` 的 `DEFAULT_PERSONA`：慢、短、轻；1–3 句；可称「漂泊者」。
 
-**对话不在开口时现拉米家。** Windows 约 1 秒、米家约 15 秒报到 Mini 落盘；Hub 把**已经在内存里的**书桌状态塞进守岸人提示词，避免模型再等一轮 HTTP。规则写在提示词里：对方没问灯、温度、占用、内存、显卡、某台机器时，一句都不要提。「电脑」默认指 Windows。问了才答室温、忙不忙、灯开了没、在播什么；报时用 Hub 本地时钟，不必等模型。口头「暂停 / 下一首 / 声音大一点 / 十分钟后叫我」走系统媒体键、音量键和进程内倒计时。最近 3～4 轮会进下一轮提示词，截断要狠。登录米家后，账号里**所有带开关属性的设备**都可以口头操作，不只是主屏那两块磁贴。主屏仍只显示 `hub.yaml` 里的灯/开关/启动项。
+**对话不在开口时现拉米家。** Windows 约 1 秒、米家约 15 秒报到 Mini 落盘；Hub 把**已经在内存里的**书桌状态塞进守岸人提示词，避免模型再等一轮 HTTP。规则写在提示词里：对方没问灯、温度、占用、内存、显卡、某台机器时，一句都不要提。「电脑」默认指 Windows。问了才答室温、忙不忙、灯开了没、在播什么；报时用 Hub 本地时钟，不必等模型。口头「暂停 / 下一首 / 声音大一点 / 十分钟后叫我」走系统媒体键、音量键和进程内倒计时。最近 3～4 轮会进下一轮提示词，截断要狠。登录米家后，账号里**所有带开关属性的设备**都可以口头操作，不只是主屏那两块磁贴。主屏仍只显示 `hub.yaml` 里的灯/开关/启动项/灯带。书桌 **WS2812 灯带**（`type: ws2812`）走 ESP32 HTTP，口头「开灯带 / 关灯带」；Windows Hub 启动时跟着亮、关机或退出 Hub 时关掉。
 
-1. 模型单独一行 `ACTION: lamp.off`、`ACTION: lamp.bri.40`、`ACTION: wegame.run`、`ACTION: media.next`、`ACTION: volume.up` 或 `ACTION: timer.10`（主屏设备用 yaml 的 id；其它米家设备是 `m` + did）
-2. 4B 漏写 ACTION 时，Hub 从「关灯 / 开空调 / 关掉加湿器 / 启动无畏契约 / 亮一点 / 下一首 / 十分钟后叫我」这类话里按**设备名或书桌动词**兜底
+1. 模型单独一行 `ACTION: lamp.off`、`ACTION: desk-led.off`、`ACTION: lamp.bri.40`、`ACTION: wegame.run`、`ACTION: media.next`、`ACTION: volume.up` 或 `ACTION: timer.10`（主屏设备用 yaml 的 id；其它米家设备是 `m` + did）
+2. 4B 漏写 ACTION 时，Hub 从「关灯 / 开灯带 / 开空调 / 关掉加湿器 / 启动无畏契约 / 亮一点 / 下一首 / 十分钟后叫我」这类话里按**设备名或书桌动词**兜底
 
 真正执行走 `POST /v1/devices/{id}/command`。窗帘、温湿度计等没有 on 类属性的仍不能口头开关。启动项仍要写进 `hub.yaml`。闲聊里的 ACTION 会丢掉。失败时不要假装「好。」。
 
 情绪由 Hub 持有（`companion-mood.yaml`）：漂泊者此刻疲倦/烦/轻快，守岸人安静/担心/乏。只注入两三行中文，不写分数。叹气、打招呼不当成关灯。上一轮问过，这一轮不要再问。
 
-主动开口只由 **Windows Hub** 决定，K20 / Mini 不自己找人。电脑开没开只看 Hub 自己还在不在（进程在说话就是开机），**不用米家、也不用 `pc.online` 采样**。其余：K20 最近约 90 秒内打过认证 snapshot（或刚说过话）、启动项没在跑、本地时钟在 23:00–05:00。打游戏、手机没连上、Hub 没起来，永远不先开口。模板一句、不问句；倒计时是你定的，不受这道门限制。
+守岸人不主动开口。倒计时是你定的，到点说「到时间了。」
 
 可以说「以后我说开黑就启动无畏契约」：Hub 把口令绑到**已有** id，写在 `%USERPROFILE%\.config\dock-hub\companion-aliases.yaml`（不要写进带 token 的 `hub.yaml`）。不能让模型自己填 exe 路径。
 
@@ -152,22 +152,21 @@ companion:
     # deliver: true   # 才把 wav 交给手机。默认 false
 ```
 
-配了 `api_key`、或 URL 含 `compatible-mode` / path 含 `/v1` 时走 OpenAI 兼容：`GET {base}/models` 探活（超时 ≥2s）、`POST {base}/chat/completions`。请求顶层带 `enable_thinking: false`（qwen3.8-flash 默认开思考，不关则第一句 TTS 会极慢）。流式读 SSE `choices[0].delta.content`，忽略 `reasoning_content`。
+配了 `api_key`、或 URL 含 `compatible-mode` / path 含 `/v1` 时走 OpenAI 兼容：`GET {base}/models` 探活（超时 ≥2s）、`POST {base}/chat/completions`。请求顶层带 `enable_thinking: false`（推理型模型默认开思考，不关则额度会被思考内容吃光、第一句 TTS 会极慢）。流式读 SSE `choices[0].delta.content`，忽略 `reasoning_content`。
 
 未配密钥且 base 是 Ollama 端口（如 `:11434`）时仍走 `/api/tags` 与 `/api/chat`，`think: false`。TTS 始终 Mini，不要改成在线语音。
 
-## 泰缇斯（Tethys / Hermes）
+## 泰缇斯（已移除）
 
-守岸人管快答与家居；**泰缇斯**是 Mini 上的 Hermes Agent（`:8642`），只管复杂推理。Hub 自动分流：
+早期版本把「复杂任务」交给 Mini 上的 Hermes Agent（`:8642`），再由守岸人润色转述。
+**现已整体移除**：Mac 上不再运行 Hermes，Hub 也不再做任何分流。
 
-| 路径 | 谁 | 例子 |
-|---|---|---|
-| 守岸人 | `companion.llm`（Flash 等） | 「晚上好」「关灯」「开抖音」 |
-| 泰缇斯 | 守岸人调度为复杂 → Hermes → 守岸人润色 | 需查资料、分析、长推理（由守岸人判断） |
+- 所有对话**直接**交给 `companion.llm`
+- 少掉一次「简单还是复杂」的分类请求，首句更快
+- 历史配置里残留的 `companion.tethys` 会被**安全忽略**
+- 原服务、plist 与配置备份见 [companion/tethys/disabled/](../companion/tethys/disabled/README.md)
 
-**路由**：开启 `tethys` 时，每轮先由守岸人 LLM 回复一行 `ROUTE: shore|tethys`；家居/启动口语不经调度直接走守岸人。书桌复杂任务的 **Hermes 记忆**用 `tethys.session_key`（默认 `tethys:wanderer`），不要和微信 `weixin:dm:…` 合成一份 transcript。全文另发微信；微信普通聊天不会念到喇叭，只有家居/书桌相关才 `POST /v1/companion/announce`。
-
-安装与 `hub.yaml` 片段见 [companion/tethys/README.md](../companion/tethys/README.md)。`tethys.speak: false` 时只出字幕不播报；`ack: false` 关闭复杂任务前的「好。」；`weixin_notify: false` 关闭同步微信。
+天气不再依赖泰缇斯：Hub 提供 `GET /v1/weather?city=…` 代取（见 [lan-protocol.md](lan-protocol.md)），手机在**纯局域网**也能显示天气。
 
 ## 常见问题
 
@@ -176,7 +175,9 @@ companion:
 | 测试 Hub 成功，灯和对话失败 | Hub 栏填了 Mini 的 IP，连到 Mini 上另一份 dock-hub | 改成 Windows `10.83.22.31`；不要在 Mini 上再开 `:17890` 的 dock-hub |
 | 有字幕没声音 | TTS 没 `--play`、没接音箱、或 Hub 没填 `tts.base_url` | Mini 上看 `/health` 的 `play` / `ready` |
 | 说话一顿一顿 | 旧 TTS 在下一句合成时 `flush` 了上一句 | 用现在的 `server.py`：同轮只排队，只有 `/v1/stop` 才清空 |
-| 每句都从「台灯」开头 | 模型没守「没问不提」 | 提示词已写明禁止主动提起缓存状态；需重打 Windows exe |
+| 开口总是「不知道」 | 伴侣模型没配好或探活失败；人设又禁止编造 | 在配置向导「伴侣大模型」里点**测试连接**确认可用 |
+| 手机看不到天气 | 手机所在 Wi‑Fi 无外网（本宅 `P-5G` 就是纯局域网） | 天气默认由 **Hub 代取**；只要跑 Hub 的机器能上网即可。Hub 不可用才回落手机直连 |
+| 问天气卡住、手机报超时 | 旧 Hub 先念「好。」时锁死；旧 APK 只等 30s | 重打现在的 Hub；K20 装 0.3.16（对话超时 90s） |
 | 改了 companion.py 没变化 | 跑的是 exe | `build-exe.ps1` 后重启 `HelmDockHub` |
 | TTS 502 `no attribute '_gate'` | 旧进程 | 停掉 `:18100` 再按上面的命令启动 |
 | 开口很慢 | 听完静音仍偏长，或思考模式没关、LLM 整段才 cue | 确认 `enable_thinking: false`（OpenAI 兼容）或 `think: false`（Ollama），Hub 走 `stream: true` |

@@ -555,7 +555,7 @@ Content-Type: application/json
 - companion 关闭 → `404` `not_found`
 - LLM 不可达或超时 → `502` `companion_unavailable`
 
-Hub 应在超时前返回。4B 关思考仍慢则 `502`，不要让安卓一直转。默认 `tts.deliver` 为 false：Hub 流式读 Ollama，**每写出一句（。！？）就 cue Mini TTS**，chat 仍等全文再 `200`。TTS 侧同轮各句接到同一播放队列，不要互相打断；只有 `POST /v1/companion/stop` 才停喇叭。TTS 失败**不要**把整段打成 502。安卓再喊「岸宝」时打 stop，不要等这一轮 chat 结束。
+Hub 应在超时前返回。4B 关思考仍慢则 `502`，不要让安卓一直转。默认 `tts.deliver` 为 false：Hub 流式读 Ollama，**每写出一句（。！？）就 cue Mini TTS**，chat 仍等全文再 `200`。TTS 侧同轮各句接到同一播放队列，不要互相打断；只有 `POST /v1/companion/stop` 才停喇叭。TTS 失败**不要**把整段打成 502。安卓再喊「小岸」时打 stop，不要等这一轮 chat 结束。
 
 对方明确要开关灯/空调/其它带开关的米家设备，或启动白名单程序时，Hub 可执行 on/off 或 `run`（模型 `ACTION:` 行或口语兜底）。米家账号里能开关的设备在登录后自动可口头操作，不必出现在主屏。不要执行未绑定的 id，闲聊不要当命令。
 
@@ -580,7 +580,7 @@ Authorization: Bearer <token>
 
 需要 token。配置未开启 companion → `404` `not_found`。
 
-再喊「岸宝」时立刻打这个接口：停 Mini 喇叭、丢掉还没开口的旧轮 TTS。请求体可空。安卓不要直连 `:18100`。
+再喊「小岸」时立刻打这个接口：停 Mini 喇叭、丢掉还没开口的旧轮 TTS。请求体可空。安卓不要直连 `:18100`。
 
 ```http
 POST /v1/companion/stop

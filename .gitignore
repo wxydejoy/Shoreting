@@ -1,6 +1,10 @@
 .venv/
+.cache/
+node_modules/
 mini/.venv/
 mini/helm-mini.log
+hub/*.log
+companion/tts/tts.log
 companion/tts/.venv/
 companion/tts/.cache-base/
 __pycache__/
