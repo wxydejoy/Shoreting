@@ -116,6 +116,14 @@ powershell -ExecutionPolicy Bypass -File .\run-admin.ps1
 
 浏览器打开 `http://127.0.0.1:17890/setup`（托盘 → **打开配置向导**）。可图形化完成：
 
+![配置向导](../docs/screenshots/hub-setup.png)
+
+聊天记录、朗读 / 睡前朗读页（`/chats`、`/read`）：
+
+![对话记录](../docs/screenshots/hub-chats.png)
+
+![朗读与睡前朗读](../docs/screenshots/hub-read.png)
+
 1. 复制 **IP / Token** 到安卓
 2. 米家扫码登录
 3. 选温度源、灯/开关、启动程序

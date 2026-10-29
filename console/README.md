@@ -2,6 +2,8 @@
 
 Mac 本机的服务控制台：浏览器里启停 Hub / Mini 监控 / 守岸人 TTS 三个 LaunchAgent，看健康与日志，确认 Windows 在不在线。只监听 `127.0.0.1`、无鉴权，不要暴露到局域网。
 
+![岸亭控制台](../docs/screenshots/console.png)
+
 ## 跑
 
 ```bash
