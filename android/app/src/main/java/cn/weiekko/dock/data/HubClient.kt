@@ -17,12 +17,10 @@ class HubClient(
     private val json: Json = defaultJson(),
 ) {
     fun health(connection: HubConnection): Health {
-        if (connection.isMiniHost()) {
-            throw HubException(
-                "bad_request",
-                "Hub 填成了 Mini 的 IP。请改成 Windows：${HubConnection.DEFAULT_HOST}",
-            )
-        }
+        // 注意：Hub 完全可以就跑在 Mini 上（此时 Hub 的 host 与 Mini 的 host 相同）。
+        // 以前这里用 IP 判断「填成 Mini 了」，结果在这种部署下必然抛异常，
+        // HubWatchService 永远拿不到 ok=true，休眠中的 App 就再也醒不过来（黑屏卡死）。
+        // 判断是否连错服务，应该看 /health 返回的 service / name。
         val request = Request.Builder()
             .url("${connection.baseUrl()}/health")
             .get()
@@ -35,7 +33,7 @@ class HubClient(
         if (health.name.equals("mini", ignoreCase = true)) {
             throw HubException(
                 "bad_request",
-                "连到了 Mini 上的 dock-hub，不是 Windows Hub。请填 ${HubConnection.DEFAULT_HOST}",
+                "连到了 Mini 的监控服务，不是岸亭 Hub（Hub 端口一般是 17890）",
             )
         }
         if (health.protocol < 1) {
@@ -69,6 +67,16 @@ class HubClient(
 
     fun snapshot(connection: HubConnection): Snapshot {
         val request = authorized(connection, "/v1/snapshot").get().build()
+        val body = execute(request, readTimeoutMs = SNAPSHOT_TIMEOUT_MS)
+        return decode(body)
+    }
+
+    /** 天气由 Hub 代取：手机可能连在只有局域网的 Wi-Fi 上，自己出不了外网。 */
+    fun weather(connection: HubConnection, city: String): WeatherInfo {
+        val trimmed = city.trim()
+        if (trimmed.isEmpty()) throw HubException("bad_request", "城市为空")
+        val encoded = java.net.URLEncoder.encode(trimmed, "UTF-8")
+        val request = authorized(connection, "/v1/weather?city=$encoded").get().build()
         val body = execute(request, readTimeoutMs = SNAPSHOT_TIMEOUT_MS)
         return decode(body)
     }
@@ -234,7 +242,7 @@ class HubClient(
     companion object {
         const val SNAPSHOT_TIMEOUT_MS = 5_000L
         const val COMMAND_TIMEOUT_MS = 10_000L
-        const val COMPANION_TIMEOUT_MS = 30_000L
+        const val COMPANION_TIMEOUT_MS = 90_000L
         const val STOP_TIMEOUT_MS = 2_000L
         private val AUDIO_ID = Regex("^[A-Za-z0-9._-]+$")
         private val JSON = "application/json; charset=utf-8".toMediaType()

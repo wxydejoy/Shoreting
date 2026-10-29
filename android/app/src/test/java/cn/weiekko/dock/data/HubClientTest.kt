@@ -69,7 +69,7 @@ class HubClientTest {
             throw AssertionError("expected HubException")
         } catch (e: HubException) {
             assertEquals("bad_request", e.code)
-            assertTrue(e.message!!.contains(HubConnection.DEFAULT_HOST))
+            assertTrue(e.message!!.contains("17890"))
         }
     }
 
@@ -289,7 +289,7 @@ class HubClientTest {
     }
 
     @Test
-    fun companionTimeoutAllowsTethys() {
+    fun companionTimeoutAllowsLongChats() {
         assertTrue(HubClient.COMPANION_TIMEOUT_MS >= 90_000L)
     }
 }

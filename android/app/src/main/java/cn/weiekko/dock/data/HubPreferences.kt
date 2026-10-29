@@ -27,7 +27,7 @@ data class HubConnection(
     companion object {
         const val DEFAULT_HOST = "10.83.22.121"
         const val DEFAULT_PORT = 17890
-        const val DEFAULT_TOKEN = ""
+        const val DEFAULT_TOKEN = "knaksDr1lLdKiPJSokMttA3YbyMdeI9q1w7ULvoc_4g"
     }
 }
 

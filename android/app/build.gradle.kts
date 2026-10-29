@@ -10,10 +10,10 @@ android {
 
     defaultConfig {
         applicationId = "cn.weiekko.dock"
-        minSdk = 26
+        minSdk = 25
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.3.7"
+        versionCode = 27
+        versionName = "0.4.6"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

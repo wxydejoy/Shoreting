@@ -6,6 +6,6 @@
     <string name="hub_watch_title">正在等待电脑</string>
     <string name="hub_watch_text">Hub 恢复后会自动亮屏</string>
     <string name="wake_word_channel">语音唤醒</string>
-    <string name="wake_word_title">岸宝 待命中</string>
-    <string name="wake_word_text">说「岸宝」可以唤醒</string>
+    <string name="wake_word_title">小岸 待命中</string>
+    <string name="wake_word_text">说「小岸」可以唤醒</string>
 </resources>

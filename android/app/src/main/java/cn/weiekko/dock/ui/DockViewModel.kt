@@ -2,8 +2,13 @@ package cn.weiekko.dock.ui
 import cn.weiekko.dock.data.logConnection
 
 import android.app.Application
+import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
+import cn.weiekko.dock.DockApp
+import cn.weiekko.dock.background.BackgroundLibrary
+import cn.weiekko.dock.background.BackgroundRejected
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -85,6 +90,7 @@ data class DockUiState(
     val selectedWinId: String? = null,
     val media: MediaInfo = MediaInfo.phoneIdle(),
     val backgroundVideoUri: String? = null,
+    val backgroundPageUrl: String? = null,
     val tileLook: TileLook = TileLook(),
     val typeLook: TypeLook = TypeLook(),
     val powerScreen: Boolean = true,
@@ -143,6 +149,9 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private var subtitleAt = 0L
 
     init {
+        _ui.update {
+            it.copy(backgroundPageUrl = (getApplication() as? DockApp)?.backgrounds?.pageUrl)
+        }
         viewModelScope.launch {
             while (isActive) {
                 val local = phoneMedia.snapshot()
@@ -352,7 +361,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun onWakeWord(keyword: String = "岸宝", turnId: String = "") {
+    fun onWakeWord(keyword: String = "小岸", turnId: String = "") {
         val interrupting = _ui.value.companionBusy ||
             !_ui.value.companionReply.isNullOrBlank() ||
             !_ui.value.companionHeard.isNullOrBlank()
@@ -578,29 +587,65 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setBackgroundVideo(uri: Uri?) {
-        val resolver = getApplication<Application>().contentResolver
+        val app = getApplication<Application>()
+        val resolver = app.contentResolver
         viewModelScope.launch {
             val previous = _ui.value.backgroundVideoUri
-            if (uri != null) {
+            if (uri == null) {
+                releaseContent(previous, resolver)
+                prefs.saveVideoUri(VIDEO_OFF)
+                return@launch
+            }
+            val library = (app as? DockApp)?.backgrounds?.library
+            if (library == null) {
                 runCatching {
-                    resolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                    )
+                    resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 prefs.saveVideoUri(uri.toString())
-            } else {
-                if (!previous.isNullOrBlank() && previous.startsWith("content:")) {
-                    runCatching {
-                        resolver.releasePersistableUriPermission(
-                            Uri.parse(previous),
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                        )
+                return@launch
+            }
+            val copied = runCatching {
+                val rawName = displayName(resolver, uri) ?: "video.mp4"
+                val name = if (BackgroundLibrary.kindOfName(rawName) == null) "$rawName.mp4" else rawName
+                withContext(Dispatchers.IO) {
+                    resolver.openInputStream(uri)?.use { input ->
+                        library.import(name, input, BackgroundLibrary.MAX_BYTES)
                     }
                 }
-                prefs.saveVideoUri(VIDEO_OFF)
+            }.getOrElse { error ->
+                val message = (error as? BackgroundRejected)?.message ?: "无法保存视频"
+                _ui.update { it.copy(settingsStatus = message, settingsOk = false) }
+                return@launch
+            }
+            if (copied == null) {
+                _ui.update { it.copy(settingsStatus = "无法读取视频", settingsOk = false) }
+                return@launch
+            }
+            releaseContent(previous, resolver)
+            prefs.saveVideoUri(Uri.fromFile(copied).toString())
+            _ui.update { it.copy(settingsStatus = "已设为主屏背景", settingsOk = true) }
+        }
+    }
+
+    private fun releaseContent(previous: String?, resolver: ContentResolver) {
+        if (!previous.isNullOrBlank() && previous.startsWith("content:")) {
+            runCatching {
+                resolver.releasePersistableUriPermission(
+                    Uri.parse(previous),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
             }
         }
+    }
+
+    private fun displayName(resolver: ContentResolver, uri: Uri): String? {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0 && cursor.moveToFirst()) {
+                return cursor.getString(index)?.takeIf { it.isNotBlank() }
+            }
+        }
+        return uri.lastPathSegment?.substringAfterLast('/')
     }
 
     fun testConnection(host: String, portText: String, token: String) {

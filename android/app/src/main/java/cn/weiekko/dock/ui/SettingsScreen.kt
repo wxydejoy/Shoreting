@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -67,10 +68,14 @@ import cn.weiekko.dock.data.DockFont
 import cn.weiekko.dock.data.DockModule
 import cn.weiekko.dock.data.HubConnection
 import cn.weiekko.dock.data.MiniConnection
+import cn.weiekko.dock.background.BackgroundServer
+import cn.weiekko.dock.background.lanIpv4
 import cn.weiekko.dock.data.HubPreferences
 import cn.weiekko.dock.data.TileLook
 import cn.weiekko.dock.data.TileStyle
 import cn.weiekko.dock.data.TypeLook
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 @Composable
@@ -121,6 +126,11 @@ fun SettingsScreen(
         },
     ) { uri ->
         uri?.let(onSetVideo)
+    }
+    var pageUrl by remember { mutableStateOf(state.backgroundPageUrl) }
+    LaunchedEffect(Unit) {
+        val address = withContext(Dispatchers.IO) { lanIpv4() }
+        if (address != null) pageUrl = "http://$address:${BackgroundServer.PORT}"
     }
     val videoName = remember(state.backgroundVideoUri) {
         state.backgroundVideoUri?.let { displayName(context, Uri.parse(it)) }
@@ -338,13 +348,35 @@ fun SettingsScreen(
             shape = MaterialTheme.shapes.large,
         ) {
             Column(Modifier.padding(20.dp)) {
+                Text("主屏背景页面", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+                SelectionContainer {
+                    Text(
+                        pageUrl ?: "连上局域网后，这里会显示页面地址。",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "同一局域网用浏览器打开。口令是上面的 Hub Token。上传的图片和视频会自动进入索引，并成为当前背景。",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = colors.surface,
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Column(Modifier.padding(20.dp)) {
                 Text(
                     "视频背景",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    videoName ?: "未设置，主屏为纯色。循环静音播放，选横屏视频效果更好。",
+                    videoName ?: "未设置，主屏为纯色。也可以用上面的页面上传图片或视频。",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(14.dp))
@@ -812,7 +844,7 @@ fun SettingsScreen(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             if (state.wakeWordEnabled) {
-                                "已开。说「岸宝」会亮屏并进入聆听，全程在手机上离线识别。"
+                                "已开。说「小岸」会亮屏并进入聆听，全程在手机上离线识别。"
                             } else {
                                 "已关。打开后会持续听唤醒词，需要麦克风权限。"
                             },

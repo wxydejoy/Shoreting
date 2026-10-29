@@ -1,0 +1,76 @@
+package cn.weiekko.dock.voice
+
+/**
+ * 流式 transducer 热词。汉字按字空格（cjkchar），多词用 `/` 分隔。
+ * 词表里没有的字整词丢掉，否则 sherpa 会整表热词失败。
+ * 主屏设备名由 [setExtra] 在 snapshot 后追加，下次开口生效。
+ */
+object AsrHotwords {
+    val BASE = listOf(
+        "小岸",
+        "嘿小岸",
+        "无畏契约",
+        "打瓦",
+        "台灯",
+        "开灯",
+        "关灯",
+        "打开",
+        "关掉",
+        "启动",
+        "空调",
+        "加湿器",
+        "抖音",
+        "Cursor",
+    )
+
+    @Volatile
+    var extra: List<String> = emptyList()
+        private set
+
+    fun setExtra(names: Iterable<String>) {
+        extra = names.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    }
+
+    fun parseTokens(tokensTxt: String): Set<String> {
+        return tokensTxt.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .map { it.split(Regex("\\s+")).first() }
+            .toSet()
+    }
+
+    fun forStream(knownTokens: Set<String>? = null): String {
+        return (BASE + extra)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .map { toTokens(it) }
+            .filter { encoded ->
+                knownTokens == null || encoded.split(" ").all { it in knownTokens }
+            }
+            .joinToString("/")
+    }
+
+    fun toTokens(phrase: String): String {
+        val parts = mutableListOf<String>()
+        val latin = StringBuilder()
+        fun flushLatin() {
+            if (latin.isNotEmpty()) {
+                parts.add(latin.toString())
+                latin.clear()
+            }
+        }
+        for (ch in phrase.trim()) {
+            when {
+                ch.isWhitespace() -> flushLatin()
+                ch in '\u4e00'..'\u9fff' -> {
+                    flushLatin()
+                    parts.add(ch.toString())
+                }
+                else -> latin.append(ch)
+            }
+        }
+        flushLatin()
+        return parts.joinToString(" ")
+    }
+}

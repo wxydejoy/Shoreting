@@ -273,11 +273,16 @@ class WakeWordService : Service() {
             config = OnlineRecognizerConfig(
                 featConfig = getFeatureConfig(SAMPLE_RATE, 80),
                 modelConfig = OnlineModelConfig(
-                    zipformer2Ctc = OnlineZipformer2CtcModelConfig(AsrModels.MODEL),
+                    transducer = OnlineTransducerModelConfig(
+                        encoder = AsrModels.ENCODER,
+                        decoder = AsrModels.DECODER,
+                        joiner = AsrModels.JOINER,
+                    ),
                     tokens = AsrModels.TOKENS,
                     numThreads = 2,
                     debug = false,
                     provider = "cpu",
+                    modelType = "zipformer2",
                 ),
                 enableEndpoint = false,
                 decodingMethod = "greedy_search",

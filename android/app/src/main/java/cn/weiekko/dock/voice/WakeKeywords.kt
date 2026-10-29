@@ -1,13 +1,13 @@
 package cn.weiekko.dock.voice
 
-/** sherpa-onnx 中文 KWS 用声母+韵母（ppinyin），「岸宝」无需再训练。 */
+/** sherpa-onnx 中文 KWS 用声母+韵母（ppinyin），「小岸」无需再训练。 */
 object WakeKeywords {
-    const val PHRASE = "岸宝"
-    const val ALT = "嘿岸宝"
+    const val PHRASE = "小岸"
+    const val ALT = "嘿小岸"
 
     val LINES = listOf(
-        "àn b ǎo :2.0 #0.25 @岸宝",
-        "h ēi àn b ǎo :2.2 #0.20 @嘿岸宝",
+        "x iǎo àn :2.8 #0.15 @小岸",
+        "h ēi x iǎo àn :3.0 #0.12 @嘿小岸",
     )
 
     /** createStream 用 `/` 分隔多行关键词。 */

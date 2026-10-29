@@ -75,6 +75,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import cn.weiekko.dock.R
+import cn.weiekko.dock.background.BackgroundKind
+import cn.weiekko.dock.background.BackgroundLibrary
 import cn.weiekko.dock.data.DemoSnapshot
 import cn.weiekko.dock.data.DeviceType
 import cn.weiekko.dock.data.DockLayout
@@ -119,6 +121,7 @@ fun HomeScreen(
     val devices = state.snapshot?.devices.orEmpty()
     val pc = state.snapshot?.pc
     val videoUri = state.backgroundVideoUri
+    val stillImage = videoUri != null && BackgroundLibrary.backgroundKind(videoUri) == BackgroundKind.IMAGE
     val timeShadow = if (videoUri != null) {
         Shadow(color = Color.Black.copy(alpha = 0.72f), offset = Offset.Zero, blurRadius = 22f)
     } else {
@@ -137,7 +140,11 @@ fun HomeScreen(
                 .background(if (videoUri == null) colors.background else Color.Transparent),
         ) {
             if (videoUri != null) {
-                VideoBackground(uri = videoUri, playing = !state.hubSleeping)
+                if (stillImage) {
+                    ImageBackground(uri = videoUri)
+                } else {
+                    VideoBackground(uri = videoUri, playing = !state.hubSleeping)
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()

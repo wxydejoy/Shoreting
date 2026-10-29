@@ -1,0 +1,68 @@
+package cn.weiekko.dock.data
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class DockLayoutTest {
+    @Test
+    fun deviceGridSpreadsAcrossDesktopAtFullSize() {
+        val slots = deviceGridSlots(8, canvasW = 1000f, canvasH = 400f, tileW = 160f, tileH = 80f)
+        assertEquals(8, slots.size)
+        val xs = slots.map { it.x }.toSet()
+        assertTrue("should not stay in two side columns, xs=$xs", xs.size >= 3)
+        assertTrue(slots.any { it.x in 0.15f..0.7f })
+        slots.forEach { rect ->
+            assertEquals(160f / 1000f, rect.w, 0.002f)
+            assertEquals(80f / 400f, rect.h, 0.002f)
+            assertTrue(rect.x >= -0.001f)
+            assertTrue(rect.y >= -0.001f)
+            assertTrue(rect.x + rect.w <= 1.001f)
+            assertTrue(rect.y + rect.h <= 1.001f)
+        }
+    }
+
+    @Test
+    fun chromeModulesExcludeDeviceTiles() {
+        val chrome = DockModule.entries.filter { it.isLayoutChrome }.map { it.name }
+        assertEquals(listOf("Clock", "Pc", "Media", "Weather"), chrome)
+    }
+
+    @Test
+    fun resolveLayoutBakesSpreadDeviceKeys() {
+        val layout = resolveDockLayout(
+            saved = DockLayout(),
+            deviceIds = listOf("lamp", "desk", "ac"),
+            canvasW = 1000f,
+            canvasH = 400f,
+            tileW = 160f,
+            tileH = 80f,
+        )
+        assertEquals("device:lamp", deviceLayoutKey("lamp"))
+        val lamp = layout.rect("device:lamp")
+        val desk = layout.rect("device:desk")
+        assertTrue(lamp != null && lamp.visible)
+        assertTrue(desk != null && desk.visible)
+        assertTrue(kotlin.math.abs(lamp!!.x - desk!!.x) > 0.05f || kotlin.math.abs(lamp.y - desk.y) > 0.05f)
+    }
+
+    @Test
+    fun resolveLayoutDropsTinySavedDeviceRects() {
+        val saved = DockLayout(
+            modules = mapOf(
+                deviceLayoutKey("lamp") to ModuleRect(x = 0.9f, y = 0.9f, w = 0.08f, h = 0.08f),
+            ),
+        )
+        val layout = resolveDockLayout(
+            saved = saved,
+            deviceIds = listOf("lamp"),
+            canvasW = 1000f,
+            canvasH = 400f,
+            tileW = 160f,
+            tileH = 80f,
+        )
+        val lamp = layout.rect("device:lamp")!!
+        assertEquals(160f / 1000f, lamp.w, 0.002f)
+        assertEquals(80f / 400f, lamp.h, 0.002f)
+    }
+}
