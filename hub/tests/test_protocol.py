@@ -217,6 +217,32 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn("桌面周报", html)
         conn.close()
 
+    def test_notify_and_wechat_endpoints(self) -> None:
+        # F33/F4/F34：递话入队、随 snapshot 下发；微信那句她念出来
+        status, body = self._request("POST", "/v1/notify/phone", {"text": "我晚点回", "from": "script"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["text"], "我晚点回")
+        self.assertEqual(body["source"], "script")
+        self.assertIn("id", body)
+
+        status, body = self._request("POST", "/v1/notify/phone", {"text": "  "})
+        self.assertEqual(status, 400)
+
+        status, body = self._request("POST", "/v1/wechat", {"text": "饭好了", "from": "妈妈"})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        # 这个 harness 没开伴侣：不出声（said 为 null），但仍留到 notify 队列
+        self.assertIsNone(body["said"])
+        self.assertIn("微信，妈妈说：饭好了。", " ".join(
+            item["text"] for item in self.hub.snapshot()["notify"]["items"]
+        ))
+
+        snap = self.hub.snapshot()
+        items = snap["notify"]["items"]
+        self.assertGreaterEqual(snap["notify"]["last_id"], 2)
+        self.assertTrue(any("我晚点回" in item["text"] for item in items))
+        self.assertTrue(any(item["source"] == "wechat" for item in items))
+
     def test_companion_read_page(self) -> None:
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request("GET", "/read")

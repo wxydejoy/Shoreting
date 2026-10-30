@@ -286,6 +286,18 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     body = self._read_json()
                     self._json(200, hub.companion_announce(body))
                     return
+                if path == "/v1/notify/phone":
+                    # F33 反向 / F4：往手机递一句话（脚本、电脑都能用）
+                    self._require_auth()
+                    self._limit("announce")
+                    self._json(200, hub.notify_phone(self._read_json()))
+                    return
+                if path == "/v1/wechat":
+                    # F34：微信机器人转发一句过来，她念出来。单向播报，不做对话
+                    self._require_auth()
+                    self._limit("announce")
+                    self._json(200, hub.ingest_wechat(self._read_json()))
+                    return
                 if path == "/v1/companion/read":
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")

@@ -929,6 +929,60 @@ Authorization: Bearer <token>
 - 超 60 条先挤 `chat` 来源里最旧的，你亲手教的（`taught`）最后动。
 - 本机直连免 Token（同 `/chats`）；跨机要 Bearer。
 
+### 6.15b `POST /v1/notify/phone` · `POST /v1/wechat` · snapshot.notify
+
+往手机递话的一条通道，三个入口（F33 · F4 · F34）。**安卓要消费 `snapshot.notify`**：
+见到比本地 last-seen 大的 `id` 就发一条本地通知，然后记下 `last_id`。
+
+**谁在递：**
+
+- 对她说「跟她说我晚点回」/「留言，饭好了」（F4）——她确认一句「写下来了」，
+  内部走的就是 `POST /v1/notify/phone` 同一条队列；
+- 电脑脚本、快捷指令直接 `POST /v1/notify/phone`（Bearer + announce 限流档）；
+- 微信机器人转发：`POST /v1/wechat`，她念一句「微信，X说：……」再入队（F34）。
+  **单向播报**，不做双向对话（不做清单第 3 条）。
+
+```http
+POST /v1/notify/phone
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"text": "我晚点回", "from": "script"}
+```
+
+**200**
+
+```json
+{"id": 7, "text": "我晚点回", "source": "script", "at": "2026-10-31T18:03:00+08:00"}
+```
+
+```http
+POST /v1/wechat
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"text": "饭好了", "from": "妈妈"}
+```
+
+**200** `{"ok": true, "said": "微信，妈妈说：饭好了。", "notify_id": 8}`
+（伴侣没开时 `said` 为 null，仍入队。）
+
+- 队列在内存里，最多 10 条、每条留 24 小时，重启即清——重连后没响的通知不值得补发。
+- `text` 必填非空，超长掐到 200 字；微信正文念的时候掐到 120 字。
+- 递话不进对话历史、不触发追问（announce 通道同款规矩）。
+- snapshot 新增：
+
+```json
+"notify": {
+  "last_id": 8,
+  "items": [
+    {"id": 8, "text": "微信，妈妈说：饭好了。", "source": "wechat", "at": "…"}
+  ]
+}
+```
+
+- 安卓去重靠自增 `id`（重启后从 1 重新数，`at` 只作展示）。改 id 规则算破坏性变更。
+
 ### 6.16 `GET /v1/companion/week`
 
 桌面周报（F27）。**安卓不打**——这是给人看的页面，`/week`（HTML）配这条数据接口。

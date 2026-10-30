@@ -35,6 +35,7 @@ from dock_hub.memory import (
     parse_forget as parse_memory_forget,
     parse_teach as parse_memory_teach,
 )
+from dock_hub.notify import parse_relay
 from dock_hub.reads import ReadJobs, job_public
 
 # 「听懂话」那一段搬去了 intents.py（纯函数：原话 + 技能表 → 设备动作）。
@@ -325,6 +326,14 @@ class Companion:
             spoken, skills = desk
             self._commit_reply(spoken)
             _latency(turn, "desk", chars=len(spoken))
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
+            )
+        relay = self._handle_relay(text, turn)
+        if relay:
+            spoken, skills = relay
+            self._commit_reply(spoken)
+            _latency(turn, "relay", chars=len(spoken))
             return self._finish_spoken(
                 spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
             )
@@ -716,6 +725,25 @@ class Companion:
         _latency(turn, "scene_ok", id=ident, ok=1 if ok else 0)
         spoken = str(item.get("say") or "").strip() or f"好，{name}。"
         return spoken, [{"id": ident, "name": name, "scene": True, "ok": ok}]
+
+    def _handle_relay(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """「跟她说我晚点回」（F33 反向 / F4 语音留言）：递到手机，她只确认一句。
+
+        失败不重试——递话是即发即忘的，用户会自己再说一次。
+        """
+        content = parse_relay(text)
+        if content is None:
+            return None
+        post = self._world.get("notify")
+        if not callable(post):
+            return None
+        try:
+            post(content)
+        except Exception as exc:  # noqa: BLE001 - 递话失败不是聊天失败
+            _latency(turn, "relay_error", err=type(exc).__name__)
+            return "这会儿没递到，等会儿再说一遍。", [{"id": "relay", "ok": False}]
+        _latency(turn, "relay_ok", chars=len(content))
+        return "写下来了，手机上会响一下。", [{"id": "relay", "ok": True}]
 
     def _handle_leaving(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         """「我出门了」（F18）：能关的全关，报告没关掉的。没接 Hub 就不认。"""

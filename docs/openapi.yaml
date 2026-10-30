@@ -413,6 +413,76 @@ paths:
                       $ref: "#/components/schemas/ChatTurn"
         "401":
           $ref: "#/components/responses/Error"
+  /v1/notify/phone:
+    post:
+      summary: 往手机递一句话（F33 反向 / F4 语音留言共用）。安卓经 snapshot.notify 收。
+      operationId: postNotifyPhone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  maxLength: 200
+                from:
+                  type: string
+                  maxLength: 20
+                  description: 来源标记（script / wechat / desk…），默认 script
+      responses:
+        "200":
+          description: 已入队，随 snapshot.notify 下发
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  text: { type: string }
+                  source: { type: string }
+                  at: { type: string }
+        "401":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /v1/wechat:
+    post:
+      summary: 微信机器人转发一句过来，她念出来（F34）。单向播报，不做双向对话。
+      operationId: postWechat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  maxLength: 200
+                from:
+                  type: string
+                  description: 发送人昵称，念的时候带一句「微信，X说」
+      responses:
+        "200":
+          description: 已播报（伴侣没开时 said 为 null，但仍留到 notify 队列）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  said:
+                    type: string
+                    nullable: true
+                  notify_id: { type: integer }
+        "401":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
   /v1/companion/week:
     get:
       summary: 桌面周报（F27）。/week 页的数据源；安卓不打，想看开网页。
@@ -977,6 +1047,28 @@ components:
           description: >
             Desk presence from POST /v1/at-desk. null until the first report
             after the Hub started.
+        notify:
+          $ref: "#/components/schemas/NotifyState"
+          description: >
+            待递到手机的话（F33 反向 / F4）。安卓按自增 id 去重，
+            见到比本地 last-seen 新的就发一条本地通知。
+    NotifyState:
+      type: object
+      properties:
+        last_id:
+          type: integer
+        items:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              text: { type: string }
+              source:
+                type: string
+                enum: [desk, wechat, script]
+              at: { type: string }
     Presence:
       type: object
       required: [state]
