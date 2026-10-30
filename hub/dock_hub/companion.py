@@ -79,6 +79,7 @@ from dock_hub.intents import (
 
 # 「怎么说」搬去了 persona.py（催稿文案、情绪、mood.yaml 读写）。
 # 同样把名字再导出一次，外面照旧 from dock_hub.companion import speak_temp。
+from dock_hub.diary import clean_entry, diary_messages
 from dock_hub.llm import (
     DEFAULT_PERSONA,
     _clean_reply,
@@ -576,6 +577,20 @@ class Companion:
         self._commit_reply(spoken)
         self._finish_spoken(spoken, turn, seq, started, cue_llm=False, user="（定时）")
         return True
+
+    def diary_compose(self, material: str) -> str:
+        """F29 日记：拿材料换一段她口吻的正文。一次性问完，不流式、不进对话史。
+
+        大脑不在场或没开伴侣就抛错，由调用方退到兜底文案——日记缺一天的
+        理由可以是「大脑不在」，不能是「她没试」。
+        """
+        if not self.config.enabled:
+            raise HubError("not_found", "未开启桌面伴侣")
+        text = self._complete(diary_messages(str(material or "")), temperature=0.8)
+        cleaned = clean_entry(text)
+        if not cleaned:
+            raise HubError("companion_unavailable", "日记没写出来")
+        return cleaned
 
     # ---- 朗读任务的回调 ------------------------------------------------------
     # reads.ReadJobs 干活，出声和状态都在这一侧；下面几个方法就是两边之间的缝。

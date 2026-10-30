@@ -137,3 +137,8 @@ def read_page_html() -> bytes:
 def week_page_html() -> bytes:
     """F27 桌面周报页（独立小页，不走 app.html 那套三栏）。"""
     return asset_page_html("week.html")
+
+
+def diary_page_html() -> bytes:
+    """F29 守岸人日记页（独立小页，一天一段，可删）。"""
+    return asset_page_html("diary.html")

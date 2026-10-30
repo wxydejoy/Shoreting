@@ -33,12 +33,19 @@ from dock_hub.alarm import AlarmRamp
 from dock_hub.system_volume import read_output_volume, write_output_volume
 from dock_hub.theme import birthday_text, occasions_for
 from dock_hub.wallpaper import wallpaper_line
-from dock_hub.photos import list_photos, photo_bytes as read_photo
+from dock_hub.photos import list_photos, photo_bytes as read_photo, resolve_photos_dir
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
 from dock_hub.notify import NotifyBoard, parse_relay, wechat_say_text
 from dock_hub.weekly import DailyLedger, weekly_line
+from dock_hub.diary import (
+    DayMaterial,
+    DiaryStore,
+    DiaryWriter,
+    build_material,
+    render_material,
+)
 from dock_hub.lanes import Lanes
 from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
@@ -125,6 +132,12 @@ class DockHub:
             (config.path or default_config_path()).with_name("companion-stats.jsonl")
         )
         self.companion.on_read_done = self.ledger.note_read
+        # F29 守岸人日记：每天傍晚拿台账和当天的话写一段，/diary 页可回看可删
+        self.diary_store = DiaryStore(
+            (config.path or default_config_path()).with_name("companion-diary.jsonl")
+        )
+        self.diary = DiaryWriter(self.diary_store, self._diary_material, self._diary_compose)
+        self.diary.configure(config.diary.enabled, config.diary.at)
         # F33/F4/F34：往手机递话的一条通道（对讲反向、语音留言、微信共用）
         self.notify = NotifyBoard()
         self._attach_books()
@@ -157,6 +170,8 @@ class DockHub:
         self._at_desk_at: str | None = None
         self._proactive_stop = threading.Event()
         self._start_proactive()
+        self._diary_stop = threading.Event()
+        self._start_diary()
         self._focus_active: bool | None = None  # None = 还没看过一眼，不触发
         self._focus_stop = threading.Event()
         # F22：进游戏静音、退出恢复。读写都走实例属性，测试好换假件
@@ -239,15 +254,15 @@ class DockHub:
         return {"occasions": occasions} if occasions else None
 
     def _photos_dir(self) -> Path | None:
-        """回忆相框（F37）的图库：config 里解析过的目录，None = 关着。"""
-        return self.config.photos
+        """回忆相框（F37）的图库：显式配置 > 旁目录活检测，false 一票否决。"""
+        return resolve_photos_dir(self.config.photos, self.config.photos_off, self.config.path)
 
-    def photo_ids(self) -> list[str]:
+    def _photo_ids(self) -> list[str]:
         return list_photos(self._photos_dir())
 
     def _photos_payload(self) -> dict[str, list[str]] | None:
         """相框名单进 snapshot。没 photos/ 目录或里面没图，就不带这个字段。"""
-        ids = self.photo_ids()
+        ids = self._photo_ids()
         return {"ids": ids} if ids else None
 
     def photo_bytes(self, photo_id: str) -> tuple[bytes, str, str]:
@@ -529,6 +544,9 @@ class DockHub:
         self._proactive_stop.set()
         self.proactive.configure(config.proactive)
         self._start_proactive()
+        self._diary_stop.set()
+        self.diary.configure(config.diary.enabled, config.diary.at)
+        self._start_diary()
         self.reporter.stop()
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
@@ -962,6 +980,61 @@ class DockHub:
 
     def _weekly_text(self) -> str:
         return weekly_line(self.ledger.summary())
+
+    # ---- F29 守岸人日记 ----------------------------------------------------
+
+    def companion_diary(self, limit: int = 200, day: str = "") -> dict[str, Any]:
+        """/diary 页的数据。新→旧，一天一段。"""
+        return {
+            "entries": self.diary_store.list(limit=limit, day=day),
+            "enabled": self.config.diary.enabled,
+            "at": self.config.diary.at,
+        }
+
+    def companion_diary_delete(self, day: str) -> dict[str, Any]:
+        """删一天的日记。她写的东西必须可见可撤销，这条是底线的另一半。"""
+        if not self.diary_store.delete(day):
+            raise HubError("not_found", f"没有 {day} 的日记")
+        return {"ok": True}
+
+    def _diary_material(self) -> DayMaterial | None:
+        """今天的材料：台账、节日、壁纸那句、他说过的话。全都是现成的。"""
+        now = datetime.now().astimezone()
+        try:
+            chats = self.chat_log.list(limit=200, day=now.date().isoformat())
+        except Exception:  # noqa: BLE001 - 说话记录读不出不该连累日记
+            chats = []
+        return build_material(
+            now=now,
+            ledger_row=self.ledger.day(now.date()),
+            occasions=occasions_for(now.date(), self.config.theme),
+            wallpaper=(self._wallpaper_payload() or {}).get("text"),
+            said=[str(item.get("user") or "") for item in chats if isinstance(item, dict)],
+        )
+
+    def _diary_compose(self, m: DayMaterial) -> str:
+        """她动笔。大脑不在就抛错，Writer 会退到兜底文案。"""
+        if not self.companion.config.enabled:
+            raise HubError("not_found", "未开启桌面伴侣")
+        return self.companion.diary_compose(render_material(m))
+
+    def _start_diary(self) -> None:
+        """每半分钟问一次「今天写了吗」。关着就不起线程。"""
+        self._diary_stop = threading.Event()
+        if not self.config.diary.enabled:
+            return
+        stop = self._diary_stop
+
+        def loop() -> None:
+            while not stop.wait(30.0):
+                try:
+                    written = self.diary.tick(datetime.now().astimezone())
+                    if written:
+                        print(f"[diary] {written}")
+                except Exception as exc:  # noqa: BLE001 - 日记挂了不能拖垮 Hub
+                    logs.swallowed("日记tick", exc)
+
+        threading.Thread(target=loop, name="diary", daemon=True).start()
 
     def relay_to_phone(self, text: str, source: str = "desk") -> dict[str, Any]:
         """往手机递一句话（F33 反向 / F4 留言）。递完叫醒长轮询。"""

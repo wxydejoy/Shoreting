@@ -249,6 +249,14 @@ devices:
 #   exam_weeks:
 #     - "01-10..01-20"
 #
+# 回忆相框（F37）：hub.yaml 旁边放个 photos/ 目录就生效（jpg/png/webp/heic/gif），
+# 电脑不在线的白天轮播，夜里还是飘字钟。photos: false 关掉，photos: /path 换地方。
+# photos: false
+#
 # 一句话壁纸（F39）：屏幕底边飘一行她今天想说的话，一天一句、按日期轮换，
 # 淡淡的不抢时钟。默认开着；写句式去改 dock_hub/wallpaper.py 的池子。
 # wallpaper: false   # 关掉
+#
+# 守岸人日记（F29）：她每天 21:30 拿台账和当天的话写一段，/diary 页可回看可删。
+# 默认开着；diary: false 关掉，diary: {at: "23:00"} 换时刻。
+# diary: false

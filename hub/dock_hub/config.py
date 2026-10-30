@@ -325,6 +325,14 @@ class WallpaperConfig:
 
 
 @dataclass
+class DiaryConfig:
+    """守岸人日记（F29）。默认 21:30 写当天一段；diary: false 关掉。"""
+
+    enabled: bool = True
+    at: str = "21:30"
+
+
+@dataclass
 class SceneConfig:
     """一组「一起动」的设备，可以带一句话和一个语音口令。"""
 
@@ -370,8 +378,10 @@ class HubConfig:
     alarm: AlarmConfig = field(default_factory=AlarmConfig)
     theme: ThemeConfig = field(default_factory=ThemeConfig)
     wallpaper: WallpaperConfig = field(default_factory=WallpaperConfig)
-    # 回忆相框（F37）的图库目录；None = 关着
+    diary: DiaryConfig = field(default_factory=DiaryConfig)
+    # 回忆相框（F37）的图库目录；None = 没显式配（false 时 photos_off = True）
     photos: Path | None = None
+    photos_off: bool = False
     path: Path | None = None
 
     def auth_values(self) -> tuple[str, ...]:
@@ -483,7 +493,8 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     alarm = _parse_alarm(raw.get("alarm"), devices)
     theme = _parse_theme(raw.get("theme"))
     wallpaper = _parse_wallpaper(raw.get("wallpaper"))
-    photos = _parse_photos(raw.get("photos"), path)
+    diary = _parse_diary(raw.get("diary"))
+    photos, photos_off = _parse_photos(raw.get("photos"), path)
 
     return HubConfig(
         name=name,
@@ -507,7 +518,9 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         alarm=alarm,
         theme=theme,
         wallpaper=wallpaper,
+        diary=diary,
         photos=photos,
+        photos_off=photos_off,
         path=path,
     )
 
@@ -1299,20 +1312,31 @@ def _parse_wallpaper(raw: Any) -> WallpaperConfig:
     raise ValueError("wallpaper 要是 true/false，写句式去改 wallpaper.py 的池子")
 
 
-def _parse_photos(raw: Any, path: Path | None) -> Path | None:
-    """回忆相框（F37）的图库：不写就看配置旁的 photos/，false 关，写路径换地方。"""
+def _parse_diary(raw: Any) -> DiaryConfig:
+    """守岸人日记（F29）：不写或 true 开（21:30 写），false 关，对象可改 at。"""
     if raw is None or raw is True:
-        if path is None:
-            return None
-        sibling = path.parent / "photos"
-        return sibling if sibling.is_dir() else None
+        return DiaryConfig()
     if raw is False:
-        return None
+        return DiaryConfig(enabled=False)
+    if isinstance(raw, dict):
+        at_val = raw.get("at")
+        if at_val is None:
+            return DiaryConfig()
+        return DiaryConfig(at=parse_clock(at_val, "diary.at"))
+    raise ValueError("diary 要是 false 或 {at: \"21:30\"}")
+
+
+def _parse_photos(raw: Any, path: Path | None) -> tuple[Path | None, bool]:
+    """回忆相框（F37）：false 关、路径换地方；不写就交给 photos.py 活检测旁目录。"""
+    if raw is None or raw is True:
+        return None, False
+    if raw is False:
+        return None, True
     if isinstance(raw, str):
         stripped = raw.strip()
         if stripped:
-            return Path(stripped)
-        return None
+            return Path(stripped), False
+        return None, False
     raise ValueError("photos 要是 false 或一个目录路径")
 
 
@@ -1502,8 +1526,14 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
         }
     if not config.wallpaper.enabled:
         raw["wallpaper"] = False
-    if config.photos is not None:
-        # 回忆相框（F37）：开着就写回实际目录，关着（None）不占 yaml 一行。
+    if not config.diary.enabled:
+        raw["diary"] = False
+    elif config.diary.at != DiaryConfig().at:
+        raw["diary"] = {"at": config.diary.at}
+    if config.photos_off:
+        # 回忆相框（F37）：只有配置过才写回，默认（旁目录活检测）不占 yaml 一行。
+        raw["photos"] = False
+    elif config.photos is not None:
         raw["photos"] = str(config.photos)
     if config.temperature:
         raw["temperature"] = temperature_to_raw(config.temperature)

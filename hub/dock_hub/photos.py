@@ -38,6 +38,21 @@ def list_photos(directory: Path | None) -> list[str]:
         return []
 
 
+def resolve_photos_dir(explicit: Path | None, off: bool, config_path: Path | None) -> Path | None:
+    """图库在哪：false 一票否决，显式路径其次，没配就看 hub.yaml 旁边的 photos/。
+
+    旁目录是活检测——Hub 起来之后才建 photos/ 也算数，放进去就生效，不用改配置。
+    """
+    if off:
+        return None
+    if explicit is not None:
+        return explicit
+    if config_path is None:
+        return None
+    sibling = config_path.parent / "photos"
+    return sibling if sibling.is_dir() else None
+
+
 def photo_bytes(directory: Path | None, ident: str) -> tuple[bytes, str]:
     """读一张照片，返回 (bytes, mime)。不存在的、带路径的都拒。"""
     if directory is None:

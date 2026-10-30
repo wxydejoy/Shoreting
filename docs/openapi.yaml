@@ -629,6 +629,61 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /v1/companion/diary:
+    get:
+      summary: 守岸人日记列表（F29）。/diary 页的数据源，新→旧。
+      operationId: getCompanionDiary
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 200, minimum: 1, maximum: 200 }
+        - name: day
+          in: query
+          schema: { type: string }
+          description: 只看某天（YYYY-MM-DD）
+      responses:
+        "200":
+          description: "一天一段；hub.yaml 里 diary: false 时 enabled=false，entries 照旧可能非空"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                    description: 日记开关（hub.yaml diary）
+                  at:
+                    type: string
+                    description: 每天写的时刻（HH:MM）
+                  entries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DiaryEntry"
+        "401":
+          $ref: "#/components/responses/Error"
+    delete:
+      summary: 删一天的日记（按日期）。404 表示这天没写过。
+      operationId: deleteCompanionDiary
+      parameters:
+        - name: date
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+      responses:
+        "200":
+          description: 删掉了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /v1/companion/books:
     get:
       summary: Shelf listing for the reading page
@@ -1559,6 +1614,26 @@ components:
           description: >
             PM2.5（μg/m³，F14）。空气源顺路捎上，拿不到就不出现这个字段；
             安卓按可空处理。
+    DiaryEntry:
+      type: object
+      description: 守岸人日记（F29）的一天。正文她写的，可删。
+      required: [date, text]
+      properties:
+        date:
+          type: string
+          format: date
+          description: 这一段属于哪一天
+        text:
+          type: string
+          description: 正文。两句话以内、不煽情——句式在 diary.py 的提示词里卡死
+        source:
+          type: string
+          enum: [llm, log]
+          description: llm=她自己写的；log=大脑不在，退到一句事实
+        written_at:
+          type: string
+          description: 实际写下的时刻（ISO）
+
     WallpaperStatus:
       type: object
       required: [text]

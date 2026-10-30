@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from dock_hub.accesslog import AccessLog
 from dock_hub.books import MAX_BOOK_BYTES
-from dock_hub.chat_log import asset_page_html, chats_page_html, read_page_html, week_page_html
+from dock_hub.chat_log import asset_page_html, chats_page_html, diary_page_html, read_page_html, week_page_html
 from dock_hub.errors import HubError
 from dock_hub.service import DockHub
 from dock_hub.setup_ui import is_local_client
@@ -162,6 +162,24 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     # F27 桌面周报：这一周你在桌前多久、读了多少。页面本身不设防，
                     # 数据接口（/v1/companion/week）和 /chats 一样鉴权
                     self._html(200, week_page_html(), "text/html; charset=utf-8")
+                    return
+                if path == "/diary":
+                    # F29 守岸人日记：她傍晚写的那段。页面不设防，数据接口鉴权
+                    self._html(200, diary_page_html(), "text/html; charset=utf-8")
+                    return
+                if path == "/v1/companion/diary":
+                    # F29：日记列表。鉴权口径与 /chats 相同——本机免 token
+                    if not self._chats_ok():
+                        raise HubError("unauthorized", "Token 不正确")
+                    query = parse_qs(parsed.query)
+                    try:
+                        limit = int((query.get("limit") or ["200"])[0] or 200)
+                    except ValueError:
+                        limit = 200
+                    day = unquote((query.get("day") or [""])[0]).strip()
+                    if day and not _DAY_RE.fullmatch(day):
+                        raise HubError("bad_request", "day 要是 YYYY-MM-DD")
+                    self._json(200, hub.companion_diary(limit=limit, day=day))
                     return
                 if path == "/v1/companion/week":
                     if not self._chats_ok():
@@ -646,6 +664,16 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_memory_delete(key))
                     return
+                diary_prefix = "/v1/companion/diary/"
+                if path.startswith(diary_prefix):
+                    # F29：删一天的日记。她写的东西必须可见可撤销，这是同一条底线
+                    day = unquote(path[len(diary_prefix) :])
+                    if not _DAY_RE.fullmatch(day):
+                        raise HubError("not_found", "未知接口")
+                    if not self._chats_ok():
+                        raise HubError("unauthorized", "Token 不正确")
+                    self._json(200, hub.companion_diary_delete(day))
+                    return
                 raise HubError("not_found", "未知接口")
             except HubError as exc:
                 self._json(exc.status, exc.body(), headers=exc.headers)
@@ -663,6 +691,7 @@ def serve(hub: DockHub, *, blocking: bool = True) -> ThreadingHTTPServer:
     print(f"配置向导     http://127.0.0.1:{hub.config.port}/setup  （本机直接开；局域网要 Token）", flush=True)
     print(f"聊天记录     http://127.0.0.1:{hub.config.port}/chats  （本机直接开；局域网要 Token）", flush=True)
     print(f"朗读         http://127.0.0.1:{hub.config.port}/read   （本机直接开；局域网要 Token）", flush=True)
+    print(f"守岸人日记   http://127.0.0.1:{hub.config.port}/diary  （本机直接开；局域网要 Token）", flush=True)
     if hub.config.path:
         print(f"配置         {hub.config.path}", flush=True)
     access = AccessLog.from_config(hub.config)
