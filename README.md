@@ -2,7 +2,7 @@
 
 守岸人在漂泊者书桌上值班。横屏安卓是亭子的脸和字幕，Mac Mini Hub 当门口，LLM 写字，Mini 在本机喇叭说话。亭里还能看天气与室内温湿度、电脑监控，控制米家设备和书桌灯带，一键启动电脑上的白名单程序。
 
-当前安卓 **0.4.6**。权威仓库在 Mac：`/Users/weiekko/dock/`，remote `git@github.com:wxydejoy/Shoreting.git`，分支 `main`。
+当前安卓 **0.4.6**（版本号只写在 [VERSION](VERSION)，其余几处由脚本同步，见「发布」）。权威仓库在 Mac：`/Users/weiekko/dock/`，remote `git@github.com:wxydejoy/Shoreting.git`，分支 `main`。
 
 ![岸亭主屏](docs/screenshots/home.gif)
 
@@ -122,6 +122,23 @@ python3 scripts/check_protocol.py
 安卓：`cd android && ./gradlew testDebugUnitTest`（需要 `app/libs/sherpa-onnx-*.aar`，`./fetch-wake-word.sh` 会取）。
 
 `.github/workflows/ci.yml` 把这四条挂到了 push / PR 上。CI 验不了的只有三样：真机上的唤醒词识别、米家云、LLM 联调——这些只能上机。
+
+## 发布
+
+版本号只有一个事实源：[VERSION](VERSION)。`android/app/build.gradle.kts`（`versionName` / `versionCode`）、`hub/pyproject.toml`、这份 README、`android/README.md`、`docs/companion.md` 里的版本字样都是它的影子，由 `scripts/bump_version.py` 同步，漂了会报错：
+
+```bash
+python3 scripts/bump_version.py --check     # 五处不一致就非零退出
+python3 scripts/bump_version.py 0.5.0       # 手动改版本（versionCode 自动 +1）
+```
+
+一次发布：
+
+```bash
+scripts/release.sh 0.5.0 docs/releases/0.5.0.md
+```
+
+它会同步版本号 → 跑 hub / mini / console 单测与安卓单测 → 打 apk → `gh release create v0.5.0`（同名已存在先删）。Hub 的 exe 只能在 Windows 上打，Mac 上自动跳过并提示把产物放到 `dist/DockHub-<版本>.exe` 后用 `--skip-build` 重跑。`--skip-tests` / `--skip-build` / `--no-upload` 按需组合。历史发布说明在 [docs/releases/](docs/releases/)。
 
 ## 许可
 
