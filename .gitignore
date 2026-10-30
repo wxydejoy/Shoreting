@@ -4,6 +4,7 @@ node_modules/
 mini/.venv/
 mini/helm-mini.log
 hub/*.log
+hub/logs/
 companion/tts/tts.log
 companion/tts/.venv/
 companion/tts/.cache-base/
