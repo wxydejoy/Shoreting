@@ -150,6 +150,17 @@ class HubPreferences(private val context: Context) {
         prefs[KEY_DESK_PRESENCE] ?: false
     }
 
+    /** 递话去重（F33/F4）：已经发过通知的最大 notify id。 */
+    val lastNotifyId: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[KEY_LAST_NOTIFY_ID] ?: 0
+    }
+
+    suspend fun saveLastNotifyId(id: Int) {
+        context.dataStore.edit { prefs ->
+            if (id > (prefs[KEY_LAST_NOTIFY_ID] ?: 0)) prefs[KEY_LAST_NOTIFY_ID] = id
+        }
+    }
+
     suspend fun save(connection: HubConnection) {
         context.dataStore.edit { prefs ->
             prefs[KEY_HOST] = connection.host.trim()
@@ -278,6 +289,7 @@ class HubPreferences(private val context: Context) {
         private val KEY_WAKE_WORD = booleanPreferencesKey("wake_word")
         private val KEY_HUB_ENABLED = booleanPreferencesKey("hub_enabled")
         private val KEY_DESK_PRESENCE = booleanPreferencesKey("desk_presence")
+        private val KEY_LAST_NOTIFY_ID = intPreferencesKey("last_notify_id")
 
         const val DEFAULT_HUB_SLEEP_DELAY_SEC = 60
         const val DEFAULT_HUB_RECONNECT_SEC = 15

@@ -31,6 +31,7 @@ import cn.weiekko.dock.data.MediaInfo
 import cn.weiekko.dock.data.MemoryEntry
 import cn.weiekko.dock.data.MiniConnection
 import cn.weiekko.dock.data.ModuleRect
+import cn.weiekko.dock.relay.RelayNotifier
 import cn.weiekko.dock.data.PcStatus
 import cn.weiekko.dock.data.PresenceReporter
 import cn.weiekko.dock.data.Snapshot
@@ -997,6 +998,14 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun sendCompanion(text: String? = null) {
         val spoken = (text ?: _ui.value.companionDraft).trim()
         if (spoken.isEmpty()) return
+        // 对讲捷径（F33 正向）：「对讲，饭好了」直接从书桌喇叭出声，不走 LLM
+        intercomPrefix.matchEntire(spoken)?.let { match ->
+            val message = match.groupValues[1].trim()
+            if (message.isNotEmpty()) {
+                viewModelScope.launch { sendAnnounce(message) }
+            }
+            return
+        }
         // 插话打断（F2）：她还在说或字幕还挂着，先把上一轮掐掉再送新的
         val interrupting = _ui.value.companionBusy || !_ui.value.companionReply.isNullOrBlank()
         companionJob?.cancel()
@@ -1190,6 +1199,50 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 递话通知（F33/F4）：比本地已响过的 id 新的就发通知，然后记账。 */
+    private fun consumeRelay(snapshot: Snapshot) {
+        val notify = snapshot.notify ?: return
+        if (notify.lastId <= 0) return
+        viewModelScope.launch {
+            val seen = prefs.lastNotifyId.first()
+            val fresh = notify.items.filter { it.id > seen }
+            if (fresh.isNotEmpty()) {
+                RelayNotifier.consume(getApplication(), fresh)
+            }
+            if (notify.lastId > seen) {
+                prefs.saveLastNotifyId(notify.lastId)
+            }
+        }
+    }
+
+    /** 对讲捷径（F33 正向）：说「对讲，饭好了」——话从书桌喇叭出来，不经大脑。 */
+    private val intercomPrefix = Regex("^(?:对讲|广播|喇叭说)[，,：:.\\s]+(.+)$")
+
+    private suspend fun sendAnnounce(message: String) {
+        val connection = _ui.value.connection
+        if (!currentLink().pollsHub || !connection.isConfigured) return
+        val result = withContext(Dispatchers.IO) {
+            runCatching { client.companionAnnounce(connection, message) }
+        }
+        result.fold(
+            onSuccess = { reply ->
+                _ui.update {
+                    it.copy(
+                        companionHeard = message,
+                        companionReply = reply.text.ifBlank { message },
+                        companionError = null,
+                    )
+                }
+            },
+            onFailure = { error ->
+                handleFailure(error)
+                _ui.update {
+                    it.copy(companionHeard = message, companionError = "对讲没送出去。")
+                }
+            },
+        )
+    }
+
     private fun patchDevice(deviceId: String, transform: (HubDevice) -> HubDevice) {
         _ui.update { state ->
             val snap = state.snapshot ?: return@update state
@@ -1358,6 +1411,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 noteHubUp()
                 noteDeskPc(snapshot.pc?.online)
                 presenceReporter.onPoll(onWifi = onWifi(), reachable = true, nowMs = SystemClock.elapsedRealtime())
+                consumeRelay(snapshot)
                 _ui.update {
                     it.copy(
                         snapshot = snapshot,

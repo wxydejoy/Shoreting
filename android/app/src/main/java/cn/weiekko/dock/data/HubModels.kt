@@ -19,6 +19,22 @@ data class Snapshot(
     val media: MediaInfo? = null,
     val companion: CompanionStatus? = null,
     val devices: List<HubDevice> = emptyList(),
+    val notify: NotifyState? = null,
+)
+
+/** 待递到手机的话（F33/F4）：安卓按自增 id 去重，见新的就发本地通知。 */
+@Serializable
+data class NotifyState(
+    val lastId: Int = 0,
+    val items: List<NotifyItem> = emptyList(),
+)
+
+@Serializable
+data class NotifyItem(
+    val id: Int,
+    val text: String,
+    val source: String = "desk",
+    val at: String = "",
 )
 
 @Serializable

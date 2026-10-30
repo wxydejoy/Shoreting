@@ -141,6 +141,23 @@ class HubClient(
         execute(request, readTimeoutMs = STOP_TIMEOUT_MS, expectAuthError = false)
     }
 
+    /**
+     * 对讲（F33 正向）：手机上的一句话直接从书桌喇叭出来，不走 LLM。
+     * 语音侧的「对讲，……」捷径也落在这一条。
+     */
+    fun companionAnnounce(connection: HubConnection, text: String): CompanionChatResponse {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) throw HubException("bad_request", "text 不能为空")
+        val payload = buildJsonObject {
+            put("text", JsonPrimitive(trimmed.take(200)))
+        }
+        val request = authorized(connection, "/v1/companion/announce")
+            .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))
+            .build()
+        val body = execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
+        return decode(body)
+    }
+
     /** 在场上报（F25）：state 只有 home / away，语义见 lan-protocol §6.12。 */
     fun reportPresence(connection: HubConnection, state: String) {
         val payload = buildJsonObject {
