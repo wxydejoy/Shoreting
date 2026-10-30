@@ -119,6 +119,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 |---|---|---|---|
 | `GET` | `/health` | 否 | 探活、确认是 Hub |
 | `GET` | `/v1/snapshot` | 是 | 主屏全部状态（一次拿完） |
+| `GET` | `/metrics` | 本机免、跨机要 | Prometheus 文本：首句延迟、轮询耗时、TTS 失败 |
 | `POST` | `/v1/devices/{id}/command` | 是 | 控制一个设备，或触发一个 logo 动作 |
 | `GET` | `/v1/weather` | 是 | Hub 代取天气（手机可能只有局域网） |
 | `POST` | `/v1/telemetry` | 是 | Windows 探针上报 CPU / GPU / 进程名 |
@@ -699,6 +700,45 @@ POST /v1/companion/read/jobs/{id}/delete
 `GET /v1/companion/story` 返回是否在读、字偏移、章序号、当前句、`timer_min`、`timer_remaining_sec`、`stopped_by`。`POST /v1/companion/story/timer` 的 `minutes` 只能是 `0`、`15`、`30`、`45`、`60`。`0` 是关。默认 30 分钟。暂停会冻住剩余时间。到点或读完清掉倒计时，下一次播放才重新给满。
 
 页头停止仍是 `POST /v1/companion/stop`。故事正在读时，这次停止同时留下书签。
+
+---
+
+### 6.10 `GET /metrics`
+
+给 Prometheus 抓的纯文本指标。**安卓不打**，它不是协议面的一部分，改起来也不受 v1 约束。
+
+鉴权：本机直连免 Token（和 `/chats` 一致）；跨机抓要带 `Authorization: Bearer <token>`。
+不设这个例外的话，同网段谁都能看出你几点在跟谁说话。
+
+```
+# TYPE hub_companion_chat_total counter
+hub_companion_chat_total 12
+# TYPE hub_companion_first_sentence_ms histogram
+hub_companion_first_sentence_ms_bucket{le="300"} 2
+hub_companion_first_sentence_ms_bucket{le="600"} 7
+...
+hub_companion_first_sentence_ms_sum 8421
+hub_companion_first_sentence_ms_count 12
+# TYPE hub_snapshot_ms histogram
+hub_snapshot_ms_count 240
+# TYPE hub_mijia_login_ok gauge
+hub_mijia_login_ok 1
+```
+
+| 指标 | 类型 | 说明 |
+|---|---|---|
+| `hub_companion_chat_total` | counter | 伴侣轮数 |
+| `hub_companion_first_sentence_ms` | histogram | **最重要的一条**：从收到一句话到第一句出声。超过 1.5 秒，体感就是「卡」 |
+| `hub_companion_chat_ms` | histogram | 一轮对话从头到尾（含等全文给字幕） |
+| `hub_companion_tts_fail_total` | counter | TTS 失败，`reason` 区分 `tts_error` / `tts_empty` |
+| `hub_companion_llm_error_total` | counter | 大脑报错 |
+| `hub_snapshot_ms` | histogram | `/v1/snapshot` 的处理耗时（手机每 3s 一次） |
+| `hub_mijia_login_ok` | gauge | 米家登录态，0/1 |
+| `hub_devices_configured` | gauge | 配置里有多少台设备 |
+| `hub_companion_enabled` | gauge | 伴侣是否开启 |
+
+计数在进程内，重启归零；要长期趋势就接到真正的时间序列库上。桶的边界是
+300 / 600 / 1000 / 1500 / 2500 / 4000 / 8000 毫秒。
 
 ---
 

@@ -115,6 +115,7 @@ from dock_hub.persona import (
     speak_timer,
     unsolicited_block_reason,
 )
+from dock_hub.metrics import METRICS
 
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
@@ -1123,7 +1124,34 @@ def _ms(started: float) -> int:
 
 
 def _latency(turn: str, stage: str, **fields: Any) -> None:
+    """一行日志 + 一个计数。日志给人翻，计数给 /metrics 看趋势。"""
+    _count_stage(turn, stage, fields)
     stamp = time.strftime("%H:%M:%S")
     parts = [f"latency {stamp} turn={turn} stage={stage}"]
     parts.extend(f"{key}={value}" for key, value in fields.items())
     print(" ".join(parts), flush=True)
+def _count_stage(turn: str, stage: str, fields: dict[str, Any]) -> None:
+    """把打点翻成指标。
+
+    只挑「看趋势时真的会问」的几个：一轮对话、一轮的耗时、首句延迟、
+    TTS 失败、大脑报错。turn 是随机 id，绝不能进 label——那会把基数打爆。
+    """
+    if stage == "chat_recv":
+        METRICS.note_turn(turn)
+        return
+    if stage == "tts_first_sentence":
+        first = METRICS.first_sentence(turn)
+        if first is not None:
+            METRICS.observe("hub_companion_first_sentence_ms", round(first, 1))
+        return
+    if stage == "chat_total":
+        METRICS.inc("hub_companion_chat_total")
+        ms = fields.get("ms")
+        if isinstance(ms, (int, float)):
+            METRICS.observe("hub_companion_chat_ms", float(ms))
+        return
+    if stage in {"tts_error", "tts_empty"}:
+        METRICS.inc("hub_companion_tts_fail_total", reason=stage)
+        return
+    if stage == "ollama_error":
+        METRICS.inc("hub_companion_llm_error_total")
