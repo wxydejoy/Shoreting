@@ -310,6 +310,21 @@ class AlarmConfig:
 
 
 @dataclass
+class AmbienceConfig:
+    """灯光氛围（F17）：灯带亮度跟着「桌面在干嘛」走。
+
+    番茄钟在走 → ``timer_brightness``（专注档）；睡前朗读在念 →
+    ``reading_brightness``（睡前档）；都没有 → 回到进来前那一档。
+    ``device`` 空 = 整条关着。硬件只有亮度没有颜色/色温，所以「变色」
+    在这条里就是「变亮变暗」。
+    """
+
+    device: str = ""
+    timer_brightness: int = 60
+    reading_brightness: int = 15
+
+
+@dataclass
 class ThemeConfig:
     """主题皮肤（F36）。日期归 Hub：生日、考试周；节日（春节等）内置。"""
 
@@ -384,6 +399,7 @@ class HubConfig:
     focus: FocusConfig = field(default_factory=FocusConfig)
     dusk: DuskConfig = field(default_factory=DuskConfig)
     alarm: AlarmConfig = field(default_factory=AlarmConfig)
+    ambience: AmbienceConfig = field(default_factory=AmbienceConfig)
     theme: ThemeConfig = field(default_factory=ThemeConfig)
     wallpaper: WallpaperConfig = field(default_factory=WallpaperConfig)
     diary: DiaryConfig = field(default_factory=DiaryConfig)
@@ -501,6 +517,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     focus = _parse_focus(raw.get("focus"), scenes)
     dusk = _parse_dusk(raw.get("dusk"), devices)
     alarm = _parse_alarm(raw.get("alarm"), devices)
+    ambience = _parse_ambience(raw.get("ambience"), devices)
     theme = _parse_theme(raw.get("theme"))
     wallpaper = _parse_wallpaper(raw.get("wallpaper"))
     diary = _parse_diary(raw.get("diary"))
@@ -527,6 +544,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         focus=focus,
         dusk=dusk,
         alarm=alarm,
+        ambience=ambience,
         theme=theme,
         wallpaper=wallpaper,
         diary=diary,
@@ -1315,6 +1333,25 @@ def _parse_alarm(raw: Any, devices: list[DeviceConfig]) -> AlarmConfig:
     )
 
 
+def _parse_ambience(raw: Any, devices: list[DeviceConfig]) -> AmbienceConfig:
+    """灯光氛围（F17）：device 不写就是关着；写了就必须存在。"""
+    if raw is None or raw is False:
+        return AmbienceConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("ambience 必须是对象，或用 ambience: false 关掉")
+    device = str(raw.get("device") or "").strip()
+    if not device:
+        return AmbienceConfig()
+    known = {item.id for item in devices}
+    if device not in known:
+        raise ValueError(f"ambience.device 指向的设备 {device!r} 不存在")
+    return AmbienceConfig(
+        device=device,
+        timer_brightness=_dusk_int(raw, "timer_brightness", 60, 1, 100),
+        reading_brightness=_dusk_int(raw, "reading_brightness", 15, 1, 100),
+    )
+
+
 def _parse_wallpaper(raw: Any) -> WallpaperConfig:
     """一句话壁纸（F39）：不写或 true 开，false 关。"""
     if raw is None or raw is True:
@@ -1547,6 +1584,12 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             "ramp_min": config.alarm.ramp_min,
             "say": config.alarm.say,
             **({"device": config.alarm.device} if config.alarm.device else {}),
+        }
+    if config.ambience.device:
+        raw["ambience"] = {
+            "device": config.ambience.device,
+            "timer_brightness": config.ambience.timer_brightness,
+            "reading_brightness": config.ambience.reading_brightness,
         }
     if config.theme.birthday or config.theme.exam_weeks:
         raw["theme"] = {

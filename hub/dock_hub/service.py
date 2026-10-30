@@ -30,6 +30,7 @@ class _StorySpeaker:
 from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig, PcConfig, PropConfig, TemperatureConfig, default_config_path
 from dock_hub.dusk import DuskRamp
 from dock_hub.alarm import AlarmRamp
+from dock_hub.ambience import Ambience
 from dock_hub.system_volume import read_output_volume, write_output_volume
 from dock_hub.theme import birthday_text, occasions_for
 from dock_hub.wallpaper import wallpaper_line
@@ -183,6 +184,8 @@ class DockHub:
         self._start_dusk()
         self._alarm: AlarmRamp | None = None
         self._start_alarm()
+        self._ambience: Ambience | None = None
+        self._start_ambience()
         self.reporter.start()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
         self.scheduler.start()
@@ -609,6 +612,7 @@ class DockHub:
         self._start_focus()
         self._start_dusk()
         self._start_alarm()
+        self._start_ambience()
         self.reporter.start()
         self.scheduler.stop()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
@@ -1462,6 +1466,46 @@ class DockHub:
         """灯现在亮不亮。拿不到状态就当亮着——联动不因读不到状态就罢工。"""
         state = self._companion_device_state(device_id)
         return bool(state is None or state.get("on") is not False)
+
+    def _device_brightness(self, device_id: str) -> int | None:
+        """灯现在的亮度百分比。拿不到就 None——氛围退场时不瞎猜原来多亮。"""
+        state = self._companion_device_state(device_id)
+        if not isinstance(state, dict):
+            return None
+        value = state.get("brightness")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return max(1, min(100, int(value)))
+
+    def _start_ambience(self) -> None:
+        """灯光氛围（F17）。没配 device 就不起线程；改了配置重建线程。"""
+        if self._ambience is not None:
+            self._ambience.stop()
+        self._ambience = None
+        if not self.config.ambience.device:
+            return
+        self._ambience = Ambience(
+            self.config.ambience,
+            timer_active=self._timer_active,
+            reading_active=self._reading_active,
+            set_brightness=self._dusk_set,
+            device_on=self._dusk_device_on,
+            read_brightness=self._device_brightness,
+        )
+        self._ambience.start()
+
+    def _timer_active(self) -> bool:
+        """番茄钟/倒计时在走（F17 专注档的开关）。正计时不算——记时长不是专注。"""
+        snap = self.companion.timers.snapshot()
+        return bool(snap and snap.get("mode") == "timer")
+
+    def _reading_active(self) -> bool:
+        """睡前朗读正在念（F17 睡前档的开关）。朗读挂了就当没在念。"""
+        try:
+            story = self.books.story()
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(isinstance(story, dict) and story.get("playing"))
 
     def _start_alarm(self) -> None:
         """起床闹钟（F11）。没配就不起线程；改了配置重建线程。"""

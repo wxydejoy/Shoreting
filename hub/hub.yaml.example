@@ -267,3 +267,11 @@ devices:
 # calendar:
 #   url: "https://example.com/calendar.ics"
 #   name: "我的日历"
+#
+# 灯光氛围（F17）：灯带亮度跟着「桌面在干嘛」走——番茄钟在走抬到专注档，
+# 睡前朗读在念降到睡前档，结束回到原来那档。被手动关掉就不再抢。
+# 硬件只有亮度，没有颜色/色温，所以没有「变色」。device 不写就是关着。
+# ambience:
+#   device: desk-led
+#   timer_brightness: 60     # 专注档
+#   reading_brightness: 15   # 睡前档
