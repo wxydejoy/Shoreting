@@ -60,6 +60,8 @@ def _safe_next_path(raw: str | None) -> str:
 class DockHub:
     def __init__(self, config: HubConfig) -> None:
         self.config = config
+        self._change_cond = threading.Condition()
+        self._change_seq = 0
         self.session: MijiaSession | None = None
         self._mijia_lock = threading.Lock()
         self._device_locks: dict[str, threading.Lock] = {}
@@ -249,6 +251,7 @@ class DockHub:
             self._remote_running = names
             self._remote_at = time.monotonic()
         self._set_desk_pc_online(bool(sample.get("online")))
+        self.note_change()
         return {"ok": True}
 
     def pc_snapshot(self) -> dict[str, Any] | None:
@@ -275,6 +278,7 @@ class DockHub:
             return
         self._desk_pc_online = on
         self.follow_pc(on)
+        self.note_change()
 
     def snapshot(self) -> dict[str, Any]:
         status, message, temperature, devices = self._mijia_desk_slice()
@@ -436,6 +440,31 @@ class DockHub:
     def note_presence(self) -> None:
         self.companion.note_presence()
 
+    def note_change(self) -> None:
+        """状态变了就吱一声：挂着长轮询的 snapshot 会立刻醒过来。"""
+
+        with self._change_cond:
+            self._change_seq += 1
+            self._change_cond.notify_all()
+
+    def snapshot_seq(self) -> int:
+        with self._change_cond:
+            return self._change_seq
+
+    def wait_change(self, since: int, timeout: float) -> bool:
+        """等到 seq 变了或超时。True 表示期间真有变化。"""
+
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        with self._change_cond:
+            if self._change_seq != since:
+                return True
+            while self._change_seq == since:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return False
+                self._change_cond.wait(left)
+            return True
+
     def _game_running(self) -> bool:
         actions = [cfg for cfg in self.config.devices if cfg.is_action]
         if not actions:
@@ -497,7 +526,9 @@ class DockHub:
         self.command(device_id, body)
 
     def companion_chat(self, body: dict[str, Any] | None) -> dict[str, Any]:
-        return self.companion.chat(body or {}, "")
+        out = self.companion.chat(body or {}, "")
+        self.note_change()
+        return out
 
     def companion_chats(self, *, limit: int = 200, query: str = "") -> dict[str, Any]:
         return {"items": self.chat_log.list(limit=limit, query=query)}
@@ -506,19 +537,27 @@ class DockHub:
         return self.companion.audio(audio_id)
 
     def companion_stop(self) -> dict[str, Any]:
-        return self.companion.stop()
+        out = self.companion.stop()
+        self.note_change()
+        return out
 
     def companion_announce(self, body: dict[str, Any] | None) -> dict[str, Any]:
-        return self.companion.announce(body or {})
+        out = self.companion.announce(body or {})
+        self.note_change()
+        return out
 
     def companion_read(self, body: dict[str, Any] | None) -> dict[str, Any]:
-        return self.companion.read(body or {})
+        out = self.companion.read(body or {})
+        self.note_change()
+        return out
 
     def companion_read_jobs(self) -> dict[str, Any]:
         return self.companion.read_jobs()
 
     def companion_read_job_action(self, ident: str, action: str) -> dict[str, Any]:
-        return self.companion.read_job_action(ident, action)
+        out = self.companion.read_job_action(ident, action)
+        self.note_change()
+        return out
 
     def _lookup_device(self, device_id: str) -> DeviceConfig:
         try:
@@ -532,6 +571,11 @@ class DockHub:
     def command(self, device_id: str, body: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(body, dict) or not body:
             raise HubError("bad_request", "命令不能为空")
+        payload = self._command_locked(device_id, body)
+        self.note_change()
+        return payload
+
+    def _command_locked(self, device_id: str, body: dict[str, Any]) -> dict[str, Any]:
         if device_id == "media":
             return self._command_media(body)
         cfg = self._lookup_device(device_id)
@@ -899,6 +943,7 @@ class DockHub:
     ) -> dict[str, Any]:
         body = {
             "protocol": PROTOCOL,
+            "seq": self.snapshot_seq(),
             "hub": {
                 "name": self.config.name,
                 "mijia": mijia,

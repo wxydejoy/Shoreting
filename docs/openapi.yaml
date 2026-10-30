@@ -36,8 +36,24 @@ paths:
                 $ref: "#/components/schemas/Health"
   /v1/snapshot:
     get:
-      summary: Full home-screen state
+      summary: Full home-screen state (optionally long-polled)
       operationId: getSnapshot
+      parameters:
+        - name: since
+          in: query
+          required: false
+          description: Last seen Snapshot.seq. With wait>0 the Hub holds the request until seq changes.
+          schema:
+            type: integer
+            minimum: 0
+        - name: wait
+          in: query
+          required: false
+          description: Long-poll window in seconds, clamped to 30. Omit for a plain poll.
+          schema:
+            type: number
+            minimum: 0
+            maximum: 30
       responses:
         "200":
           description: Snapshot (including login_required)
@@ -625,6 +641,12 @@ components:
         protocol:
           type: integer
           enum: [1]
+        seq:
+          type: integer
+          minimum: 0
+          description: >-
+            Monotonic state version. Pass back as `since` to long-poll; ignore
+            when polling normally.
         hub:
           $ref: "#/components/schemas/HubStatus"
         temperature:
