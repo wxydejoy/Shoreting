@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>桌面周报 · 守岸人</title>
+  <link rel="stylesheet" href="/assets/litera.min.css" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; background: #0e1013; color: #e6e6e6;
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+      display: flex; align-items: center; justify-content: center; min-height: 100vh;
+    }
+    .wrap { width: min(860px, 92vw); padding: 32px 0; }
+    h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+    .sub { color: #8a8f98; font-size: 13px; margin-bottom: 24px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .card { background: #16181d; border: 1px solid #23262d; border-radius: 14px; padding: 16px 18px; }
+    .card .label { color: #8a8f98; font-size: 12px; margin-bottom: 6px; }
+    .card .value { font-size: 26px; font-weight: 600; letter-spacing: -0.5px; }
+    .card .delta { font-size: 12px; margin-top: 4px; color: #8a8f98; }
+    .delta.up { color: #7fb069; }
+    .delta.down { color: #b07f7f; }
+    .line { background: #16181d; border: 1px solid #23262d; border-radius: 14px; padding: 16px 18px; margin-bottom: 24px; font-size: 15px; line-height: 1.7; }
+    .line.empty { color: #8a8f98; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { color: #8a8f98; text-align: left; font-weight: 500; padding: 8px 10px; border-bottom: 1px solid #23262d; }
+    td { padding: 8px 10px; border-bottom: 1px solid #1b1e24; }
+    tr:last-child td { border-bottom: none; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .weekday { color: #8a8f98; }
+    .weekday.today { color: #e6e6e6; }
+    .empty { color: #8a8f98; padding: 24px 0; text-align: center; }
+    .foot { color: #585d66; font-size: 12px; margin-top: 18px; }
+    a { color: #8a8f98; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>桌面周报</h1>
+    <p class="sub">最近 7 天（含今天）。数据只留在你自己的 Hub 上。</p>
+    <div id="line" class="line empty">读着呢…</div>
+    <div class="cards" id="cards"></div>
+    <div id="tableBox"></div>
+    <p class="foot">她会在周日晚 20:00 把这句念出来（proactive 开着的时候）。<a href="/chats">看对话原文</a></p>
+  </main>
+  <script>
+    const WEEKDAY = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+    function hours(sec) {
+      const minutes = Math.round((sec || 0) / 60);
+      if (minutes <= 0) return "0 分钟";
+      if (minutes < 60) return minutes + " 分钟";
+      const h = Math.floor(minutes / 60), m = minutes % 60;
+      return m ? h + " 小时 " + m + " 分" : h + " 小时";
+    }
+    function minutes(sec) {
+      const m = Math.round((sec || 0) / 60);
+      return m > 0 ? m + " 分钟" : "0 分钟";
+    }
+    function deltaText(sec) {
+      const d = Math.round(sec / 60);
+      if (!d) return "";
+      const word = d > 0 ? "比上周多 " : "比上周少 ";
+      const abs = Math.abs(d);
+      return word + (abs >= 60 ? Math.floor(abs / 60) + " 小时" + (abs % 60 ? " " + (abs % 60) + " 分" : "") : abs + " 分钟");
+    }
+    function card(label, value, delta) {
+      const cls = delta > 0 ? "delta up" : delta < 0 ? "delta down" : "delta";
+      const text = delta === undefined ? "" : (delta ? deltaText(delta) : "和上周持平");
+      return `<div class="card"><div class="label">${label}</div><div class="value">${value}</div>` +
+             (delta === undefined ? "" : `<div class="${cls}">${text}</div>`) + "</div>";
+    }
+    async function load() {
+      try {
+        const resp = await fetch("/v1/companion/week", { headers: { "Accept": "application/json" } });
+        if (resp.status === 401) { location.href = "/chats?next=/week"; return; }
+        const data = await resp.json();
+        render(data);
+      } catch (err) {
+        document.getElementById("line").textContent = "拉不下来：Hub 不在？";
+      }
+    }
+    function render(data) {
+      const s = data.summary || {};
+      const total = s.total || {};
+      const delta = s.delta || {};
+      const lineBox = document.getElementById("line");
+      if (data.line) {
+        lineBox.className = "line";
+        lineBox.textContent = "「" + data.line + "」";
+      } else {
+        lineBox.className = "line empty";
+        lineBox.textContent = "这一周还没有可说的。开会儿机、聊几句，周日晚上她就有得讲了。";
+      }
+      document.getElementById("cards").innerHTML = [
+        card("在桌时长", hours(total.desk_sec), delta.desk_sec),
+        card("朗读时长", minutes(total.read_sec), undefined),
+        card("最晚一次", s.latest_at || "—", undefined),
+        card("说了多少句", String(total.chats || 0) + " 句", undefined),
+        card("开了几次机", String(total.boots || 0) + " 次", undefined),
+      ].join("");
+      const days = s.days || [];
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = days.map((day) => {
+        const active = day.desk_sec > 0 || day.chats > 0 || day.read_sec > 0 || day.boots > 0;
+        return `<tr><td>${day.date}</td><td class="weekday ${day.date === today ? "today" : ""}">${WEEKDAY[day.weekday] || ""}</td>` +
+          `<td class="num">${hours(day.desk_sec)}</td><td class="num">${minutes(day.read_sec)}</td>` +
+          `<td class="num">${day.chats}</td><td class="num">${day.boots}</td><td class="num">${day.last_at || "—"}</td></tr>`;
+      }).join("");
+      document.getElementById("tableBox").innerHTML =
+        `<table><thead><tr><th>日期</th><th></th><th class="num">在桌</th><th class="num">朗读</th>` +
+        `<th class="num">说话</th><th class="num">开机</th><th class="num">最晚</th></tr></thead>` +
+        `<tbody>${rows || '<tr><td colspan="7" class="empty">还没有台账</td></tr>'}</tbody></table>`;
+    }
+    load();
+  </script>
+</body>
+</html>

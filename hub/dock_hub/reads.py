@@ -29,7 +29,7 @@ from typing import Any, Protocol
 
 from dock_hub.config import ID_RE
 from dock_hub.errors import HubError
-from dock_hub.speech import join_wavs, wav_duration_sec
+from dock_hub.speech import estimate_read_seconds, join_wavs, wav_duration_sec
 
 MAX_READ_JOBS = 24
 """内存里最多留这么多个任务；再多就从最旧的丢（磁盘上的 wav 还在，会从目录里捞回来）。"""
@@ -311,7 +311,13 @@ class ReadJobs:
                         current["status"] = "done"
                         current["done"] = len(chunks)
                         current.pop("_chunks", None)
-                self.host.note(ident, "read_job_done", mode="play")
+                # sec 给周报台账（F27）：边念边出声的没有 wav 可量，按字数估
+                self.host.note(
+                    ident,
+                    "read_job_done",
+                    mode="play",
+                    sec=estimate_read_seconds("".join(chunks)),
+                )
                 return
             joined = join_wavs(parts)
             self.host.keep_clip(ident, joined)
@@ -327,7 +333,12 @@ class ReadJobs:
                     current["filename"] = f"shorekeeper-{ident}.wav"
                     current.pop("_chunks", None)
                     self._write_meta(current)
-            self.host.note(ident, "read_job_done", bytes=len(joined))
+            self.host.note(
+                ident,
+                "read_job_done",
+                bytes=len(joined),
+                sec=round(wav_duration_sec(joined), 3),
+            )
         except (HubError, ValueError, wave.Error) as exc:
             interrupted = isinstance(exc, HubError) and exc.message == "被打断了"
             message = exc.message if isinstance(exc, HubError) else "合成失败"

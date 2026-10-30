@@ -192,13 +192,16 @@ class Proactive:
         config: ProactiveConfig,
         speak: Callable[[str], bool],
         compose_morning: Callable[[datetime], str] | None = None,
+        compose_weekly: Callable[[], str] | None = None,
     ) -> None:
         self.config = config
         self._speak = speak
         self._compose_morning = compose_morning or (lambda now: "早。今天也慢慢来。")
+        self._compose_weekly = compose_weekly or (lambda: "")
         self._day: date | None = None
         self._count = 0
         self._morning_day: date | None = None
+        self._weekly_day: date | None = None
         self._alerted: dict[str, date] = {}
 
     def configure(self, config: ProactiveConfig) -> None:
@@ -216,9 +219,19 @@ class Proactive:
         if self.config.daily_limit and self._count >= self.config.daily_limit:
             return Said(reason="quota")
         due = self._morning_due(now)
-        if due is None:
-            return Said(reason="idle")
-        return self._say(due, now)
+        if due is not None:
+            said = self._say(due, now)
+            if said.spoke:
+                self._morning_day = now.date()
+            return said
+        due = self._weekly_due(now)
+        if due is not None:
+            said = self._say(due, now)
+            if said.spoke or said.reason == "empty":
+                # 空台账也算「今天讲过了」：没有可讲的内容，不值得每半分钟重算
+                self._weekly_day = now.date()
+            return said
+        return Said(reason="idle")
 
     def alert(self, key: str, text: str, now: datetime | None = None) -> Said:
         """异常提醒：免打扰与每日配额照走，同一件事一天最多说一次。
@@ -281,6 +294,20 @@ class Proactive:
             return None
         return self.config.morning.text or self._compose_morning(now)
 
+    def _weekly_due(self, now: datetime) -> str | None:
+        """F27：周日晚上把这一周念一遍。空台账她就不开口。"""
+        at = self.config.weekly_at
+        if not at or now.isoweekday() != 7:
+            return None
+        if self._weekly_day == now.date():
+            return None
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+            minutes=_minutes(at)
+        )
+        if now < start or now - start >= MORNING_WINDOW:
+            return None
+        return self._compose_weekly()
+
     def _say(self, text: str, now: datetime) -> Said:
         spoken = text.strip()
         if not spoken:
@@ -289,7 +316,6 @@ class Proactive:
             # 手机不在、在打游戏、TTS 挂了：不算配额，下次到点还会说
             return Said(reason="blocked")
         self._count += 1
-        self._morning_day = now.date()
         return Said(text=spoken)
 
     def _reset_if_new_day(self, today: date) -> None:
@@ -304,4 +330,5 @@ class Proactive:
             "said_today": self._count,
             "daily_limit": self.config.daily_limit,
             "morning_at": self.config.morning.at or None,
+            "weekly_at": self.config.weekly_at or None,
         }

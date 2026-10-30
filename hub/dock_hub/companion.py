@@ -172,6 +172,8 @@ class Companion:
         self._story_books = None
         self.reads = ReadJobs(self)
         self._memory: MemoryStore | None = None
+        # F27：朗读任务念完的秒数往这儿送（service 接到周报台账）；None = 没接
+        self.on_read_done = None
 
     def configure(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
@@ -538,6 +540,14 @@ class Companion:
 
     def note(self, turn: str, stage: str, **fields: Any) -> None:
         _latency(turn, stage, **fields)
+        if stage == "read_job_done" and self.on_read_done is not None:
+            seconds = fields.get("sec")
+            try:
+                seconds = float(seconds) if seconds is not None else 0.0
+                if seconds > 0:
+                    self.on_read_done(seconds)
+            except Exception as exc:  # noqa: BLE001 - 台账坏了不该连累朗读
+                logs.swallowed("周报朗读记账", exc)
 
     def read(self, body: dict[str, Any]) -> dict[str, Any]:
         """Hub 朗读页：预估时长后，书桌播放或生成可下载 wav。"""

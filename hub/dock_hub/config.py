@@ -119,6 +119,8 @@ class ProactiveConfig:
     morning: MorningConfig = field(default_factory=MorningConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     presence: PresenceConfig = field(default_factory=PresenceConfig)
+    # F27 周报：周日晚上把这一周念一遍（HH:MM，空=不念）；内容按台账自动拼
+    weekly_at: str = "20:00"
 
 
 @dataclass
@@ -880,6 +882,8 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
         )
     else:
         raise ValueError("proactive.presence 必须是对象，或用 presence: false 关掉问候")
+    weekly_raw = raw.get("weekly_at")
+    weekly_at = parse_clock(weekly_raw, "proactive.weekly_at") if weekly_raw else ""
     return ProactiveConfig(
         enabled=True,
         daily_limit=limit,
@@ -887,6 +891,7 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
         morning=morning,
         alerts=alerts,
         presence=presence,
+        weekly_at=weekly_at,
     )
 
 
@@ -1208,6 +1213,8 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
         "daily_limit": config.daily_limit,
         "quiet": list(config.quiet),
     }
+    if config.weekly_at != ProactiveConfig().weekly_at:
+        raw["weekly_at"] = config.weekly_at
     if config.morning.at:
         morning: dict[str, Any] = {"at": config.morning.at}
         if config.morning.text:

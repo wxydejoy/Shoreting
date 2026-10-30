@@ -413,6 +413,49 @@ paths:
                       $ref: "#/components/schemas/ChatTurn"
         "401":
           $ref: "#/components/responses/Error"
+  /v1/companion/week:
+    get:
+      summary: 桌面周报（F27）。/week 页的数据源；安卓不打，想看开网页。
+      operationId: getCompanionWeek
+      responses:
+        "200":
+          description: 最近 7 天（含今天）逐日 + 合计 + 与上个 7 天的差
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  line:
+                    type: string
+                    description: 周日晚她会念的那句；台账为空时是空串
+                  summary:
+                    type: object
+                    properties:
+                      days:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            date: { type: string, format: date }
+                            weekday: { type: integer, minimum: 1, maximum: 7 }
+                            desk_sec: { type: integer }
+                            read_sec: { type: integer }
+                            chats: { type: integer }
+                            boots: { type: integer }
+                            last_at:
+                              type: string
+                              description: HH:MM，当天最后一次活动
+                      total:
+                        type: object
+                        description: desk_sec / read_sec / chats / boots 的 7 天合计
+                      delta:
+                        type: object
+                        description: 合计减去再上一个 7 天
+                      latest_at:
+                        type: string
+                        description: 本周最晚一次活动的时刻
+        "401":
+          $ref: "#/components/responses/Error"
   /v1/companion/memory:
     get:
       summary: 长期记忆列表（F28）。设置页「她记得的事」，逐条可见可删。
