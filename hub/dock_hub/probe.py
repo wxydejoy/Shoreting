@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
+from dock_hub import logs
 from dock_hub.config import DEFAULT_PROBE_HUB_URL, HubConfig, PcConfig
 from dock_hub.accesslog import AccessLog
 from dock_hub.errors import HubError
@@ -268,16 +269,16 @@ class ProbeRuntime:
         self.stop_event.set()
         try:
             self.sampler.stop()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - 关停阶段尽力而为
+            logs.swallowed("停止探针采样", exc)
         try:
             self.server.shutdown()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logs.swallowed("关闭探针 HTTP", exc)
         try:
             self.server.server_close()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logs.swallowed("释放探针端口", exc)
 
 
 def _hide_windows_console() -> None:
@@ -287,8 +288,8 @@ def _hide_windows_console() -> None:
         import ctypes
 
         ctypes.windll.kernel32.FreeConsole()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - 打包成托盘 exe 时才需要
+        logs.swallowed("隐藏 Windows 控制台", exc)
 
 
 def start_probe(config: HubConfig) -> ProbeRuntime:
