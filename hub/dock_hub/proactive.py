@@ -22,9 +22,16 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from dock_hub.config import ProactiveConfig
+from dock_hub.weather import wmo_condition
 
 MORNING_WINDOW = timedelta(hours=2)
 """早间播报的有效窗口：到点后两小时内都还值得说，再晚就成了下午茶问候。"""
+
+WEATHER_WINDOW_HOURS = 2
+WEATHER_TEMP_DROP_C = 5.0
+WEATHER_WIND_KMH = 40.0
+PRECIP_CONDITIONS = frozenset({"雨", "毛毛雨", "阵雨", "雷阵雨", "雷暴冰雹"})
+SNOW_CONDITIONS = frozenset({"雪", "阵雪"})
 
 
 def _minutes(clock: str) -> int:
@@ -41,6 +48,68 @@ def in_quiet_hours(clock: tuple[str, str], now: datetime) -> bool:
     if start < end:
         return start <= current < end
     return current >= start or current < end
+
+
+def _upcoming_hours(now: datetime, hourly: dict[str, Any]) -> list[tuple[int, float, float]]:
+    """未来两小时的 (code, celsius, wind_kmh)；数据残缺的整点直接跳过。
+
+    hourly 的时间串是城市当地时区的（Open-Meteo timezone=auto），按无时区
+    本地时间比对；带偏移的串也按时刻取面值——差一两个整点不值得较真。
+    """
+    data = hourly.get("hourly") or {}
+    times = data.get("time") or []
+    temps = data.get("celsius") or []
+    codes = data.get("code") or []
+    winds = data.get("wind_kmh") or []
+    now_naive = now.replace(tzinfo=None)
+    horizon = now_naive + timedelta(hours=WEATHER_WINDOW_HOURS)
+    out: list[tuple[int, float, float]] = []
+    for i, raw in enumerate(times):
+        try:
+            when = datetime.fromisoformat(str(raw))
+        except ValueError:
+            continue
+        if when.tzinfo is not None:
+            when = when.replace(tzinfo=None)
+        if not (now_naive < when <= horizon):
+            continue
+        if i >= len(temps):
+            continue
+        code = int(codes[i]) if i < len(codes) else 3
+        wind = float(winds[i]) if i < len(winds) else 0.0
+        out.append((code, float(temps[i]), wind))
+    return out
+
+
+def weather_change_text(
+    now: datetime,
+    current_celsius: float,
+    current_condition: str,
+    hourly: dict[str, Any],
+) -> str | None:
+    """看未来两小时有什么值得提前说一句的变化；没有就 None。
+
+    只推「变化」不推「状态」：现在已经在下雨就不再说有雨，免得天天都开口。
+    一次最多挑一条，按雨 > 雪 > 降温 > 大风排——出门最怕的排前面。
+    """
+    entries = _upcoming_hours(now, hourly)
+    if not entries:
+        return None
+    wet_now = current_condition in PRECIP_CONDITIONS or current_condition in SNOW_CONDITIONS
+    if not wet_now:
+        for code, _, _ in entries:
+            cond = wmo_condition(code)
+            if cond in SNOW_CONDITIONS:
+                return "接下来两小时要下雪了，路上慢点。"
+            if cond in PRECIP_CONDITIONS:
+                return "接下来两小时有雨，出门带伞。"
+    drop = current_celsius - min(celsius for _, celsius, _ in entries)
+    if drop >= WEATHER_TEMP_DROP_C:
+        return f"过两个钟头要降 {round(drop)} 度，多穿点。"
+    for _, _, wind in entries:
+        if wind >= WEATHER_WIND_KMH:
+            return "等会儿风要大了，窗户关严实点。"
+    return None
 
 
 class Sustained:

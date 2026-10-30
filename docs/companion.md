@@ -130,6 +130,8 @@ HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
 
 另有**异常提醒**（`proactive.alerts`，跟主动播报共用每日配额）：Windows CPU 温度超过 `temp_celsius`（默认 85，热满 3 分钟才说）、米家设备离线超过 `offline_minutes`（默认 10 分钟）、连续用电脑超过 `sedentary_minutes`（默认 90，键鼠空闲 5 分钟就算休息过了，探针要在 Windows 上跑才报得了键鼠）各说一句，一天一件事最多一句；启动项、灯带、探针电脑不提醒——电脑关机是常态。阈值写 0 或 `alerts: false` 关掉。配置示例：
 
+**天气突变**（`alerts.weather`，默认开）也走同一条路：每小时看一次逐小时预报，只在「变化」上开口——现在没下雨才提醒两小时内有雨/雪、气温要降 5 度以上、要起大风，一次最多挑一条（雨 > 雪 > 降温 > 大风），一天最多一句，只在 07:00–21:00 之间看。城市用手机最近一次查过天气的那个；手机从没查过天气就不提醒。预报拿不到就闭嘴，不重试到烦人。
+
 ```yaml
 proactive:
   daily_limit: 6
