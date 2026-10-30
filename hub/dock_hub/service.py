@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 import urllib.error
 import urllib.request
 from typing import Any
@@ -31,6 +32,7 @@ from dock_hub.dusk import DuskRamp
 from dock_hub.alarm import AlarmRamp
 from dock_hub.system_volume import read_output_volume, write_output_volume
 from dock_hub.theme import birthday_text, occasions_for
+from dock_hub.photos import list_photos, photo_bytes as read_photo
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
@@ -227,6 +229,31 @@ class DockHub:
         """今天是什么日子（F36）。没配生日和考试周、又不是节日，就不用带。"""
         occasions = occasions_for(datetime.now().astimezone().date(), self.config.theme)
         return {"occasions": occasions} if occasions else None
+
+    def _photos_dir(self) -> Path | None:
+        """回忆相框（F37）的图库：hub.yaml 旁边的 photos/，有这个目录才算开。"""
+        if self.config.path is None:
+            return None
+        return self.config.path.parent / "photos"
+
+    def _photo_ids(self) -> list[str]:
+        return list_photos(self._photos_dir())
+
+    def _photos_payload(self) -> dict[str, list[str]] | None:
+        """相框名单进 snapshot。没 photos/ 目录或里面没图，就不带这个字段。"""
+        ids = self._photo_ids()
+        return {"ids": ids} if ids else None
+
+    def photo_bytes(self, photo_id: str) -> tuple[bytes, str, str]:
+        """照片字节 + Content-Type + ETag。id 必须在名单里，翻不进上级目录。"""
+        folder = self._photos_dir()
+        try:
+            data, ctype = read_photo(folder, photo_id)
+        except ValueError as exc:
+            raise HubError("not_found", str(exc)) from exc
+        stamp = (folder / Path(photo_id).name).stat()
+        etag = f'W/"{int(stamp.st_mtime)}-{stamp.st_size}"'
+        return data, ctype, etag
 
     def _evaluate_alerts(self) -> None:
         """温度太高、设备失联：坏够久才开口，一天一件事最多一句。"""
@@ -1758,6 +1785,7 @@ class DockHub:
             "notify": self.notify.snapshot(),
             "alarm": self._alarm.snapshot() if self._alarm else None,
             "theme": self._theme_payload(),
+            "photos": self._photos_payload(),
         }
         self._note_desk_snapshot(body)
         return body

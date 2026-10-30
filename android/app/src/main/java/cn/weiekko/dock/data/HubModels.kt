@@ -23,6 +23,13 @@ data class Snapshot(
     val notify: NotifyState? = null,
     val alarm: AlarmStatus? = null,
     val theme: ThemeStatus? = null,
+    val photos: PhotoIds? = null,
+)
+
+/** 回忆相框（F37）：Hub 的照片名单，配置旁有 photos/ 目录才有。 */
+@Serializable
+data class PhotoIds(
+    val ids: List<String> = emptyList(),
 )
 
 /** 今天是什么日子（F36）：Hub 管日期（生日/节日/考试周），天气归手机自己。 */

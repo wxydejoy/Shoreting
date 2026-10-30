@@ -327,6 +327,33 @@ paths:
           $ref: "#/components/responses/Error"
         "502":
           $ref: "#/components/responses/Error"
+  /v1/photos/{id}:
+    get:
+      summary: One photo (F37)
+      description: >
+        回忆相框（F37）：一张照片的原图。名单走 snapshot.photos。
+        id 只认 basename，带路径一律 404；mime 按扩展名
+        （jpg/png/webp/heic/gif）。响应带 ETag，If-None-Match 命中回 304。
+      operationId: getPhoto
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: 2026-05-21.jpg
+      responses:
+        "200":
+          description: Photo bytes
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /v1/telemetry:
     post:
       summary: Windows probe pushes CPU / GPU telemetry into the snapshot
@@ -1086,6 +1113,13 @@ components:
           description: >
             今天是什么日子（F36）。日期归 Hub（生日/节日/考试周），
             天气归手机。没配也不是节日时为 null。
+        photos:
+          allOf:
+            - $ref: "#/components/schemas/PhotoIds"
+          nullable: true
+          description: >
+            回忆相框（F37）的照片名单。配置旁有 photos/ 目录且有图才带，
+            否则为 null。
     ThemeStatus:
       type: object
       required: [occasions]
@@ -1518,6 +1552,15 @@ components:
           description: >
             PM2.5（μg/m³，F14）。空气源顺路捎上，拿不到就不出现这个字段；
             安卓按可空处理。
+    PhotoIds:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          description: 回忆相框（F37）的照片文件名，按名字排序；没有 photos/ 目录就不带这个字段
+          items:
+            type: string
     TelemetryRequest:
       type: object
       properties:

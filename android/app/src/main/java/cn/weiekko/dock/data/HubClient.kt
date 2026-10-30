@@ -4,6 +4,10 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -198,6 +202,20 @@ class HubClient(
             .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))
             .build()
         execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS, expectAuthError = false)
+    }
+
+    /** 一张照片的原图。id 只认 basename，服务端对穿越一律 404。 */
+    fun photo(connection: HubConnection, id: String): ByteArray {
+        val safe = id.trim()
+        if (safe.isEmpty() || safe.contains('/') || safe.contains('\\') || safe == "..") {
+            throw HubException("bad_request", "照片 id 无效")
+        }
+        val encoded = java.net.URLEncoder.encode(safe, "UTF-8")
+        val request = authorized(connection, "/v1/photos/$encoded")
+            .header("Accept", "image/*")
+            .get()
+            .build()
+        return executeBytes(request, readTimeoutMs = SNAPSHOT_TIMEOUT_MS)
     }
 
     fun companionAudio(connection: HubConnection, audioId: String): ByteArray {

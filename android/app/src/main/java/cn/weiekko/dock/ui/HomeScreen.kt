@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -137,6 +138,21 @@ fun HomeScreen(
     }
     val editing = state.editing
     BackHandler(enabled = editing, onBack = onExitEdit)
+
+    // F37 回忆相框：没有数据可看的时刻，整块屏幕交给一张慢慢换的照片
+    val frameBitmap = state.framePhoto
+    if (frameBitmap != null) {
+        Crossfade(targetState = frameBitmap, label = "frame") { bitmap ->
+            Image(
+                bitmap = bitmap,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                alpha = 0.92f,
+            )
+        }
+        return
+    }
     val burn = rememberBurnShifts(active = !editing)
 
     CompositionLocalProvider(
