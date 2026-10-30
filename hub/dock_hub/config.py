@@ -175,6 +175,8 @@ class SceneConfig:
     name: str
     on: list[str] = field(default_factory=list)
     off: list[str] = field(default_factory=list)
+    # 要一起启动的电脑程序（启动项 id），「开工」= 开三个程序 + 调灯
+    run: list[str] = field(default_factory=list)
     brightness: dict[str, int] = field(default_factory=dict)
     say: str | None = None
     phrases: list[str] = field(default_factory=list)
@@ -340,6 +342,7 @@ def _parse_scenes(raw: Any, devices: list[DeviceConfig]) -> list[SceneConfig]:
         seen.add(ident)
         on = _scene_ids(ident, "on", item.get("on"), by_id)
         off = _scene_ids(ident, "off", item.get("off"), by_id)
+        run = _scene_run_ids(ident, item.get("run"), by_id)
         both = sorted(set(on) & set(off))
         if both:
             raise ValueError(f"场景 {ident} 里 {'、'.join(both)} 同时出现在 on 和 off")
@@ -372,12 +375,37 @@ def _parse_scenes(raw: Any, devices: list[DeviceConfig]) -> list[SceneConfig]:
                 name=name,
                 on=on,
                 off=off,
+                run=run,
                 brightness=brightness,
                 say=say,
                 phrases=phrases,
             )
         )
     return scenes
+
+
+def _scene_run_ids(
+    scene_id: str,
+    raw: Any,
+    by_id: dict[str, DeviceConfig],
+) -> list[str]:
+    """场景里的 run：只准写启动项——灯不该出现在「开工」的程序列表里。"""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"场景 {scene_id} 的 run 必须是列表")
+    out: list[str] = []
+    for value in raw:
+        device_id = str(value).strip()
+        if not device_id:
+            continue
+        if device_id not in by_id:
+            raise ValueError(f"场景 {scene_id} 的 run 引用了不存在的设备：{device_id}")
+        if not by_id[device_id].is_action:
+            raise ValueError(f"场景 {scene_id} 的 run 里 {device_id} 不是启动项")
+        if device_id not in out:
+            out.append(device_id)
+    return out
 
 
 def _scene_ids(
@@ -764,6 +792,8 @@ def scene_to_raw(scene: SceneConfig) -> dict[str, Any]:
         raw["on"] = list(scene.on)
     if scene.off:
         raw["off"] = list(scene.off)
+    if scene.run:
+        raw["run"] = list(scene.run)
     if scene.brightness:
         raw["brightness"] = dict(scene.brightness)
     if scene.say:

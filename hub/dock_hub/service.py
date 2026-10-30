@@ -570,6 +570,8 @@ class DockHub:
         actions: list[dict[str, Any]] = []
         for device_id, body in steps:
             actions.append(self._scene_step(scene_id, device_id, body))
+        for device_id in scene.run:
+            actions.append(self._scene_run_step(scene_id, device_id))
         spoke = bool(say) and bool(scene.say) and self._scene_say(scene.say or "")
         return {
             "id": scene.id,
@@ -587,6 +589,17 @@ class DockHub:
             item["brightness"] = body["brightness"]
         try:
             self.command(device_id, body)
+        except HubError as exc:
+            item["ok"] = False
+            item["code"] = exc.code
+            item["message"] = exc.message
+        return item
+
+    def _scene_run_step(self, scene_id: str, device_id: str) -> dict[str, Any]:
+        """场景里的启动项：复用单台启动那条路（探针 / 本地一个样）。"""
+        item: dict[str, Any] = {"id": device_id, "run": True, "ok": True}
+        try:
+            self._command_action(self.config.device(device_id), {"run": True})
         except HubError as exc:
             item["ok"] = False
             item["code"] = exc.code
