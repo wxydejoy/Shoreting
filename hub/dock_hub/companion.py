@@ -289,6 +289,14 @@ class Companion:
             return self._finish_spoken(
                 spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
             )
+        leaving = self._handle_leaving(text, turn)
+        if leaving:
+            spoken, events = leaving
+            self._commit_reply(spoken)
+            _latency(turn, "leave", chars=len(spoken))
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+            )
         desk = self._handle_desk(text, turn)
         if desk:
             spoken, skills = desk
@@ -902,6 +910,22 @@ class Companion:
         spoken = str(item.get("say") or "").strip() or f"好，{name}。"
         return spoken, [{"id": ident, "name": name, "scene": True, "ok": ok}]
 
+    def _handle_leaving(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """「我出门了」（F18）：能关的全关，报告没关掉的。没接 Hub 就不认。"""
+        if not parse_leaving(text) and not parse_leave_action(text):
+            return None
+        leave = self._world.get("leave")
+        if not callable(leave):
+            return None
+        try:
+            result = leave()
+        except HubError as exc:
+            _latency(turn, "leave_error", code=exc.code)
+            return "这次没动成。", [{"id": "leave", "leave": True, "ok": False, "code": exc.code}]
+        spoken = str(result.get("spoken") or "都关好了，路上小心。")
+        _latency(turn, "leave_ok", ok=1 if result.get("ok") else 0, left=len(result.get("left") or []))
+        return spoken, [{"id": "leave", "leave": True, "ok": bool(result.get("ok"))}]
+
     def _handle_desk(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         seconds = parse_timer(text)
         if seconds is not None:
@@ -1231,6 +1255,18 @@ class Companion:
             self._arm_timer(seconds)
             events.append({"id": "timer", "sec": seconds, "ok": True})
             applied = True
+        if parse_leave_action(raw_reply):
+            leave = self._world.get("leave")
+            if callable(leave):
+                try:
+                    result = leave()
+                except HubError as exc:
+                    events.append(
+                        {"id": "leave", "leave": True, "ok": False, "code": exc.code}
+                    )
+                else:
+                    events.append({"id": "leave", "leave": True, "ok": bool(result.get("ok"))})
+                    applied = True
         return applied
 
     def _maybe_speak(self, spoken: str, turn: str) -> str | None:
@@ -1582,6 +1618,7 @@ def skill_prompt(skills: list[dict[str, str]]) -> str:
         "暂停/下一首：ACTION: media.toggle 或 ACTION: media.next。"
         "音量：ACTION: volume.up / volume.down / volume.mute。"
         "倒计时：ACTION: timer.<分钟>。"
+        "对方要出门想一次关掉所有灯和插座：ACTION: home.leave。"
     )
     return "\n".join(lines)
 
@@ -2369,6 +2406,21 @@ def parse_timer_action(raw: str) -> int | None:
     if 1 <= minutes <= 120:
         return minutes * 60
     return None
+
+
+# 离家总控（F18）：「我出门了」→ 能关的全关，再报告没关掉的。
+_LEAVING = re.compile(
+    r"^\s*(?:我|俺)?(?:这|先|这就|要|得)?(?:出门|出去|外出|离开|走)(?:了|啦|咯)[。！!．]?\s*$"
+)
+_ACTION_LEAVE = re.compile(r"^\s*ACTION:\s*home\.leave\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def parse_leaving(text: str) -> bool:
+    return bool(_LEAVING.search((text or "").strip()))
+
+
+def parse_leave_action(raw: str) -> bool:
+    return bool(_ACTION_LEAVE.search(raw or ""))
 
 
 def parse_timer(text: str) -> int | None:

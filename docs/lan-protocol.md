@@ -125,6 +125,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `GET`/`POST` | `/v1/companion/books` | 是（本机可免） | 睡前朗读书架。**安卓不要打** |
 | `GET` | `/v1/companion/story` | 是（本机可免） | 睡前朗读进度与定时。**安卓不要打** |
 | `POST` | `/v1/scenes/{id}` | 是 | 一次开关一组设备（配置里的场景） |
+| `POST` | `/v1/leave` | 是 | 离家总控：能关的全关，报告没关掉的（F18） |
 
 没有单独的「读温度」「读电脑性能」「跑脚本」「读正在播放」接口。米家温度、logo、电脑监控、正在播放、伴侣是否就绪都在 snapshot 里；点击 logo 和播放键走同一个 command；说话走 companion/chat，再喊唤醒词打断走 companion/stop，声音走 companion/audio。
 
@@ -725,6 +726,36 @@ Content-Type: application/json
 - `said` 只表示「Hub 正在让伴侣念场景里那句话」，说话是异步的，接口不等 TTS。伴侣关着或场景没写 `say` 就是 `false`。
 - 未知 id → `404` `not_found`。米家未登录时米家设备按 §7 报 `login_required`，不影响 `ws2812`。
 - 安卓可以在主屏放一排场景按钮，点了就打这个接口，然后照常用响应里的 `actions` 打补丁，或者等下一轮 snapshot。
+
+### 6.11 `POST /v1/leave`
+
+「我出门了」：把所有能开关的设备（灯 / 插座 / 灯带）一台一台关掉，单个失败不影响其余，然后告诉你**没关掉的**。启动项是「开」的东西、传感器没有开关，都不碰。body 随意，发 `{}` 就行。语音侧说「我出门了」走同一条 `leave_home()`。
+
+```http
+POST /v1/leave
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{}
+```
+
+**200**
+
+```json
+{
+  "ok": false,
+  "actions": [
+    {"id": "ceiling", "on": false, "ok": true},
+    {"id": "desk-lamp", "on": false, "ok": false, "code": "offline", "message": "米家设备离线"}
+  ],
+  "left": ["desk-lamp"],
+  "spoken": "台灯没关上，其他的都关了。"
+}
+```
+
+- `left` 是没关掉的设备 id 列表；全关掉就是空数组，`ok` 为 `true`。
+- `spoken` 是她要说的那句话：没关掉的最多点两名，多了念不完。接口本身不说话（语音侧由伴侣把这句话当回复说出来），安卓自己显示即可。
+- 一个能开关的设备都没有时 `ok` 为 `false`，`spoken` 是「家里没有归我管的灯和插座。」。
 
 ---
 
