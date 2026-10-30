@@ -854,6 +854,7 @@ class DockHub:
                 "notify": self.relay_to_phone,
                 "power": self.power_action,
                 "noise": self.companion_noise,
+                "music": self.companion_music,
                 "scenes": [
                     {
                         "id": item.id,
@@ -1056,6 +1057,24 @@ class DockHub:
             "ok": True,
             "name": state.get("name"),
             "minutes": state.get("minutes") or 30,
+            "seconds_left": state.get("seconds_left"),
+        }
+
+    def companion_music(self, act: dict[str, Any]) -> dict[str, Any]:
+        """F32 本地电台：转给 Mini 的 TTS 服务（`:18100 /v1/music`）。
+
+        目录里没歌时 TTS 回 ok=False——那不是链路坏了，是她那边没货，
+        照实递上去让守岸人说「还没有能放的音乐」，别装。
+        """
+        action = "off" if act.get("action") == "off" else "on"
+        state = self.companion.tts.music(action, act.get("minutes"))
+        if state is None:
+            raise HubError("tts_unavailable", "音乐没放成")
+        if not state.get("ok"):
+            return {"ok": False, "error": state.get("error") or "empty"}
+        return {
+            "ok": True,
+            "minutes": state.get("minutes") or 60,
             "seconds_left": state.get("seconds_left"),
         }
 

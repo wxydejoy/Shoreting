@@ -38,6 +38,7 @@ from noise import (
     clamp_minutes,
     synth_loop,
 )
+from music import MusicBoard
 
 HERE = Path(__file__).resolve().parent
 MODEL_ID = str(HERE / "models" / "Qwen3-TTS-12Hz-1.7B-Base-8bit")
@@ -448,7 +449,7 @@ def _resolve_refs(args: argparse.Namespace) -> tuple[str | None, str | None]:
     return str(audio), text
 
 
-def make_handler(engine: Engine, noise: NoiseBoard):
+def make_handler(engine: Engine, noise: NoiseBoard, music: "MusicBoard | None" = None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: object) -> None:
             print(f"tts {self.address_string()} {fmt % args}", flush=True)
@@ -478,6 +479,12 @@ def make_handler(engine: Engine, noise: NoiseBoard):
             if path == "/v1/noise":
                 self._json(200, {"ok": True, **noise.status()})
                 return
+            if path == "/v1/music":
+                if music is None:
+                    self._json(404, {"error": {"code": "not_found", "message": "未开启音乐"}})
+                    return
+                self._json(200, {"ok": True, **music.status()})
+                return
             self._json(404, {"error": {"code": "not_found", "message": "未知接口"}})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -500,7 +507,29 @@ def make_handler(engine: Engine, noise: NoiseBoard):
                     # F31：白噪音。name=off 或缺省就是停；到点自动淡出
                     name = str(body.get("name") or "off").strip().lower()
                     minutes = clamp_minutes(body.get("minutes"))
+                    music.stop()
                     state = noise.start(name, minutes)
+                    self._json(200, {"ok": True, **state})
+                    return
+                if path == "/v1/music":
+                    # F32：本地电台。minutes 省缺默认一小时；到点自动淡出。
+                    # 和白噪音共用喇叭，谁后到谁说了算。
+                    if music is None:
+                        self._json(404, {"error": {"code": "not_found", "message": "未开启音乐"}})
+                        return
+                    action = str(body.get("action") or "on").strip().lower()
+                    if action == "off":
+                        state = music.stop()
+                        print("tts music stop", flush=True)
+                        self._json(200, {"ok": True, **state})
+                        return
+                    minutes = clamp_minutes(body.get("minutes"))
+                    noise.stop()
+                    state = music.start(minutes)
+                    if not state.get("ok"):
+                        # 目录空的也算收下了：ok=False 让她照实说，不报 500
+                        self._json(200, state)
+                        return
                     self._json(200, {"ok": True, **state})
                     return
                 if path != "/v1/speak":
@@ -656,6 +685,11 @@ def main() -> None:
         action="store_true",
         help="合成时在本机播放。默认走 Mac Mini 自带扬声器",
     )
+    parser.add_argument(
+        "--music-dir",
+        default=str(HERE / "music"),
+        help="F32 本地电台的目录；往里丢 mp3/flac/ogg 就能被「放点音乐」点到",
+    )
     args = parser.parse_args()
 
     ref_audio, ref_text = _resolve_refs(args)
@@ -664,7 +698,10 @@ def main() -> None:
     if not engine.ready():
         raise SystemExit(1)
 
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(engine, NoiseBoard()))
+    server = ThreadingHTTPServer(
+        (args.host, args.port),
+        make_handler(engine, NoiseBoard(), MusicBoard(args.music_dir)),
+    )
     extra = "  本机播放" if args.play else ""
     print(f"TTS 听 {args.host}:{args.port}  POST /v1/speak /v1/stop{extra}", flush=True)
     try:

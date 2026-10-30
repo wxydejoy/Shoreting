@@ -18,6 +18,7 @@ from dock_hub.intents import (
     fold_game_asr,
     infer_brightness,
     infer_control,
+    infer_music,
     infer_noise,
     infer_temp,
     normalize_phrase,
@@ -268,6 +269,39 @@ class IndependenceTest(unittest.TestCase):
 
         self.assertIs(companion.infer_control, infer_control)
         self.assertIs(companion.parse_teach, parse_teach)
+
+
+
+
+class InferMusicTest(unittest.TestCase):
+    """F32 本地电台：放/停/多久，点名电脑播放器的不接。"""
+
+    def test_on_variants(self) -> None:
+        self.assertEqual(infer_music("放点音乐"), {"action": "on", "minutes": None})
+        self.assertEqual(infer_music("来首歌吧"), {"action": "on", "minutes": None})
+        self.assertEqual(infer_music("听电台"), {"action": "on", "minutes": None})
+
+    def test_named_artist_stays_none(self) -> None:
+        # 点了歌手/歌名的，本地电台满足不了，让她自己想办法
+        self.assertIsNone(infer_music("放首周杰伦的歌"))
+
+    def test_minutes(self) -> None:
+        self.assertEqual(infer_music("放点音乐 45 分钟"), {"action": "on", "minutes": 45})
+
+    def test_off_variants(self) -> None:
+        self.assertEqual(infer_music("把音乐停了"), {"action": "off"})
+        self.assertEqual(infer_music("别放歌了"), {"action": "off"})
+        self.assertEqual(infer_music("音乐关掉"), {"action": "off"})
+
+    def test_player_hints_stay_none(self) -> None:
+        # 电脑侧播放器归 media 键管，本地电台不抢
+        self.assertIsNone(infer_music("在电脑上放点音乐"))
+        self.assertIsNone(infer_music("帮我开网易云音乐"))
+
+    def test_plain_talk_stays_none(self) -> None:
+        self.assertIsNone(infer_music("今天想听什么歌呢"))
+        self.assertIsNone(infer_music(""))
+        self.assertIsNone(infer_music("这首歌叫什么名字"))
 
 
 if __name__ == "__main__":

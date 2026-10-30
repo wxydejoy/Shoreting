@@ -1037,6 +1037,37 @@ class CompanionProtocolTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("没动成", body["text"])
 
+    def test_chat_music_on(self) -> None:
+        self.hub.companion.tts.music = lambda action="on", minutes=None: {  # type: ignore[method-assign]
+            "ok": True, "playing": True, "track": "intro", "minutes": minutes or 60, "seconds_left": 3600,
+        }
+        status, body = self._request("POST", "/v1/companion/chat", {"text": "放点音乐。"})
+        self.assertEqual(status, 200)
+        self.assertIn("放歌了", body["text"])
+        self.assertIn("分钟后停", body["text"])
+
+    def test_chat_music_off(self) -> None:
+        self.hub.companion.tts.music = lambda action="on", minutes=None: {  # type: ignore[method-assign]
+            "ok": True, "playing": False, "track": None, "minutes": 0, "seconds_left": 0,
+        }
+        status, body = self._request("POST", "/v1/companion/chat", {"text": "把音乐停了。"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["text"], "停了。")
+
+    def test_chat_music_empty_shelf_says_so(self) -> None:
+        # 目录里没歌不是链路坏了：她照实说，不说「没动成」
+        self.hub.companion.tts.music = lambda action="on", minutes=None: {  # type: ignore[method-assign]
+            "ok": False, "error": "empty",
+        }
+        status, body = self._request("POST", "/v1/companion/chat", {"text": "放点音乐。"})
+        self.assertEqual(status, 200)
+        self.assertIn("还没有能放的音乐", body["text"])
+
+    def test_chat_music_fails_when_tts_absent(self) -> None:
+        status, body = self._request("POST", "/v1/companion/chat", {"text": "放点音乐。"})
+        self.assertEqual(status, 200)
+        self.assertIn("没动成", body["text"])
+
     def test_chat_answers_temperature_from_cache(self) -> None:
         self.hub._last_temp = {"celsius": 23.5, "humidity": 80}
         status, body = self._request("POST", "/v1/companion/chat", {"text": "屋里多少度。"})

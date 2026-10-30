@@ -59,6 +59,7 @@ from dock_hub.intents import (
     fold_game_asr,
     infer_brightness,
     infer_control,
+    infer_music,
     infer_noise,
     infer_power,
     infer_temp,
@@ -879,6 +880,11 @@ class Companion:
             spoken = self._run_noise(noise_act, turn)
             ok = spoken not in _NOISE_FAIL_SPOKEN
             return spoken, [{"id": "noise", **noise_act, "ok": ok}]
+        music_act = infer_music(text)
+        if music_act:
+            spoken = self._run_music(music_act, turn)
+            ok = spoken not in _NOISE_FAIL_SPOKEN
+            return spoken, [{"id": "music", **music_act, "ok": ok}]
         launched = self._run_launch(text, turn)
         if launched:
             return launched
@@ -1058,6 +1064,32 @@ class Companion:
         minutes = result.get("minutes") or 30
         _latency(turn, "skill_ok", id="noise", name=result.get("name"), minutes=minutes)
         return f"{label}放上了，{minutes} 分钟后停。"
+
+    def _run_music(self, act: dict[str, Any], turn: str) -> str:
+        """F32 本地电台：放/停。歌在 Mini 那边的 music/ 目录里，到点自己淡出。"""
+        fn = self._world.get("music")
+        if not callable(fn):
+            return "这台 Mini 还不能放音乐。"
+        try:
+            result = fn(act)
+        except HubError as exc:
+            _latency(turn, "skill_error", id="music", code=exc.code)
+            return "这次没动成。"
+        except Exception:  # noqa: BLE001 - Mini 连不上也算没动成
+            _latency(turn, "skill_error", id="music", code="offline")
+            return "这次没动成。"
+        if not isinstance(result, dict):
+            return "这次没动成。"
+        if not result.get("ok"):
+            if result.get("error") == "empty":
+                return "这台 Mini 还没有能放的音乐，往 music 目录里放几首。"
+            return "这次没动成。"
+        if act.get("action") == "off":
+            _latency(turn, "skill_ok", id="music", action="off")
+            return "停了。"
+        minutes = result.get("minutes") or 60
+        _latency(turn, "skill_ok", id="music", minutes=minutes)
+        return f"放歌了，{minutes} 分钟后停。"
 
     def _arm_timer(self, seconds: int) -> str:
         self._cancel_timer()

@@ -750,3 +750,41 @@ def infer_noise(text: str) -> dict[str, Any] | None:
             minutes = max(1, min(180, int(minutes_match.group(1))))
         return {"action": "on", "name": name, "minutes": minutes}
     return None
+
+
+# ---- F32 电台 / 播客 -----------------------------------------------------
+
+# 「放点音乐」「来首歌」「听电台」；桌面喇叭的本地电台，不是电脑播放器。
+# 点名了电脑侧播放器的（网易云、Spotify）不接——那是 media 键的活。
+_MUSIC_WORDS = ("音乐", "歌曲", "歌", "电台", "播客")
+_MUSIC_ON = re.compile(
+    r"(?:放|来|开|听)(?:点|一点|一些|个|几?首|一首)?(" + "|".join(_MUSIC_WORDS) + r")"
+)
+_MUSIC_OFF = re.compile(
+    "(" + "|".join(_MUSIC_WORDS) + r").{0,4}(?:停|关|别放)|(?:把|将)?(?:音乐|歌|电台|播客|曲)(?:停掉?|关掉|别放了?)|别放(?:歌|音乐|曲)了"
+)
+_PLAYER_HINTS = ("电脑", "网易云", "spotify", "qq音乐", "酷狗", "b站", "视频", "mv")
+_MUSIC_MINUTES = re.compile(r"(\d{1,3})\s*分钟")
+
+
+def infer_music(text: str) -> dict[str, Any] | None:
+    """「放点音乐」→ {"action": "on", "minutes": None}；「把音乐停了」→ off。
+
+    放多久没说就交给 TTS 侧的默认（一小时）。点名电脑播放器的句子不接，
+    让她走 media 键的老路。
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    lowered = stripped.lower()
+    if any(hint in lowered for hint in _PLAYER_HINTS):
+        return None
+    if _MUSIC_OFF.search(stripped):
+        return {"action": "off"}
+    if _MUSIC_ON.search(stripped):
+        minutes = None
+        minutes_match = _MUSIC_MINUTES.search(stripped)
+        if minutes_match:
+            minutes = max(1, min(240, int(minutes_match.group(1))))
+        return {"action": "on", "minutes": minutes}
+    return None
