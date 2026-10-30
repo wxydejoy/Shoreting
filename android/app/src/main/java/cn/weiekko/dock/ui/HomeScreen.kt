@@ -1060,7 +1060,8 @@ private fun WeatherChip(
     StatusChip(
         icon = Icons.Outlined.Cloud,
         title = String.format(Locale.US, "%.1f°", weather.celsius),
-        subtitle = "${weather.condition}  ${weather.city}",
+        subtitle = listOfNotNull("${weather.condition}  ${weather.city}", weather.airLine())
+            .joinToString("  "),
         interactive = interactive,
         onLongPress = onLongPress,
     )

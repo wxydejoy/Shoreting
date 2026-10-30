@@ -210,16 +210,22 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 if path == "/v1/weather":
                     # 天气由 Hub 代取：手机可能连在只有局域网的 Wi-Fi 上
                     self._require_auth()
-                    from dock_hub.weather import fetch_weather
+                    from dock_hub.weather import fetch_air, fetch_weather
 
                     query = parse_qs(parsed.query)
                     city = (query.get("city") or [""])[0].strip()
                     try:
-                        self._json(200, fetch_weather(city))
+                        data = fetch_weather(city)
                     except ValueError as exc:
                         raise HubError("bad_request", str(exc)) from exc
                     except Exception as exc:  # noqa: BLE001
                         raise HubError("upstream_error", f"天气获取失败：{exc}", status=502) from exc
+                    try:
+                        # PM2.5 顺路捎上（F14）：空气源挂了不能拖累天气本身
+                        data = {**data, "pm25": fetch_air(city)["pm25"]}
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._json(200, data)
                     return
                 if path.startswith("/v1/companion/audio/"):
                     if not self._chats_ok():

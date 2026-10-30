@@ -2,6 +2,7 @@ package cn.weiekko.dock.data
 
 import kotlinx.serialization.Serializable
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @Serializable
 data class WeatherInfo(
@@ -9,10 +10,29 @@ data class WeatherInfo(
     val celsius: Double,
     val condition: String,
     val query: String = "",
+    val pm25: Double? = null,  // F14：Hub 代天气时顺路捎的，直连源没有就没有
 ) {
     fun clockLine(): String {
         val temp = String.format(Locale.US, "%.0f°", celsius)
         return "$city  $temp  $condition"
+    }
+
+    /** 「空气 良 42」。没有 PM2.5 就 null——磁贴少一行，不空占地方。 */
+    fun airLine(): String? {
+        val value = pm25 ?: return null
+        return "空气${pm25Grade(value)} ${value.roundToInt()}"
+    }
+
+    companion object {
+        /** PM2.5 分档（μg/m³，GB 3095 日均），与 Hub 的 weather.pm25_grade 同一张表。 */
+        fun pm25Grade(pm25: Double): String = when {
+            pm25 < 35 -> "优"
+            pm25 < 75 -> "良"
+            pm25 < 115 -> "轻度污染"
+            pm25 < 150 -> "中度污染"
+            pm25 < 250 -> "重度污染"
+            else -> "严重污染"
+        }
     }
 }
 
@@ -29,6 +49,7 @@ object DemoSnapshot {
         city = "上海",
         celsius = 26.0,
         condition = "多云",
+        pm25 = 42.0,
     )
 
     val winApps = listOf(

@@ -131,3 +131,90 @@ class TestFetchSun(unittest.TestCase):
         self.assertEqual(weather._hhmm("2026-10-31 9:05"), "09:05")
         self.assertEqual(weather._hhmm("garbage"), "")
         self.assertEqual(weather._hhmm(""), "")
+
+
+class TestPm25Grade(unittest.TestCase):
+    """PM2.5 分档（F14）：档位边界按国标日均。"""
+
+    def test_grades(self) -> None:
+        self.assertEqual(weather.pm25_grade(0), "优")
+        self.assertEqual(weather.pm25_grade(34.9), "优")
+        self.assertEqual(weather.pm25_grade(35), "良")
+        self.assertEqual(weather.pm25_grade(74), "良")
+        self.assertEqual(weather.pm25_grade(75), "轻度污染")
+        self.assertEqual(weather.pm25_grade(114), "轻度污染")
+        self.assertEqual(weather.pm25_grade(150), "重度污染")
+        self.assertEqual(weather.pm25_grade(300), "严重污染")
+
+
+class TestFetchAir(unittest.TestCase):
+    """空气质量（F14）：解析、缓存、记仇期。"""
+
+    def setUp(self) -> None:
+        weather._air_cache.clear()
+        weather._air_fail_at.clear()
+        self._orig_get = weather._get_json
+        self.addCleanup(self._restore)
+
+    def _restore(self) -> None:
+        weather._get_json = self._orig_get
+        weather._air_cache.clear()
+        weather._air_fail_at.clear()
+
+    def test_parses_pm25_and_aqi(self) -> None:
+        weather._get_json = lambda url: {"current": {"pm2_5": 42.6, "us_aqi": 118}}
+        data = weather.fetch_air("杭州")
+        self.assertEqual(data["pm25"], 42.6)
+        self.assertEqual(data["aqi"], 118)
+
+    def test_missing_aqi_is_none(self) -> None:
+        weather._get_json = lambda url: {"current": {"pm2_5": 42.6}}
+        self.assertIsNone(weather.fetch_air("杭州")["aqi"])
+
+    def test_no_pm25_fails(self) -> None:
+        weather._get_json = lambda url: {"current": {}}
+        with self.assertRaises(ValueError):
+            weather.fetch_air("杭州")
+
+    def test_uses_cache(self) -> None:
+        calls: list[str] = []
+        body = {"current": {"pm2_5": 42.6, "us_aqi": 118}}
+
+        def fake(url: str) -> dict:
+            calls.append(url)
+            return body
+
+        weather._get_json = fake
+        weather.fetch_air("杭州")
+        weather.fetch_air("杭州")
+        self.assertEqual(len(calls), 1)
+
+    def test_failure_has_grace_period(self) -> None:
+        def boom(url: str) -> dict:
+            raise ValueError("空气源挂了")
+
+        weather._get_json = boom
+        with self.assertRaises(ValueError):
+            weather.fetch_air("杭州")
+        with self.assertRaises(ValueError):
+            weather.fetch_air("杭州")
+        weather._air_fail_at.clear()
+        weather._get_json = lambda url: {"current": {"pm2_5": 42.6}}
+        self.assertEqual(weather.fetch_air("杭州")["pm25"], 42.6)
+
+
+class TestAirAlertText(unittest.TestCase):
+    """空气提醒文案（F14）：分档嘱咐。"""
+
+    def test_mild(self) -> None:
+        from dock_hub.proactive import air_alert_text
+
+        text = air_alert_text(88.0)
+        self.assertIn("88", text)
+        self.assertIn("轻度污染", text)
+        self.assertIn("别开窗", text)
+
+    def test_severe_mentions_mask(self) -> None:
+        from dock_hub.proactive import air_alert_text
+
+        self.assertIn("口罩", air_alert_text(160.0))

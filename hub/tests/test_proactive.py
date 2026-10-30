@@ -396,6 +396,19 @@ class TestConfigAlerts(unittest.TestCase):
         self.assertEqual(cfg.proactive.alerts.memory_percent, 0)
         self.assertNotIn("memory_percent", hub_config_to_raw(cfg)["proactive"]["alerts"])
 
+    def test_air_pm25_defaults_and_configures(self) -> None:
+        cfg = self._parse({"alerts": {}})
+        self.assertEqual(cfg.proactive.alerts.air_pm25, 75)
+        cfg = self._parse({"alerts": {"air_pm25": 100}})
+        self.assertEqual(cfg.proactive.alerts.air_pm25, 100)
+        again = parse_config(hub_config_to_raw(cfg))
+        self.assertEqual(again.proactive.alerts, cfg.proactive.alerts)
+
+    def test_air_pm25_zero_means_off_and_drops_from_raw(self) -> None:
+        cfg = self._parse({"alerts": {"air_pm25": 0}})
+        self.assertEqual(cfg.proactive.alerts.air_pm25, 0)
+        self.assertNotIn("air_pm25", hub_config_to_raw(cfg)["proactive"]["alerts"])
+
     def test_roundtrip(self) -> None:
         cfg = self._parse({"alerts": {"temp_celsius": 90, "offline_minutes": 5}})
         again = parse_config(hub_config_to_raw(cfg))

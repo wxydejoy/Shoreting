@@ -139,6 +139,8 @@ class DockHub:
         self._alert_state = Sustained()
         self._sedentary = SedentaryWatch()
         self._weather_check_at = 0.0
+        self._air_check_at = 0.0
+        self._air_bad = False  # PM2.5 现在在坏区间里？只在进区间那一下开口
         self._finished_lock = threading.Lock()
         self._finished_queue: list[dict[str, Any]] = []
         self._presence_lock = threading.Lock()
@@ -251,6 +253,8 @@ class DockHub:
                 print(f"[proactive] 久坐提醒：{said.text or said.reason}")
         if alerts.weather:
             self._evaluate_weather_alert(now)
+        if alerts.air_pm25 > 0:
+            self._evaluate_air_alert(now)
         self._evaluate_finished_alerts(now)
         if alerts.offline_minutes > 0:
             for item in self._offline_mijia_devices():
@@ -300,6 +304,8 @@ class DockHub:
 
     WEATHER_CHECK_SEC = 3600.0
     DESK_AWAY_MIN_SEC = 300  # 离座不足这个数不问候（安卓侧会先去抖，这里兜底）
+    AIR_CHECK_SEC = 3600.0
+    AIR_HYSTERESIS_UGM3 = 20.0  # 回落这么多才算翻篇，卡在阈值边上不反复横跳
 
     def _evaluate_weather_alert(self, now: datetime) -> None:
         """天气突变（F15）：每小时比对一次逐小时预报，只推「变化」。
@@ -334,6 +340,41 @@ class DockHub:
             return
         said = self.proactive.alert("weather", text, now)
         print(f"[proactive] 天气提醒：{said.text or said.reason}")
+
+    def _evaluate_air_alert(self, now: datetime) -> None:
+        """空气超标（F14）：每小时看一眼，只在由好变坏那一下说。
+
+        一直坏就一直闭嘴（跟天气突变同一条规矩：推变化不推状态），
+        回落 AIR_HYSTERESIS_UGM3 才重新武装。城市用手机最近查过的那座。
+        07:00–21:00 之外不看；配额、免打扰由 proactive.alert 兜底。
+        """
+        if now.hour < 7 or now.hour >= 21:
+            return
+        if time.monotonic() - self._air_check_at < self.AIR_CHECK_SEC:
+            return
+        self._air_check_at = time.monotonic()
+        from dock_hub.proactive import air_alert_text
+        from dock_hub.weather import fetch_air, last_city
+
+        city = last_city()
+        if not city:
+            return
+        try:
+            air = fetch_air(city)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[proactive] 空气质量拿不到：{exc}")
+            return
+        pm25 = float(air.get("pm25") or 0.0)
+        threshold = float(self.proactive.config.alerts.air_pm25)
+        if self._air_bad:
+            if pm25 < threshold - self.AIR_HYSTERESIS_UGM3:
+                self._air_bad = False  # 翻篇了，下次变坏再说
+            return
+        if pm25 < threshold:
+            return
+        self._air_bad = True
+        said = self.proactive.alert("air", air_alert_text(pm25), now)
+        print(f"[proactive] 空气提醒：{said.text or said.reason}")
 
     def _idle_seconds(self) -> float | None:
         """键鼠空闲秒数。只有探针在报且报得新鲜才有；拿不到就 None。"""

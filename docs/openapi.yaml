@@ -1456,6 +1456,11 @@ components:
         query:
           type: string
           description: 原样回填请求参数，方便安卓判断是不是自己要的那一趟
+        pm25:
+          type: number
+          description: >
+            PM2.5（μg/m³，F14）。空气源顺路捎上，拿不到就不出现这个字段；
+            安卓按可空处理。
     TelemetryRequest:
       type: object
       properties:

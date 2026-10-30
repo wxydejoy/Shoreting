@@ -19,6 +19,7 @@ from typing import Any
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+AIR_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 USER_AGENT = "Shoreting-Hub/1.0 (+https://github.com/wxydejoy/Shoreting)"
 
 CACHE_TTL_SEC = 600.0
@@ -81,9 +82,13 @@ _COORD_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)\s*$"
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _hourly_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _sun_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_air_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 # 日落查询失败的记仇时间：别每分钟都去敲 Open-Meteo
 _SUN_RETRY_SEC = 900.0
 _sun_fail_at: dict[str, float] = {}
+# 空气质量同理：超标提醒一小时看一眼，失败也别追着敲
+_AIR_RETRY_SEC = 900.0
+_air_fail_at: dict[str, float] = {}
 _last_city: str | None = None
 
 
@@ -275,4 +280,64 @@ def fetch_hourly(city: str) -> dict[str, Any]:
         },
     }
     _hourly_cache[key] = (now, data)
+    return data
+
+
+AIR_CACHE_TTL_SEC = 1800.0
+"""PM2.5 不会半小时内翻脸，缓存 30 分钟。"""
+
+
+def pm25_grade(pm25: float) -> str:
+    """PM2.5 分档（μg/m³，GB 3095-2012 日均标准），播报和主屏共用。"""
+    if pm25 < 35:
+        return "优"
+    if pm25 < 75:
+        return "良"
+    if pm25 < 115:
+        return "轻度污染"
+    if pm25 < 150:
+        return "中度污染"
+    if pm25 < 250:
+        return "重度污染"
+    return "严重污染"
+
+
+def fetch_air(city: str) -> dict[str, Any]:
+    """PM2.5（F14 空气质量用）。返回 {"city", "pm25", "aqi", "query"}。
+
+    aqi 是 US AQI，源里偶尔缺，缺就 None。失败有 15 分钟记仇期——
+    超标提醒一小时才看一眼，也架不住源挂了还一直来。
+    """
+    key = (city or "").strip()
+    if not key:
+        raise ValueError("城市为空")
+    now = time.monotonic()
+    cached = _air_cache.get(key)
+    if cached is not None and now - cached[0] < AIR_CACHE_TTL_SEC:
+        return cached[1]
+    failed = _air_fail_at.get(key)
+    if failed is not None and now - failed < _AIR_RETRY_SEC:
+        raise ValueError("空气质量刚才没拿到，先等等")
+    name, lat, lon = _resolve(key)
+    query = urllib.parse.urlencode(
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "current": "pm2_5,us_aqi",
+            "timezone": "auto",
+        }
+    )
+    body = _get_json(AIR_URL + "?" + query)
+    current = (body or {}).get("current") or {}
+    pm25 = current.get("pm2_5")
+    if pm25 is None:
+        _air_fail_at[key] = now
+        raise ValueError("空气源没有返回 PM2.5")
+    try:
+        aqi = int(current.get("us_aqi")) if current.get("us_aqi") is not None else None
+    except (TypeError, ValueError):
+        aqi = None
+    data = {"city": name, "pm25": float(pm25), "aqi": aqi, "query": key}
+    _air_cache[key] = (now, data)
+    _air_fail_at.pop(key, None)
     return data

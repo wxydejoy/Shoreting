@@ -88,6 +88,8 @@ class AlertsConfig:
     sedentary_minutes: int = 90
     # 天气突变（未来两小时有雨/骤降/大风）；false = 不提醒
     weather: bool = True
+    # PM2.5 超过这个值提醒关窗（μg/m³）；只在由好变坏那一下说；0 = 不提醒
+    air_pm25: int = 75
     # 内存占用超这个百分比，热满 3 分钟才说；0 = 不提醒
     memory_percent: int = 90
     # 任务完成播报：额外关注的进程名；启动项里的进程默认就在名单里
@@ -867,6 +869,7 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
             offline_minutes=0,
             sedentary_minutes=0,
             weather=False,
+            air_pm25=0,
             memory_percent=0,
         )
     elif isinstance(alerts_raw, dict):
@@ -882,6 +885,7 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
                 alerts_raw.get("sedentary_minutes"), 90, "proactive.alerts.sedentary_minutes"
             ),
             weather=bool(alerts_raw.get("weather", True)),
+            air_pm25=_threshold(alerts_raw.get("air_pm25"), 75, "proactive.alerts.air_pm25"),
             memory_percent=_threshold(
                 alerts_raw.get("memory_percent"), 90, "proactive.alerts.memory_percent"
             ),
@@ -1288,6 +1292,7 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
         and config.alerts.offline_minutes <= 0
         and config.alerts.sedentary_minutes <= 0
         and not config.alerts.weather
+        and config.alerts.air_pm25 <= 0
         and config.alerts.memory_percent <= 0
         and not config.alerts.finished
     ):
@@ -1299,6 +1304,8 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
             "sedentary_minutes": config.alerts.sedentary_minutes,
             "weather": config.alerts.weather,
         }
+        if config.alerts.air_pm25 > 0:
+            raw["alerts"]["air_pm25"] = config.alerts.air_pm25
         if config.alerts.memory_percent > 0:
             raw["alerts"]["memory_percent"] = config.alerts.memory_percent
         if config.alerts.finished:

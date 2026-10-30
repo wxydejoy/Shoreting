@@ -22,7 +22,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from dock_hub.config import ProactiveConfig
-from dock_hub.weather import wmo_condition
+from dock_hub.weather import pm25_grade, wmo_condition
 
 MORNING_WINDOW = timedelta(hours=2)
 """早间播报的有效窗口：到点后两小时内都还值得说，再晚就成了下午茶问候。"""
@@ -122,6 +122,13 @@ def weather_change_text(
         if wind >= WEATHER_WIND_KMH:
             return "等会儿风要大了，窗户关严实点。"
     return None
+
+
+def air_alert_text(pm25: float) -> str:
+    """空气变差那一句（F14）。分档说话：轻重不同，嘱咐不同。"""
+    if pm25 >= 150:
+        return f"外面空气很差了，PM2.5 到 {round(pm25)} 了。别开窗，出门戴口罩。"
+    return f"外面空气不好了，PM2.5 到 {round(pm25)} 了，{pm25_grade(pm25)}，别开窗。"
 
 
 class Sustained:
