@@ -93,19 +93,6 @@ mini:
 #     base_url: "http://127.0.0.1:18100"
 #     timeout_sec: 20
 #     # deliver: true   # 才把 wav 交给手机。默认 false：Mini 本机出声
-#   # 泰缇斯：Mini 上 Hermes API（复杂任务）。见 companion/tethys/README.md
-#   tethys:
-#     enabled: true
-#     base_url: "http://127.0.0.1:8642/v1"
-#     model: hermes-agent
-#     api_key: "与 Hermes API_SERVER_KEY 相同"
-#     timeout_sec: 120
-#     polish: true
-#     speak: true
-#     ack: "好。"
-#     weixin_notify: true          # 复杂任务全文同步微信；false 关闭
-#     session_key: tethys:wanderer # Hermes 记忆范围，不要和微信 session 混用
-#     # notify_url: "http://10.83.22.121:8643/v1/weixin"  # 默认从 base_url 推 :8643
 
 # 主屏那一个温度源（只允许一个；不要就整段删掉）
 temperature:
