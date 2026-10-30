@@ -95,6 +95,7 @@ fun SettingsScreen(
     onSetWeatherEnabled: (Boolean) -> Unit = {},
     onSetWeatherCity: (String) -> Unit = {},
     onSetWakeWord: (Boolean) -> Unit = {},
+    onSetDeskPresence: (Boolean) -> Unit = {},
     onSetHubEnabled: (Boolean) -> Unit = {},
     onEditLayout: () -> Unit = {},
     onSetModuleVisible: (DockModule, Boolean) -> Unit = { _, _ -> },
@@ -854,6 +855,40 @@ fun SettingsScreen(
                     Switch(
                         checked = state.wakeWordEnabled,
                         onCheckedChange = onSetWakeWord,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.onPrimary,
+                            checkedTrackColor = colors.primary,
+                        ),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = colors.surface,
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("在场检测（摄像头）", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (state.deskPresenceEnabled) {
+                                "已开。有人亮屏，离座 5 分钟压暗，回座她会说一句。"
+                            } else {
+                                "已关。打开后需要摄像头权限。画面不出设备、不存储。"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    Switch(
+                        checked = state.deskPresenceEnabled,
+                        onCheckedChange = onSetDeskPresence,
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = colors.onPrimary,
                             checkedTrackColor = colors.primary,

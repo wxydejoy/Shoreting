@@ -36,6 +36,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import cn.weiekko.dock.data.HubConnection
+import cn.weiekko.dock.power.CameraPresence
 import cn.weiekko.dock.power.DockPower
 import cn.weiekko.dock.power.HubWatchService
 import cn.weiekko.dock.power.ScreenCommand
@@ -67,6 +68,17 @@ class MainActivity : ComponentActivity() {
                 intent.getBooleanExtra(WakeWordService.EXTRA_SETTLED, false),
                 intent.getStringExtra(WakeWordService.EXTRA_TURN).orEmpty(),
             )
+        }
+    }
+    private var cameraPresence: CameraPresence? = null
+    private val requestCamera = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            startDeskCamera()
+        } else {
+            // 不给权限就不做在场检测，开关回落到关
+            viewModel.setDeskPresence(false)
         }
     }
 
@@ -136,8 +148,12 @@ class MainActivity : ComponentActivity() {
                 if (!state.prefsReady) return@LaunchedEffect
                 syncWakeWord(state.wakeWordEnabled)
             }
-            LaunchedEffect(state.powerScreen, state.hubSleeping) {
+            LaunchedEffect(state.powerScreen, state.hubSleeping, state.deskSleeping) {
                 applyPowerState()
+            }
+            LaunchedEffect(state.prefsReady, state.deskPresenceEnabled) {
+                if (!state.prefsReady) return@LaunchedEffect
+                syncDeskCamera(state.deskPresenceEnabled)
             }
 
             DockTheme {
@@ -192,6 +208,7 @@ class MainActivity : ComponentActivity() {
                                     onSetWeatherEnabled = viewModel::setWeatherEnabled,
                                     onSetWeatherCity = viewModel::setWeatherCity,
                                     onSetWakeWord = viewModel::setWakeWord,
+                                    onSetDeskPresence = viewModel::setDeskPresence,
                                     onSetHubEnabled = viewModel::setHubEnabled,
                                     onEditLayout = viewModel::enterEdit,
                                     onSetModuleVisible = viewModel::setModuleVisible,
@@ -219,6 +236,7 @@ class MainActivity : ComponentActivity() {
             unregisterReceiver(transcriptReceiver)
             transcriptReceiverRegistered = false
         }
+        stopDeskCamera()
         super.onDestroy()
     }
 
@@ -230,6 +248,8 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         hideSystemBars()
+        // 人能看见这块屏就是人到了：桌面在暗屏状态下手动解锁，摄像头不一定来得及说
+        viewModel.noteUserInteraction()
         applyPowerState()
     }
 
@@ -239,7 +259,7 @@ class MainActivity : ComponentActivity() {
             DockPower.keepScreenOn(this, false)
             return
         }
-        if (state.hubSleeping) {
+        if (state.hubSleeping || state.deskSleeping) {
             enterHubSleep()
             return
         }
@@ -254,6 +274,36 @@ class MainActivity : ComponentActivity() {
 
     private fun exitHubSleep() {
         DockPower.dimForHubSleep(this, false)
+    }
+
+    private fun syncDeskCamera(enabled: Boolean) {
+        if (!enabled) {
+            stopDeskCamera()
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.CAMERA,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            startDeskCamera()
+        } else {
+            requestCamera.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun startDeskCamera() {
+        if (cameraPresence != null) return
+        val camera = CameraPresence(this, this) { person ->
+            viewModel.onDeskFrame(person)
+        }
+        cameraPresence = camera
+        camera.start()
+    }
+
+    private fun stopDeskCamera() {
+        cameraPresence?.release()
+        cameraPresence = null
     }
 
     private fun handleWakeIntent(intent: Intent?) {

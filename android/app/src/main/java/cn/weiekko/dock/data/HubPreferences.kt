@@ -145,6 +145,11 @@ class HubPreferences(private val context: Context) {
         prefs[KEY_HUB_ENABLED] ?: true
     }
 
+    /** 在场检测（F24）：默认关。开了才要摄像头权限。 */
+    val deskPresenceEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_DESK_PRESENCE] ?: false
+    }
+
     suspend fun save(connection: HubConnection) {
         context.dataStore.edit { prefs ->
             prefs[KEY_HOST] = connection.host.trim()
@@ -241,6 +246,12 @@ class HubPreferences(private val context: Context) {
         }
     }
 
+    suspend fun saveDeskPresenceEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_DESK_PRESENCE] = enabled
+        }
+    }
+
     companion object {
         private val KEY_HOST = stringPreferencesKey("host")
         private val KEY_PORT = intPreferencesKey("port")
@@ -266,6 +277,7 @@ class HubPreferences(private val context: Context) {
         private val KEY_WEATHER_CACHE = stringPreferencesKey("weather_cache")
         private val KEY_WAKE_WORD = booleanPreferencesKey("wake_word")
         private val KEY_HUB_ENABLED = booleanPreferencesKey("hub_enabled")
+        private val KEY_DESK_PRESENCE = booleanPreferencesKey("desk_presence")
 
         const val DEFAULT_HUB_SLEEP_DELAY_SEC = 60
         const val DEFAULT_HUB_RECONNECT_SEC = 15
