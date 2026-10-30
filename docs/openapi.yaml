@@ -4,7 +4,9 @@ info:
   version: "1"
   description: >
     Android desk gadget ↔ Python Hub on the local network.
-    Three endpoints. Xiaomi did/siid/piid never appear on the wire.
+    The machine-readable contract for every route the Hub serves;
+    docs/lan-protocol.md keeps the why, the timing and the debugging notes.
+    Xiaomi did/siid/piid never appear on the wire.
     Action `icon` is a short name rendered by the Android app (Remix Icon).
     Optional snapshot.pc carries host CPU / memory / GPU / FPS telemetry.
     Optional snapshot.media is the system now-playing session; control it with
@@ -18,7 +20,7 @@ servers:
   - url: http://{host}:17890
     variables:
       host:
-        default: 192.168.1.12
+        default: 10.83.22.121
 paths:
   /health:
     get:
@@ -246,6 +248,345 @@ paths:
         "502":
           $ref: "#/components/responses/Error"
         "503":
+          $ref: "#/components/responses/Error"
+  # ---- 下面是 Hub 早就在服务、文档一直没跟上的那批 ----
+  # scripts/check_protocol.py 会对着 server.py 的 do_GET / do_POST 逐条比，
+  # 少写一个就非零退出，所以别再靠记忆维护这份清单。
+  /v1/weather:
+    get:
+      summary: Hub-side weather proxy (Open-Meteo)
+      description: >
+        手机可能连在只有局域网的 Wi-Fi 上，天气由 Hub 代取，安卓只跟 Hub 说话。
+        结果按城市缓存 10 分钟。
+      operationId: getWeather
+      parameters:
+        - name: city
+          in: query
+          required: true
+          schema:
+            type: string
+          example: 杭州
+      responses:
+        "200":
+          description: Current conditions for the resolved city
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Weather"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /v1/telemetry:
+    post:
+      summary: Windows probe pushes CPU / GPU telemetry into the snapshot
+      description: >
+        探针只在内网行走，不暴露 did。收到后立刻替换 Hub 手里的远端样本，
+        超过 probe.stale_ms 没新样本就当作离线。
+      operationId: postTelemetry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelemetryRequest"
+      responses:
+        "200":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/login-ticket:
+    post:
+      summary: Mint a one-shot ticket that turns a browser into a logged-in chats session
+      description: >
+        桌面托盘是这么把浏览器送进 /chats 的：不用把 token 贴进地址栏。
+        票据 60 秒有效、只能兑换一次。
+      operationId: postLoginTicket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                next:
+                  type: string
+                  default: /setup
+                  description: 兑换后跳转的站内路径，外部地址会被拒绝
+      responses:
+        "200":
+          description: Ticket and the URL to open
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginTicket"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/companion/chats:
+    get:
+      summary: Companion conversation log (Hub web UI only). Android must not call this.
+      operationId: getCompanionChats
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+            maximum: 500
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: 在 user 与 reply 里做大小写无关的子串过滤
+      responses:
+        "200":
+          description: Oldest first, newest last
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ChatTurn"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/companion/books:
+    get:
+      summary: Shelf listing for the reading page
+      operationId: getCompanionBooks
+      responses:
+        "200":
+          description: Books on disk plus the reading position
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookList"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    post:
+      summary: Upload one .txt book (raw body, not multipart)
+      description: >
+        请求体就是文件本身，文件名放在 X-Filename 头里；落盘后它成为当前书。
+        上限 32MB。
+      operationId: postCompanionBook
+      parameters:
+        - name: X-Filename
+          in: header
+          required: true
+          schema:
+            type: string
+            example: 长夜将尽.txt
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, bytes]
+                properties:
+                  id:
+                    type: string
+                  bytes:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/companion/books/{id}:
+    get:
+      summary: Open one book — chapter index and the saved bookmark
+      operationId: getCompanionBook
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: 长夜将尽.txt
+      responses:
+        "200":
+          description: Chapter list without the chapter text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookOpen"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/companion/books/{id}/chapter/{index}:
+    get:
+      summary: One chapter's text
+      operationId: getCompanionBookChapter
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: index
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Chapter text and its offset range
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookChapter"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/companion/books/{id}/{action}:
+    post:
+      summary: Start, pause, or bookmark reading for one book
+      operationId: postCompanionBookAction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [play, pause, bookmark]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                offset:
+                  type: integer
+                  minimum: 0
+                  description: play 时从哪儿开始；bookmark 时记到哪儿
+      responses:
+        "200":
+          description: Story state after the action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Story"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /v1/companion/story:
+    get:
+      summary: Where the reading is right now
+      operationId: getCompanionStory
+      responses:
+        "200":
+          description: Playback state, current sentence, timer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Story"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/companion/story/timer:
+    post:
+      summary: Sleep timer for reading
+      operationId: postCompanionStoryTimer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [minutes]
+              properties:
+                minutes:
+                  type: integer
+                  enum: [0, 15, 30, 45, 60]
+                  description: 0 means off
+      responses:
+        "200":
+          description: Story state after the change
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Story"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/companion/read/jobs/{id}/{action}:
+    post:
+      summary: Operate one reading job (Hub reading page)
+      operationId: postCompanionReadJobAction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [cancel, delete, replay]
+      responses:
+        "200":
+          description: Job list after the action
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ReadJob"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
 security:
   - bearer: []
@@ -503,6 +844,194 @@ components:
           nullable: true
         format:
           type: string
+    Weather:
+      type: object
+      required: [city, celsius, condition, query]
+      properties:
+        city:
+          type: string
+          description: 解出来的城市名；输坐标时是格式化后的坐标串
+        celsius:
+          type: number
+          description: 当前气温，保留数据源的小数位
+        condition:
+          type: string
+          example: 多云
+        query:
+          type: string
+          description: 原样回填请求参数，方便安卓判断是不是自己要的那一趟
+    TelemetryRequest:
+      type: object
+      properties:
+        pc:
+          allOf:
+            - $ref: "#/components/schemas/PcStatus"
+          description: 与 snapshot.pc 同构；缺 online 时按 true 处理
+        running:
+          type: array
+          items:
+            type: string
+          description: 当前前台 / 关注的进程名，小写，用于「正在玩游戏」判断
+    LoginTicket:
+      type: object
+      required: [ok, ticket, path]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        ticket:
+          type: string
+        path:
+          type: string
+          example: /chats/claim?ticket=...&next=%2Fsetup
+    ChatTurn:
+      type: object
+      required: [ts, turn, user, reply, ms]
+      properties:
+        ts:
+          type: string
+          format: date-time
+        turn:
+          type: string
+          description: 这一轮的序号，安卓打断后靠它丢弃旧语音
+        user:
+          type: string
+          description: 用户原话，超长会截断
+        reply:
+          type: string
+          description: 守岸人的回复，超长会截断
+        ms:
+          type: integer
+          description: 从收到请求到第一句可播的毫秒数
+        skills:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        error:
+          type: string
+          nullable: true
+    BookList:
+      type: object
+      required: [items, current_id, timer_min]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, title, bytes, mtime]
+            properties:
+              id:
+                type: string
+                description: 文件名，含 .txt，同时是后续接口里的 book id
+              title:
+                type: string
+              bytes:
+                type: integer
+              mtime:
+                type: integer
+                description: Unix 秒
+        current_id:
+          type: string
+          nullable: true
+          description: 上次在读的那本；书被删掉后为 null
+        timer_min:
+          type: integer
+          description: 睡前定时，0 表示关
+    BookOpen:
+      type: object
+      required: [id, title, encoding, chars, bookmark, chapters, problem_label]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        encoding:
+          type: string
+          description: 实际用上的编码，GBK 乱码排查看这个
+        chars:
+          type: integer
+        bookmark:
+          type: integer
+          description: 已读到的字符偏移，不是章节号
+        problem_label:
+          type: string
+          nullable: true
+          description: 切章有问题时的一句话说明，正常为 null
+        chapters:
+          type: array
+          items:
+            type: object
+            required: [index, title, volume, start, end]
+            properties:
+              index:
+                type: integer
+              title:
+                type: string
+              volume:
+                type: string
+                nullable: true
+              start:
+                type: integer
+              end:
+                type: integer
+    BookChapter:
+      type: object
+      required: [index, title, text, start, end]
+      properties:
+        index:
+          type: integer
+        title:
+          type: string
+        text:
+          type: string
+        start:
+          type: integer
+        end:
+          type: integer
+    Story:
+      type: object
+      required: [playing, book_id, offset, chars, chapters, timer_min]
+      properties:
+        playing:
+          type: boolean
+        book_id:
+          type: string
+          nullable: true
+        offset:
+          type: integer
+          description: 正在念的这句的起点，字符偏移
+        chapter:
+          type: integer
+          nullable: true
+        chapter_title:
+          type: string
+          nullable: true
+        sentence:
+          type: string
+          nullable: true
+          description: 正在念的这句原文；不在念时为 null
+        sentence_start:
+          type: integer
+          nullable: true
+        chars:
+          type: integer
+        chapters:
+          type: integer
+        timer_min:
+          type: integer
+        timer_remaining_sec:
+          type: integer
+          nullable: true
+          description: 暂停时保留剩余秒数，恢复后接着倒
+        stopped_by:
+          type: string
+          nullable: true
+          enum: [user, timer, end, error]
+          description: 上一次为什么停下；正在念或还没停过时为 null
+        error:
+          type: string
+          nullable: true
     Device:
       type: object
       required: [id, name, type, online]
@@ -548,7 +1077,7 @@ components:
         run:
           type: boolean
           enum: [true]
-          description: action only; Android must send exactly {"run": true}
+          description: 'action only; Android must send exactly {"run": true}'
         media:
           type: string
           enum: [toggle, next, previous]
