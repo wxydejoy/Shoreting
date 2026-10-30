@@ -15,6 +15,7 @@ from dock_hub.service import DockHub
 from dock_hub.setup_ui import is_local_client
 
 MAX_BODY = 64 * 1024
+MAX_WAIT = 30.0
 _STATIC = {
     "litera.min.css": "text/css; charset=utf-8",
     "shell.css": "text/css; charset=utf-8",
@@ -52,6 +53,26 @@ def lan_ips() -> list[str]:
         pass
     found.sort(key=lambda ip: (0 if ip.startswith("10.83.22.") else 1, ip))
     return found or ["127.0.0.1"]
+
+
+def _query_int(query: dict[str, list[str]], key: str, default: int) -> int:
+    raw = (query.get(key) or [""])[0].strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _query_float(query: dict[str, list[str]], key: str, default: float) -> float:
+    raw = (query.get(key) or [""])[0].strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
@@ -137,6 +158,12 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 if path == "/v1/snapshot":
                     self._require_auth()
                     hub.note_presence()
+                    query = parse_qs(parsed.query)
+                    since = _query_int(query, "since", -1)
+                    wait = _query_float(query, "wait", 0.0)
+                    if since >= 0 and wait > 0:
+                        # 长轮询：状态没变就挂着，变了立刻回；安卓不传就还是老样子
+                        hub.wait_change(since, min(wait, MAX_WAIT))
                     self._json(200, hub.snapshot())
                     return
                 if path == "/v1/weather":
