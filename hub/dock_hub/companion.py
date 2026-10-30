@@ -34,6 +34,12 @@ from dock_hub.errors import HubError
 # 免得为了搬家去改测试和调用方。
 from dock_hub.intents import (
     ack_ledstrip,
+    infer_media,
+    infer_volume,
+    parse_media_action,
+    parse_timer,
+    parse_timer_action,
+    parse_volume_action,
     constrain_light_actions,
     fold_game_asr,
     infer_brightness,
@@ -114,23 +120,6 @@ DEFAULT_PERSONA = """你是守岸人，正在漂泊者的书桌上值班。锚�
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _ACTION_RE = re.compile(r"^\s*ACTION:\s*\S+\s*$", re.MULTILINE)
-_MEDIA_NEXT = re.compile(r"(下一首|切歌|换一首|下一曲)")
-_MEDIA_PREV = re.compile(r"(上一首|上一曲)")
-_MEDIA_PAUSE = re.compile(r"(暂停|停下|别放了)")
-_MEDIA_RESUME = re.compile(r"(继续放|继续播放|接着放)")
-_VOLUME_UP = re.compile(r"(声音大|音量大|大声点|大声一)")
-_VOLUME_DOWN = re.compile(r"(声音小|音量小|小声点|小声一)")
-_VOLUME_UNMUTE = re.compile(r"(取消静音|打开声音)")
-_VOLUME_MUTE = re.compile(r"(静音)")
-_ACTION_MEDIA = re.compile(
-    r"^\s*ACTION:\s*media\.(toggle|next|previous)\s*$", re.IGNORECASE | re.MULTILINE
-)
-_ACTION_VOLUME = re.compile(
-    r"^\s*ACTION:\s*volume\.(up|down|mute)\s*$", re.IGNORECASE | re.MULTILINE
-)
-_ACTION_TIMER = re.compile(
-    r"^\s*ACTION:\s*timer\.(\d{1,3})\s*$", re.IGNORECASE | re.MULTILINE
-)
 PRESENCE_SEC = 90
 
 
@@ -1506,93 +1495,6 @@ class Companion:
         return raw
 
 
-
-
-def infer_media(text: str) -> str | None:
-    stripped = (text or "").strip()
-    if not stripped:
-        return None
-    if _MEDIA_NEXT.search(stripped):
-        return "next"
-    if _MEDIA_PREV.search(stripped):
-        return "previous"
-    if _MEDIA_RESUME.search(stripped):
-        return "toggle"
-    if _MEDIA_PAUSE.search(stripped) and "灯" not in stripped:
-        return "toggle"
-    return parse_media_action(stripped)
-
-
-def infer_volume(text: str) -> str | None:
-    stripped = (text or "").strip()
-    if not stripped:
-        return None
-    if _VOLUME_UNMUTE.search(stripped):
-        return "up"
-    if _VOLUME_MUTE.search(stripped):
-        return "mute"
-    if _VOLUME_UP.search(stripped):
-        return "up"
-    if _VOLUME_DOWN.search(stripped):
-        return "down"
-    return parse_volume_action(stripped)
-
-
-def parse_media_action(raw: str) -> str | None:
-    match = _ACTION_MEDIA.search(raw or "")
-    if not match:
-        return None
-    return match.group(1).lower()
-
-
-def parse_volume_action(raw: str) -> str | None:
-    match = _ACTION_VOLUME.search(raw or "")
-    if not match:
-        return None
-    return match.group(1).lower()
-
-
-def parse_timer_action(raw: str) -> int | None:
-    match = _ACTION_TIMER.search(raw or "")
-    if not match:
-        return None
-    minutes = int(match.group(1))
-    if 1 <= minutes <= 120:
-        return minutes * 60
-    return None
-
-
-def parse_timer(text: str) -> int | None:
-    action = parse_timer_action(text)
-    if action is not None:
-        return action
-    stripped = (text or "").strip()
-    if not re.search(r"(叫我|提醒我|喊我|叫一声)", stripped):
-        return None
-    if re.search(r"半(?:个)?小时", stripped):
-        return 30 * 60
-    match = re.search(
-        r"(?:再)?(?:过)?(?P<num>\d{1,3}|[零〇一二两三四五六七八九十]+)"
-        r"(?P<unit>秒钟|秒|分钟|分|小时|钟头)后",
-        stripped,
-    )
-    if not match:
-        if re.search(r"(一会儿|过一会).*(叫我|提醒我)", stripped):
-            return 5 * 60
-        return None
-    number = parse_cn_int(match.group("num"))
-    if number is None or number < 1:
-        return None
-    unit = match.group("unit")
-    if unit in {"秒", "秒钟"}:
-        seconds = number
-    elif unit in {"小时", "钟头"}:
-        seconds = number * 3600
-    else:
-        seconds = number * 60
-    if seconds < 10 or seconds > 2 * 3600:
-        return None
-    return seconds
 
 
 def _call_world(fn: Any) -> Any:

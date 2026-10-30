@@ -13,6 +13,8 @@ from pathlib import Path
 
 from dock_hub.intents import (
     constrain_light_actions,
+    infer_media,
+    infer_volume,
     fold_game_asr,
     infer_brightness,
     infer_control,
@@ -20,7 +22,11 @@ from dock_hub.intents import (
     normalize_phrase,
     parse_bri_actions,
     parse_cn_int,
+    parse_media_action,
     parse_teach,
+    parse_timer,
+    parse_timer_action,
+    parse_volume_action,
     query_kind,
     resolve_skill,
     skill_prompt,
@@ -152,6 +158,60 @@ class TeachTest(unittest.TestCase):
 
     def test_normalize_strips_punctuation(self) -> None:
         self.assertEqual(normalize_phrase("「开黑。」"), "开黑")
+
+
+class MediaAndVolumeTest(unittest.TestCase):
+    """媒体 / 音量：和开关灯同一套写法，只是目标不是设备。"""
+
+    def test_media_words(self) -> None:
+        self.assertEqual(infer_media("下一首"), "next")
+        self.assertEqual(infer_media("上一首"), "previous")
+        self.assertEqual(infer_media("继续放"), "toggle")
+        self.assertEqual(infer_media("暂停"), "toggle")
+
+    def test_pause_the_lamp_is_not_pause_the_music(self) -> None:
+        # 「灯光停一下」这类话里有「停」，但不能当成暂停播放
+        self.assertIsNone(infer_media("灯先停一下"))
+
+    def test_media_action_line(self) -> None:
+        self.assertEqual(parse_media_action("ACTION: media.next"), "next")
+        self.assertIsNone(parse_media_action("ACTION: media.nope"))
+
+    def test_volume_words(self) -> None:
+        self.assertEqual(infer_volume("声音大一点"), "up")
+        self.assertEqual(infer_volume("小声点"), "down")
+        self.assertEqual(infer_volume("静音"), "mute")
+        # 取消静音而不是再按一次静音
+        self.assertEqual(infer_volume("取消静音"), "up")
+
+    def test_volume_action_line(self) -> None:
+        self.assertEqual(parse_volume_action("ACTION: volume.down"), "down")
+        self.assertIsNone(parse_volume_action("ACTION: volume.sideways"))
+
+
+class TimerTest(unittest.TestCase):
+    def test_minutes_and_hours(self) -> None:
+        self.assertEqual(parse_timer("25分钟后提醒我"), 25 * 60)
+        self.assertEqual(parse_timer("一小时后叫我"), 60 * 60)
+        # 带量词的「一个」不被认：数字和单位之间夹了字，正则不匹配
+        self.assertIsNone(parse_timer("一个小时后叫我"))
+        self.assertEqual(parse_timer("半小时后喊我一声"), 30 * 60)
+
+    def test_vague_phrase_gets_five_minutes(self) -> None:
+        self.assertEqual(parse_timer("过一会儿叫我"), 5 * 60)
+
+    def test_needs_a_reminder_word(self) -> None:
+        self.assertIsNone(parse_timer("现在几点了"))
+
+    def test_bounds(self) -> None:
+        # 太短没意义，太长（超过两小时）不接受
+        self.assertIsNone(parse_timer("5秒后叫我"))
+        self.assertIsNone(parse_timer("3个小时后叫我"))
+
+    def test_action_line_wins(self) -> None:
+        self.assertEqual(parse_timer_action("ACTION: timer.5"), 300)
+        self.assertIsNone(parse_timer_action("ACTION: timer.500"))
+        self.assertEqual(parse_timer("ACTION: timer.5"), 300)
 
 
 class IndependenceTest(unittest.TestCase):
