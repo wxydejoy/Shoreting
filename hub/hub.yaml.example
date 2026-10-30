@@ -39,6 +39,10 @@ mini:
 #   morning:
 #     at: "07:30"
 #     # text: "早，记得喝水。"   # 不写就现拼：问好 + 室温
+#   # 异常提醒：坏够久才说，一天一件事最多一句，同一份每日配额
+#   alerts:
+#     temp_celsius: 85      # Windows CPU 温度阈值（热满 3 分钟才说）；0 = 不提
+#     offline_minutes: 10   # 米家设备离线多久提醒；0 = 不提
 
 # 桌面伴侣（本地 LLM + Mini TTS）。整段删掉或 enabled: false → snapshot.companion = null
 # Hub 在 Mini 上填 127.0.0.1

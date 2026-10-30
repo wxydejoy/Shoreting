@@ -46,6 +46,14 @@ class MorningConfig:
 
 
 @dataclass
+class AlertsConfig:
+    """异常提醒的阈值。0 表示那条不提醒。"""
+
+    temp_celsius: int = 85
+    offline_minutes: int = 10
+
+
+@dataclass
 class ProactiveConfig:
     """她不等人喊也可以开口的时刻。
 
@@ -57,6 +65,7 @@ class ProactiveConfig:
     daily_limit: int = 6
     quiet: tuple[str, str] = ("23:00", "07:00")
     morning: MorningConfig = field(default_factory=MorningConfig)
+    alerts: AlertsConfig = field(default_factory=AlertsConfig)
 
 
 @dataclass
@@ -410,6 +419,19 @@ def parse_clock(value: Any, label: str) -> str:
     return f"{int(match.group(1)):02d}:{match.group(2)}"
 
 
+def _threshold(value: Any, default: int, label: str) -> int:
+    """阈值：不写用默认，写 0 表示这条不提醒，负数直接报错。"""
+    if value is None:
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} 必须是整数") from exc
+    if number < 0:
+        raise ValueError(f"{label} 不能是负数")
+    return number
+
+
 def _parse_proactive(raw: Any) -> ProactiveConfig:
     if raw is None or raw is False:
         return ProactiveConfig()
@@ -444,7 +466,23 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
         at=parse_clock(at, "proactive.morning.at") if at else "",
         text=str(morning_raw.get("text") or "").strip(),
     )
-    return ProactiveConfig(enabled=True, daily_limit=limit, quiet=quiet, morning=morning)
+    alerts_raw = raw.get("alerts")
+    if alerts_raw is None or alerts_raw is True:
+        alerts = AlertsConfig()
+    elif alerts_raw is False:
+        alerts = AlertsConfig(temp_celsius=0, offline_minutes=0)
+    elif isinstance(alerts_raw, dict):
+        alerts = AlertsConfig(
+            temp_celsius=_threshold(alerts_raw.get("temp_celsius"), 85, "proactive.alerts.temp_celsius"),
+            offline_minutes=_threshold(
+                alerts_raw.get("offline_minutes"), 10, "proactive.alerts.offline_minutes"
+            ),
+        )
+    else:
+        raise ValueError("proactive.alerts 必须是对象，或用 alerts: false 全关")
+    return ProactiveConfig(
+        enabled=True, daily_limit=limit, quiet=quiet, morning=morning, alerts=alerts
+    )
 
 
 def _parse_probe(raw: Any) -> ProbeConfig:
@@ -715,6 +753,13 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
         if config.morning.text:
             morning["text"] = config.morning.text
         raw["morning"] = morning
+    if config.alerts.temp_celsius <= 0 and config.alerts.offline_minutes <= 0:
+        raw["alerts"] = False
+    else:
+        raw["alerts"] = {
+            "temp_celsius": config.alerts.temp_celsius,
+            "offline_minutes": config.alerts.offline_minutes,
+        }
     return raw
 
 

@@ -32,7 +32,7 @@ from dock_hub.launch import launch, launch_exists, launch_running, running_image
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
 from dock_hub.pc import PcSampler, utc_now
 from dock_hub.persona import speak_temp
-from dock_hub.proactive import Proactive
+from dock_hub.proactive import Proactive, Sustained
 from dock_hub.media import MEDIA_ACTIONS, MediaSession
 from dock_hub.reporter import DeskReporter
 from dock_hub.mijia_bridge import (
@@ -108,6 +108,7 @@ class DockHub:
             speak=self.companion.speak_up,
             compose_morning=self._morning_text,
         )
+        self._alert_state = Sustained()
         self._proactive_stop = threading.Event()
         self._start_proactive()
         self.reporter.start()
@@ -166,6 +167,53 @@ class DockHub:
             self.session = None
         self._login_message = "请在配置向导中扫码登录米家"
 
+    def _evaluate_alerts(self) -> None:
+        """温度太高、设备失联：坏够久才开口，一天一件事最多一句。"""
+        cfg = self.proactive.config
+        if not cfg.enabled:
+            return
+        now = datetime.now().astimezone()
+        alerts = cfg.alerts
+        if alerts.temp_celsius > 0:
+            cpu = (self.pc_snapshot() or {}).get("cpu")
+            temp = cpu.get("temp_celsius") if isinstance(cpu, dict) else None
+            if temp is not None and self._alert_state.check(
+                "temp", float(temp) >= alerts.temp_celsius, now, 180.0
+            ):
+                said = self.proactive.alert(
+                    "temp", f"Windows CPU {float(temp):.0f} 度，有点热。", now
+                )
+                if said.spoke:
+                    self._alert_state.clear("temp")  # 说过了，降温前不再提
+                print(f"[proactive] 温度提醒：{said.text or said.reason}")
+        if alerts.offline_minutes > 0:
+            for item in self._offline_mijia_devices():
+                key = f"offline:{item['id']}"
+                if self._alert_state.check(key, True, now, alerts.offline_minutes * 60.0):
+                    said = self.proactive.alert(key, f"{item['name']}有一阵没应答了。", now)
+                    if said.spoke:
+                        self._alert_state.clear(key)
+                    print(f"[proactive] 离线提醒：{said.text or said.reason}")
+
+    def _offline_mijia_devices(self) -> list[dict[str, str]]:
+        """配置里走米家、此刻离线的设备。启动项、灯带、探针电脑不算——
+        电脑关机是常态，说「电脑离线了」只会讨人嫌。"""
+        with self._desk_lock:
+            cached = list(self._desk_devices)
+        by_id = {
+            item["id"]: item
+            for item in cached
+            if isinstance(item, dict) and item.get("id")
+        }
+        out: list[dict[str, str]] = []
+        for cfg in self.config.devices:
+            if cfg.is_action or not cfg.mijia_name:
+                continue
+            item = by_id.get(cfg.id)
+            if item is not None and item.get("online") is False:
+                out.append({"id": cfg.id, "name": cfg.name})
+        return out
+
     def _morning_text(self, now: datetime) -> str:
         """早间播报正文：问好 + 室温。拿不到的那一样就跳过，不硬凑。"""
         parts: list[str] = []
@@ -199,6 +247,10 @@ class DockHub:
                         print(f"[proactive] {said.text}")
                 except Exception as exc:  # 播报挂了不能拖垮 Hub
                     print(f"[proactive] 出错：{exc}")
+                try:
+                    self._evaluate_alerts()
+                except Exception as exc:
+                    print(f"[proactive] 提醒出错：{exc}")
 
         threading.Thread(target=loop, name="proactive", daemon=True).start()
 
