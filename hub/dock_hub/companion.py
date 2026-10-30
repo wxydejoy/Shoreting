@@ -39,6 +39,9 @@ from dock_hub.intents import (
     infer_media,
     infer_volume,
     parse_media_action,
+    parse_stopwatch_action,
+    parse_stopwatch_start,
+    parse_stopwatch_stop,
     parse_timer,
     parse_timer_action,
     parse_volume_action,
@@ -117,6 +120,7 @@ from dock_hub.persona import (
 )
 from dock_hub.metrics import METRICS
 
+from dock_hub.timers import TimerBoard, speak_stopwatch_result
 from dock_hub.tts import Tts
 
 MAX_CLIPS = 8
@@ -154,6 +158,7 @@ class Companion:
         self._chat_log: ChatLog | None = None
         self._recent: deque[tuple[str, str]] = deque(maxlen=5)
         self._timer: threading.Timer | None = None
+        self.timers = TimerBoard()
         self._extra_llm_headers: dict[str, str] = {}
         self._k20_seen_at = 0.0
         self._story_books = None
@@ -215,6 +220,7 @@ class Companion:
             "ready": self.ready(),
             "voice": self.voice(),
             "speaking": speaking,
+            "timer": self.timers.snapshot(),
         }
         return body
 
@@ -660,6 +666,24 @@ class Companion:
         return spoken, [{"id": ident, "name": name, "scene": True, "ok": ok}]
 
     def _handle_desk(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        act = parse_stopwatch_action(text)
+        if act is None:
+            if parse_stopwatch_start(text):
+                act = "start"
+            elif parse_stopwatch_stop(text):
+                act = "stop"
+        if act == "start":
+            self.timers.start_stopwatch()
+            _latency(turn, "stopwatch_start")
+            return "好，开始计时。", [{"id": "stopwatch", "action": "start", "ok": True}]
+        if act == "stop":
+            elapsed = self.timers.stop_stopwatch()
+            if elapsed is None:
+                return "还没开始记呢。", [{"id": "stopwatch", "action": "stop", "ok": False}]
+            _latency(turn, "stopwatch_stop", sec=elapsed)
+            return speak_stopwatch_result(elapsed), [
+                {"id": "stopwatch", "action": "stop", "sec": elapsed, "ok": True}
+            ]
         seconds = parse_timer(text)
         if seconds is not None:
             spoken = self._arm_timer(seconds)
@@ -744,6 +768,7 @@ class Companion:
         with self._lock:
             self._timer = timer
         timer.start()
+        self.timers.arm(seconds)
         _latency("-", "timer_set", sec=seconds)
         return speak_timer(seconds)
 
@@ -752,6 +777,7 @@ class Companion:
             self._timer = None
             self._seq += 1
             seq = self._seq
+        self.timers.clear()
         spoken = "到时间了。"
         turn = uuid.uuid4().hex[:12]
         self._cue_sentence(spoken, turn, seq)
@@ -762,6 +788,7 @@ class Companion:
         with self._lock:
             timer = self._timer
             self._timer = None
+        self.timers.clear()
         if timer is not None:
             timer.cancel()
 

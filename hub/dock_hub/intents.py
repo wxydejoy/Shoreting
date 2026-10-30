@@ -109,6 +109,7 @@ def skill_prompt(skills: list[dict[str, str]]) -> str:
         "暂停/下一首：ACTION: media.toggle 或 ACTION: media.next。"
         "音量：ACTION: volume.up / volume.down / volume.mute。"
         "倒计时：ACTION: timer.<分钟>。"
+        "正计时（记时长）：ACTION: stopwatch.start 开始，ACTION: stopwatch.stop 停表。"
     )
     return "\n".join(lines)
 
@@ -507,6 +508,22 @@ _ACTION_VOLUME = re.compile(
 _ACTION_TIMER = re.compile(
     r"^\s*ACTION:\s*timer\.(\d{1,3})\s*$", re.IGNORECASE | re.MULTILINE
 )
+_ACTION_STOPWATCH = re.compile(
+    r"^\s*ACTION:\s*stopwatch\.(start|stop)\s*$", re.IGNORECASE | re.MULTILINE
+)
+
+# 正计时（F9）：「开始正计时」「帮我记一下时长」起表，「停/结束」落表。
+# 放在 parse_timer 之前判断，免得「开始计时」被当成定时。
+_STOPWATCH_START = re.compile(r"(开始|启动|来一个|开一个)(个)?(正计时|计时|计时器)")
+_STOPWATCH_STOP = re.compile(r"(停止|结束|停掉|关掉|落)(个)?(正计时|计时|计时器)|计时结束")
+
+
+def parse_stopwatch_start(text: str) -> bool:
+    return bool(_STOPWATCH_START.search((text or "").strip()))
+
+
+def parse_stopwatch_stop(text: str) -> bool:
+    return bool(_STOPWATCH_STOP.search((text or "").strip()))
 
 
 def infer_media(text: str) -> str | None:
@@ -561,6 +578,11 @@ def parse_timer_action(raw: str) -> int | None:
     if 1 <= minutes <= 120:
         return minutes * 60
     return None
+
+
+def parse_stopwatch_action(raw: str) -> str | None:
+    match = _ACTION_STOPWATCH.search(raw or "")
+    return match.group(1).lower() if match else None
 
 
 def parse_timer(text: str) -> int | None:

@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,8 +48,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,7 +60,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -86,6 +92,7 @@ import cn.weiekko.dock.data.HubDevice
 import cn.weiekko.dock.data.MediaInfo
 import cn.weiekko.dock.data.ModuleRect
 import cn.weiekko.dock.data.PcStatus
+import cn.weiekko.dock.data.TimerStatus
 import cn.weiekko.dock.data.WeatherInfo
 import cn.weiekko.dock.data.WinApp
 import cn.weiekko.dock.data.defaultDockLayout
@@ -448,6 +455,17 @@ fun HomeScreen(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(top = 14.dp, end = 4.dp),
+                    )
+                }
+
+                val companionTimer = if (editing) null else state.snapshot?.companion?.timer
+                if (companionTimer != null) {
+                    TimerRing(
+                        timer = companionTimer,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 14.dp, end = 16.dp)
+                            .zIndex(15f),
                     )
                 }
 
@@ -1446,6 +1464,72 @@ private fun CompanionCaption(
         style = TextStyle(shadow = StatShadow),
         modifier = modifier,
     )
+}
+
+/** 番茄钟细环（F9）：倒计时走环、正计时满环，中间是时间。 */
+@Composable
+private fun TimerRing(
+    timer: TimerStatus,
+    modifier: Modifier = Modifier,
+) {
+    // 两次快照之间本地每秒续走：key 换新快照时归零重数
+    val tick by produceState(0, timer) {
+        while (true) {
+            kotlinx.coroutines.delay(1_000)
+            value++
+        }
+    }
+    val progress: Float
+    val shown: Int
+    if (timer.isStopwatch) {
+        progress = 1f
+        shown = timer.seconds + tick
+    } else {
+        shown = (timer.secondsLeft - tick).coerceAtLeast(0)
+        progress = if (timer.totalSec > 0) shown.toFloat() / timer.totalSec else 0f
+    }
+    val track = Color.White.copy(alpha = 0.16f)
+    val ring = Color.White.copy(alpha = 0.85f)
+    Box(modifier = modifier.size(64.dp), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = 3.dp.toPx()
+            val inset = stroke / 2
+            val arcSize = Size(size.width - stroke, size.height - stroke)
+            drawArc(
+                color = track,
+                startAngle = -90f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+            drawArc(
+                color = ring,
+                startAngle = -90f,
+                sweepAngle = 360f * progress.coerceIn(0f, 1f),
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+        }
+        Text(
+            formatTimer(shown),
+            color = Color.White.copy(alpha = 0.9f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            style = TextStyle(shadow = StatShadow),
+        )
+    }
+}
+
+private fun formatTimer(seconds: Int): String {
+    val s = seconds.coerceAtLeast(0)
+    val h = s / 3600
+    val m = (s % 3600) / 60
+    val sec = s % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%02d:%02d".format(m, sec)
 }
 
 @Preview(showBackground = true, backgroundColor = 0xFF0E0E0E, widthDp = 914, heightDp = 411)
