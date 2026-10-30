@@ -180,7 +180,7 @@ def build_state(hub: DockHub) -> dict[str, Any]:
         message = message or devices_error
 
     return {
-        "config": hub_config_to_raw(hub.config),
+        "config": hub_config_to_raw(hub.config, mask_secrets=True),
         "lan_ips": lan_ips(),
         "mijia": status,
         "mijia_message": message,

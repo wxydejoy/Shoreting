@@ -1552,7 +1552,13 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
     return raw
 
 
-def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
+def hub_config_to_raw(config: HubConfig, *, mask_secrets: bool = False) -> dict[str, Any]:
+    """把配置导回 YAML 形状。
+
+    mask_secrets=True 用于配置向导的读接口：上游大模型密钥与探针口令只回
+    "已配置" 标记，不把原文发到浏览器。写接口仍然按字段为空即保留原值的
+    语义处理（见 setup_ui._payload_to_raw），所以脱敏不会把密钥抹掉。
+    """
     raw: dict[str, Any] = {
         "name": config.name,
         "host": config.host,
@@ -1635,7 +1641,10 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
                 "timeout_sec": config.companion.timeout_sec,
             }
             if config.companion.llm_api_key:
-                llm["api_key"] = config.companion.llm_api_key
+                if mask_secrets:
+                    llm["api_key_set"] = True
+                else:
+                    llm["api_key"] = config.companion.llm_api_key
             if config.companion.num_ctx != 4096:
                 llm["num_ctx"] = config.companion.num_ctx
             if config.companion.num_predict != 256:

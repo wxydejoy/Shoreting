@@ -160,6 +160,15 @@ class SetupWizardTest(unittest.TestCase):
                 "port": 0,
                 "devices": [],
                 "mini": False,
+                "companion": {
+                    "enabled": True,
+                    "llm": {
+                        "base_url": "https://example.com/compatible-mode/v1",
+                        "model": "qwen3.8-flash",
+                        "api_key": "sk-test-placeholder",
+                    },
+                    "tts": {"base_url": "http://127.0.0.1:9"},
+                },
             }
         )
         hub = DockHub(cfg)
@@ -178,8 +187,14 @@ class SetupWizardTest(unittest.TestCase):
         conn.request("GET", "/setup/api/state")
         resp = conn.getresponse()
         self.assertEqual(resp.status, 200)
-        body = json.loads(resp.read().decode("utf-8"))
+        raw = resp.read().decode("utf-8")
+        body = json.loads(raw)
         self.assertEqual(body["config"]["name"], "study")
+        # 向导读接口不能把上游密钥原文发到浏览器
+        llm = body["config"]["companion"]["llm"]
+        self.assertNotIn("api_key", llm)
+        self.assertTrue(llm["api_key_set"])
+        self.assertNotIn("sk-test-placeholder", raw)
         conn.close()
 
 
