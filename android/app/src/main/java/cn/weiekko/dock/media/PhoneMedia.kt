@@ -16,6 +16,7 @@ class PhoneMedia(private val context: Context) {
     private val sessions =
         context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
     private val listenerName = ComponentName(context, DockNotificationListener::class.java)
+    private val keeper = MediaSnapshotKeeper()
 
     fun dispatch(action: String) {
         val code = when (action) {
@@ -28,7 +29,9 @@ class PhoneMedia(private val context: Context) {
         audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
     }
 
-    fun snapshot(): MediaInfo {
+    fun snapshot(): MediaInfo = keeper.keep(read())
+
+    private fun read(): MediaInfo {
         val now = Instant.now().toString()
         val controller = activeController()
         if (controller != null) {
