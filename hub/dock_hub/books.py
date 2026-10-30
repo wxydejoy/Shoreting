@@ -10,8 +10,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from dock_hub.companion import (
-    _PUNCT_ONLY,
+from dock_hub.speech import (
+    PUNCT_ONLY,
     chunk_read_text,
     estimate_read_seconds,
     pack_read_chunks,
@@ -101,17 +101,17 @@ def next_slice(text: str, offset: int, limit: int | None = None) -> tuple[int, s
     if offset >= bound:
         return None
     start = offset
-    while start < bound and _PUNCT_ONLY.match(text[start]):
+    while start < bound and PUNCT_ONLY.match(text[start]):
         start += 1
     if start >= bound:
         return None
     window = text[start:bound]
     packed = pack_read_chunks(chunk_read_text(window))
-    if packed and window.startswith(packed[0]) and not _PUNCT_ONLY.match(packed[0]):
+    if packed and window.startswith(packed[0]) and not PUNCT_ONLY.match(packed[0]):
         return start, packed[0]
     for candidate in chunk_read_text(window):
         piece = candidate.strip()
-        if piece and window.startswith(piece) and not _PUNCT_ONLY.match(piece):
+        if piece and window.startswith(piece) and not PUNCT_ONLY.match(piece):
             return start, piece
     return start, window
 
