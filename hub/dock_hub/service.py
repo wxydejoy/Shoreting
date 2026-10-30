@@ -30,6 +30,7 @@ from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig
 from dock_hub.dusk import DuskRamp
 from dock_hub.alarm import AlarmRamp
 from dock_hub.system_volume import read_output_volume, write_output_volume
+from dock_hub.theme import birthday_text, occasions_for
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
@@ -222,12 +223,22 @@ class DockHub:
             self.session = None
         self._login_message = "请在配置向导中扫码登录米家"
 
+    def _theme_payload(self) -> dict[str, list[str]] | None:
+        """今天是什么日子（F36）。没配生日和考试周、又不是节日，就不用带。"""
+        occasions = occasions_for(datetime.now().astimezone().date(), self.config.theme)
+        return {"occasions": occasions} if occasions else None
+
     def _evaluate_alerts(self) -> None:
         """温度太高、设备失联：坏够久才开口，一天一件事最多一句。"""
         cfg = self.proactive.config
         if not cfg.enabled:
             return
         now = datetime.now().astimezone()
+        if self.config.theme.birthday and occasions_for(
+            now.date(), self.config.theme
+        )[:1] == ["birthday"]:
+            said = self.proactive.alert("birthday", birthday_text(), now)
+            print(f"[proactive] 生日问候：{said.text or said.reason}")
         alerts = cfg.alerts
         if alerts.temp_celsius > 0:
             cpu = (self.pc_snapshot() or {}).get("cpu")
@@ -1746,6 +1757,7 @@ class DockHub:
             "at_desk": self._at_desk_payload(),
             "notify": self.notify.snapshot(),
             "alarm": self._alarm.snapshot() if self._alarm else None,
+            "theme": self._theme_payload(),
         }
         self._note_desk_snapshot(body)
         return body

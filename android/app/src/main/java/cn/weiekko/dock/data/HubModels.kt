@@ -22,6 +22,13 @@ data class Snapshot(
     val devices: List<HubDevice> = emptyList(),
     val notify: NotifyState? = null,
     val alarm: AlarmStatus? = null,
+    val theme: ThemeStatus? = null,
+)
+
+/** 今天是什么日子（F36）：Hub 管日期（生日/节日/考试周），天气归手机自己。 */
+@Serializable
+data class ThemeStatus(
+    val occasions: List<String> = emptyList(),
 )
 
 /** 起床闹钟（F11）：爬坡进行中的剩余/总秒数，屏幕跟着爬亮；不在爬就没有。 */

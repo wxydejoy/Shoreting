@@ -1079,6 +1079,25 @@ components:
           description: >
             起床闹钟（F11）爬坡进度。只在爬坡进行中出现；手机屏幕按
             1 - seconds_left/total_sec 渐亮。没配闹钟或不在爬坡时为 null。
+        theme:
+          allOf:
+            - $ref: "#/components/schemas/ThemeStatus"
+          nullable: true
+          description: >
+            今天是什么日子（F36）。日期归 Hub（生日/节日/考试周），
+            天气归手机。没配也不是节日时为 null。
+    ThemeStatus:
+      type: object
+      required: [occasions]
+      properties:
+        occasions:
+          type: array
+          description: >
+            优先级从高到低：birthday / spring_festival / new_year /
+            christmas / exam_week。下雨天手机自己加，不从这里来。
+          items:
+            type: string
+
     AlarmRamp:
       type: object
       required: [seconds_left, total_sec]

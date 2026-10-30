@@ -310,6 +310,14 @@ class AlarmConfig:
 
 
 @dataclass
+class ThemeConfig:
+    """主题皮肤（F36）。日期归 Hub：生日、考试周；节日（春节等）内置。"""
+
+    birthday: str = ""  # "MM-DD"；空 = 不提生日
+    exam_weeks: list[str] = field(default_factory=list)  # ["02-20..02-26"]，闭区间
+
+
+@dataclass
 class SceneConfig:
     """一组「一起动」的设备，可以带一句话和一个语音口令。"""
 
@@ -353,6 +361,7 @@ class HubConfig:
     focus: FocusConfig = field(default_factory=FocusConfig)
     dusk: DuskConfig = field(default_factory=DuskConfig)
     alarm: AlarmConfig = field(default_factory=AlarmConfig)
+    theme: ThemeConfig = field(default_factory=ThemeConfig)
     path: Path | None = None
 
     def auth_values(self) -> tuple[str, ...]:
@@ -462,6 +471,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     focus = _parse_focus(raw.get("focus"), scenes)
     dusk = _parse_dusk(raw.get("dusk"), devices)
     alarm = _parse_alarm(raw.get("alarm"), devices)
+    theme = _parse_theme(raw.get("theme"))
 
     return HubConfig(
         name=name,
@@ -483,6 +493,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         focus=focus,
         dusk=dusk,
         alarm=alarm,
+        theme=theme,
         path=path,
     )
 
@@ -1265,6 +1276,44 @@ def _parse_alarm(raw: Any, devices: list[DeviceConfig]) -> AlarmConfig:
     )
 
 
+def _parse_theme(raw: Any) -> ThemeConfig:
+    """主题皮肤（F36）。生日 "MM-DD"，考试周 "MM-DD..MM-DD" 闭区间。"""
+    if raw is None or raw is False:
+        return ThemeConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("theme 必须是对象，或用 theme: false 关掉")
+    birthday = str(raw.get("birthday") or "").strip()
+    if birthday:
+        if _parse_theme_mmdd(birthday) is None:
+            raise ValueError(f"theme.birthday 要是 \"MM-DD\"，收到 {birthday!r}")
+    weeks_raw = raw.get("exam_weeks") or []
+    if not isinstance(weeks_raw, list):
+        raise ValueError("theme.exam_weeks 必须是列表")
+    weeks: list[str] = []
+    for item in weeks_raw:
+        week = str(item).strip()
+        if not week:
+            continue
+        left, sep, right = week.partition("..")
+        if not sep or _parse_theme_mmdd(left.strip()) is None or _parse_theme_mmdd(right.strip()) is None:
+            raise ValueError(f"theme.exam_weeks 里要写 \"MM-DD..MM-DD\"，收到 {week!r}")
+        weeks.append(week)
+    return ThemeConfig(birthday=birthday, exam_weeks=weeks)
+
+
+def _parse_theme_mmdd(raw: str) -> tuple[int, int] | None:
+    parts = raw.split("-")
+    if len(parts) != 2:
+        return None
+    try:
+        month, day = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    return month, day
+
+
 def scene_to_raw(scene: SceneConfig) -> dict[str, Any]:
     raw: dict[str, Any] = {"id": scene.id, "name": scene.name}
     if scene.on:
@@ -1405,6 +1454,11 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             "ramp_min": config.alarm.ramp_min,
             "say": config.alarm.say,
             **({"device": config.alarm.device} if config.alarm.device else {}),
+        }
+    if config.theme.birthday or config.theme.exam_weeks:
+        raw["theme"] = {
+            **({"birthday": config.theme.birthday} if config.theme.birthday else {}),
+            **({"exam_weeks": list(config.theme.exam_weeks)} if config.theme.exam_weeks else {}),
         }
     if config.temperature:
         raw["temperature"] = temperature_to_raw(config.temperature)

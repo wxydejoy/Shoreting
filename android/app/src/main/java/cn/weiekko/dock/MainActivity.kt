@@ -40,6 +40,7 @@ import cn.weiekko.dock.power.CameraPresence
 import cn.weiekko.dock.power.DockPower
 import cn.weiekko.dock.power.HubWatchService
 import cn.weiekko.dock.power.ScreenCommand
+import cn.weiekko.dock.data.ThemeSkin
 import cn.weiekko.dock.ui.DockTheme
 import cn.weiekko.dock.ui.DockViewModel
 import cn.weiekko.dock.ui.HomeScreen
@@ -159,7 +160,12 @@ class MainActivity : ComponentActivity() {
                 applyAlarmRamp()
             }
 
-            DockTheme {
+            // F36：Hub 管日期（生日/节日/考试周），手机自己看下雨天
+            val skin = ThemeSkin.pick(
+                state.snapshot?.theme?.occasions.orEmpty(),
+                rainy = state.weather?.condition?.any { it in "雨雪雷" } == true,
+            )
+            DockTheme(skin = skin) {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     containerColor = Color.Transparent,
