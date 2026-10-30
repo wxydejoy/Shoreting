@@ -100,6 +100,9 @@ class DockHub:
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
         self._wire_companion()
+        self._focus_active: bool | None = None  # None = 还没看过一眼，不触发
+        self._focus_stop = threading.Event()
+        self._start_focus()
         self.reporter.start()
 
     def _attach_books(self) -> None:
@@ -182,6 +185,7 @@ class DockHub:
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
         self._wire_companion()
+        self._start_focus()
         self.reporter.start()
         threading.Thread(target=self.login, name="mijia-reload", daemon=True).start()
 
@@ -603,6 +607,46 @@ class DockHub:
 
         threading.Thread(target=speak, name="scene-say", daemon=True).start()
         return True
+
+    def _start_focus(self) -> None:
+        """游戏开起来自动切场景。没配就不起线程；改了配置重建线程。"""
+        self._focus_stop.set()
+        self._focus_active = None  # 换了场景配置，边沿重新算
+        if not self.config.focus.enabled or not self.config.focus.on:
+            self._focus_stop = threading.Event()
+            return
+        self._focus_stop = threading.Event()
+        stop = self._focus_stop
+
+        def loop() -> None:
+            while not stop.wait(15.0):
+                try:
+                    self._evaluate_focus()
+                except Exception as exc:  # 联动挂了不能拖垮 Hub
+                    print(f"[focus] 出错：{exc}")
+
+        threading.Thread(target=loop, name="focus", daemon=True).start()
+
+    def _evaluate_focus(self) -> None:
+        """边沿触发：从「没在玩」变「在玩」切 on 场景，反过来切 off 场景。
+
+        启动时如果游戏已经开着，只记录状态、不触发——那不是「刚开起来」。
+        """
+        focus = self.config.focus
+        running = self._game_running()
+        previous = self._focus_active
+        self._focus_active = running
+        if previous is None or previous == running:
+            return
+        scene_id = focus.on if running else focus.off
+        if not scene_id:
+            return
+        try:
+            out = self.run_scene(scene_id)
+        except HubError as exc:
+            print(f"[focus] 场景 {scene_id} 没跑成：{exc.message}")
+            return
+        print(f"[focus] {'进' if running else '退'}游戏 → {scene_id}：{out.get('name')}")
 
     def _command_media(self, body: dict[str, Any]) -> dict[str, Any]:
         if "on" in body or "run" in body or "brightness" in body:

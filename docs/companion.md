@@ -132,6 +132,8 @@ HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
 
 点灯仍可用主屏开关。启动项仍可点 logo。
 
+场景（`scenes:`）配好后，除了喊口令和手机点磁贴，还能**专注联动**（`focus:`）：启动项里的程序一跑起来就自动切一个场景（写场景 id 或名字），退出来再切回另一个；检测跟守岸人判断「在打游戏」是同一套，所以游戏期间她照样不主动开口，`on` 场景里配的 `say` 会被不打扰闸拦下——想让她说，把那句话放进 `off` 场景。启动时游戏已经开着不算「刚开起来」，不会触发。
+
 ## Hub 配置要点
 
 `%USERPROFILE%\.config\dock-hub\hub.yaml`（不要把 token 提交进仓库）：

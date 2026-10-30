@@ -497,6 +497,9 @@ def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
     # 场景不在这张表单里，但保存时不能把它抹掉
     if dumped.get("scenes") is not None:
         raw["scenes"] = dumped["scenes"]
+    # 专注联动向导里没有表单，保存时原样带过去
+    if dumped.get("focus") is not None:
+        raw["focus"] = dumped["focus"]
     return raw
 
 
