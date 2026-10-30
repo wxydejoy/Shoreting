@@ -88,7 +88,10 @@ class FakeHost:
 
 class ReadJobsTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        # ignore_cleanup_errors：read-jobs 是 daemon 线程，用例结束后可能还在
+        # 往目录里补写 wav / meta，跟 rmtree 撞出「Directory not empty」。
+        # 这是测试收尾的竞态，不是产品行为，放宽掉。
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
         self.host = FakeHost()

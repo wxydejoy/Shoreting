@@ -15,7 +15,15 @@ from dock_hub.proactive import (
 
 
 def at(hour: int, minute: int = 0) -> datetime:
-    return datetime(2026, 10, 30, hour, minute)
+    """测试用的「今天某时刻」。
+
+    必须跟 Proactive.configure() 里的真实时钟同一天：configure 会用
+    `datetime.now()` 重置当日配额，如果这里写死日期，真实日期一漂移
+    （比如仓库日期停在 10-30、真实已经是 10-31），configure 一调就把
+    计数清成另一天，断言从偶发红变常驻红。
+    """
+    today = datetime.now().astimezone().date()
+    return datetime(today.year, today.month, today.day, hour, minute)
 
 
 class FakeSpeaker:
@@ -104,7 +112,7 @@ class TestMorning(unittest.TestCase):
     def test_next_day_again(self) -> None:
         bot = self._proactive()
         self.assertTrue(bot.tick(at(7, 40)).spoke)
-        next_day = datetime(2026, 10, 31, 7, 40)
+        next_day = at(7, 40) + timedelta(days=1)
         self.assertTrue(bot.tick(next_day).spoke)
 
 
@@ -232,7 +240,7 @@ class TestAlerts(unittest.TestCase):
     def test_next_day_fresh(self) -> None:
         bot, sp = self._bot()
         self.assertTrue(bot.alert("temp", "有点热。", at(10, 0)).spoke)
-        tomorrow = datetime(2026, 10, 31, 10, 0)
+        tomorrow = at(10, 0) + timedelta(days=1)
         self.assertTrue(bot.alert("temp", "有点热。", tomorrow).spoke)
 
     def test_blocked_does_not_mark(self) -> None:
@@ -569,17 +577,18 @@ class TestServiceAlerts(unittest.TestCase):
 
 
 def make_hourly(entries: list[tuple[float, int, float]]) -> dict:
-    """构造 fetch_hourly 的返回，entries 从 15:00 起每整点一条。"""
+    """构造 fetch_hourly 的返回，entries 从今天 15:00 起每整点一条。
+
+    日期取 `at()` 的同一天：_upcoming_hours 拿传入的 now 比对时间串，
+    两边必须同源，否则真实日期一走数据就落在窗外。
+    """
     times, temps, codes, winds = [], [], [], []
-    day, hour = 30, 15
-    for celsius, code, wind in entries:
-        times.append(f"2026-10-{day}T{hour:02d}:00")
+    base = at(15, 0)
+    for i, (celsius, code, wind) in enumerate(entries):
+        times.append((base + timedelta(hours=i)).strftime("%Y-%m-%dT%H:00"))
         temps.append(celsius)
         codes.append(code)
         winds.append(wind)
-        hour += 1
-        if hour == 24:
-            hour, day = 0, 31
     return {
         "city": "上海",
         "hourly": {"time": times, "celsius": temps, "code": codes, "wind_kmh": winds},
@@ -627,7 +636,7 @@ class TestWeatherChange(unittest.TestCase):
 
     def test_outside_window_ignored(self) -> None:
         # 20:00 的雨距 now（14:30）超出两小时窗口，不算数
-        hourly = {"hourly": {"time": ["2026-10-30T20:00"], "celsius": [20.0], "code": [63], "wind_kmh": [5.0]}}
+        hourly = {"hourly": {"time": [at(20, 0).strftime("%Y-%m-%dT%H:00")], "celsius": [20.0], "code": [63], "wind_kmh": [5.0]}}
         self.assertIsNone(weather_change_text(at(14, 30), 20.0, "晴", hourly))
 
     def test_missing_data_is_silent(self) -> None:
