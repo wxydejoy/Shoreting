@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import socket
@@ -134,11 +135,18 @@ def make_handler(
             return parsed
 
         def _require_auth(self) -> None:
+            # fail-closed：没配 token 时拒绝服务，而不是放行。
+            # 之前 `if not token: return` 意味着环境变量一空，全站就裸奔。
             if not token:
-                return
-            header = self.headers.get("Authorization", "")
-            expected = f"Bearer {token}"
-            if header != expected:
+                raise AuthError(503, "token_required", "服务未配置 token，已拒绝访问")
+            header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
+            value = header.strip()
+            got = value[7:].strip() if value.lower().startswith("bearer ") else ""
+            try:
+                ok = bool(got) and hmac.compare_digest(got.encode("utf-8"), token.encode("utf-8"))
+            except (UnicodeError, TypeError):
+                ok = False
+            if not ok:
                 raise AuthError(401, "unauthorized", "Token 不正确")
 
         def _json(self, status: int, body: dict[str, Any]) -> None:
