@@ -143,7 +143,9 @@ class SetupWizardTest(unittest.TestCase):
         self.addCleanup(server.shutdown)
         self.addCleanup(server.server_close)
 
-        conn = HTTPConnection("127.0.0.1", port, timeout=3)
+        # timeout=3 在整包测试的高负载下会偶发超时（DockHub 构造要起
+        # reporter / proactive / scheduler 好几条线程），放宽到 10s。
+        conn = HTTPConnection("127.0.0.1", port, timeout=10)
         conn.request("GET", "/setup/api/state")
         resp = conn.getresponse()
         self.assertEqual(resp.status, 200)
