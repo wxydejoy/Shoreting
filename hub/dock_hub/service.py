@@ -29,6 +29,7 @@ class _StorySpeaker:
 from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig, PcConfig, PropConfig, TemperatureConfig, default_config_path
 from dock_hub.dusk import DuskRamp
 from dock_hub.alarm import AlarmRamp
+from dock_hub.system_volume import read_output_volume, write_output_volume
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
@@ -154,6 +155,10 @@ class DockHub:
         self._start_proactive()
         self._focus_active: bool | None = None  # None = 还没看过一眼，不触发
         self._focus_stop = threading.Event()
+        # F22：进游戏静音、退出恢复。读写都走实例属性，测试好换假件
+        self._volume_before_game: int | None = None
+        self._read_volume = read_output_volume
+        self._write_volume = write_output_volume
         self._start_focus()
         self._dusk: DuskRamp | None = None
         self._start_dusk()
@@ -976,8 +981,14 @@ class DockHub:
             raise HubError("not_found", f"没有这条记忆：{key}")
         return {"ok": True, "key": key}
 
-    def companion_chats(self, *, limit: int = 200, query: str = "") -> dict[str, Any]:
-        return {"items": self.chat_log.list(limit=limit, query=query)}
+    def companion_chats(
+        self, *, limit: int = 200, query: str = "", day: str = "", with_days: bool = False
+    ) -> dict[str, Any]:
+        # F30 时间线：day 挑一天翻旧账，with_days 把记过话的日子一并带回
+        body: dict[str, Any] = {"items": self.chat_log.list(limit=limit, query=query, day=day)}
+        if with_days:
+            body["days"] = self.chat_log.days()
+        return body
 
     def companion_audio(self, audio_id: str) -> bytes:
         return self.companion.audio(audio_id)
@@ -1206,6 +1217,9 @@ class DockHub:
         """游戏开起来自动切场景。没配就不起线程；改了配置重建线程。"""
         self._focus_stop.set()
         self._focus_active = None  # 换了场景配置，边沿重新算
+        # 换配置时游戏音量别被留在 0：上一局静音还没恢复就先恢复
+        if not (self.config.focus.enabled and self.config.focus.mute):
+            self._restore_game_volume()
         if not self.config.focus.enabled or not self.config.focus.on:
             self._focus_stop = threading.Event()
             return
@@ -1288,6 +1302,10 @@ class DockHub:
         self._focus_active = running
         if previous is None or previous == running:
             return
+        if running:
+            self._mute_for_game()
+        else:
+            self._restore_game_volume()
         scene_id = focus.on if running else focus.off
         if not scene_id:
             return
@@ -1297,6 +1315,34 @@ class DockHub:
             print(f"[focus] 场景 {scene_id} 没跑成：{exc.message}")
             return
         print(f"[focus] {'进' if running else '退'}游戏 → {scene_id}：{out.get('name')}")
+
+    def _mute_for_game(self) -> None:
+        """进游戏把音量收到 0（F22）。读不到当前音量就不动——别瞎恢复。"""
+        if not self.config.focus.mute:
+            return
+        current = self._read_volume()
+        if current is None:
+            return
+        try:
+            self._write_volume(0)
+        except Exception as exc:  # noqa: BLE001 - 静音失败不算事
+            logs.swallowed("游戏静音", exc)
+            return
+        self._volume_before_game = current
+        print(f"[focus] 进游戏，音量先收到 0（原来 {current}）")
+
+    def _restore_game_volume(self) -> None:
+        """退游戏把音量放回原样。没静过音就什么都不做。"""
+        level = self._volume_before_game
+        if level is None:
+            return
+        self._volume_before_game = None
+        try:
+            self._write_volume(level)
+        except Exception as exc:  # noqa: BLE001
+            logs.swallowed("恢复游戏前音量", exc)
+            return
+        print(f"[focus] 退游戏，音量恢复到 {level}")
 
     def _command_media(self, body: dict[str, Any]) -> dict[str, Any]:
         if "on" in body or "run" in body or "brightness" in body:

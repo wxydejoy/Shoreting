@@ -136,5 +136,52 @@ class TestFocusEvaluate(unittest.TestCase):
         self.assertEqual(self.hub._focus_active, True)
 
 
+    def test_mutes_on_game_start_and_restores_on_exit(self) -> None:
+        self.hub._read_volume = lambda: 40
+        written: list[int] = []
+        self.hub._write_volume = written.append
+        self._game(False)
+        self.hub._evaluate_focus()
+        self._game(True)
+        self.hub._evaluate_focus()
+        self.assertEqual(written, [0])
+        self.assertEqual(self.hub._volume_before_game, 40)
+        self._game(False)
+        self.hub._evaluate_focus()
+        self.assertEqual(written, [0, 40])
+        self.assertIsNone(self.hub._volume_before_game)
+
+    def test_mute_off_leaves_volume_alone(self) -> None:
+        self.hub.config = _cfg(on="开黑", off="game-off", mute=False)
+        written: list[int] = []
+        self.hub._write_volume = written.append
+        self._game(False)
+        self.hub._evaluate_focus()
+        self._game(True)
+        self.hub._evaluate_focus()
+        self.assertEqual(written, [])
+
+    def test_unreadable_volume_skips_mute(self) -> None:
+        self.hub._read_volume = lambda: None
+        written: list[int] = []
+        self.hub._write_volume = written.append
+        self._game(False)
+        self.hub._evaluate_focus()
+        self._game(True)
+        self.hub._evaluate_focus()
+        self.assertEqual(written, [])
+        self.assertIsNone(self.hub._volume_before_game)
+
+    def test_config_reload_restores_stuck_volume(self) -> None:
+        written: list[int] = []
+        self.hub._volume_before_game = 30
+        self.hub._write_volume = written.append
+        self.hub.config = _cfg(on="开黑", off="game-off", mute=False)
+        self.hub._start_focus()
+        self.hub._focus_stop.set()  # 别让后台线程跑
+        self.assertEqual(written, [30])
+        self.assertIsNone(self.hub._volume_before_game)
+
+
 if __name__ == "__main__":
     unittest.main()

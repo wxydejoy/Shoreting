@@ -218,6 +218,7 @@ devices:
 # focus:
 #   on: 开黑
 #   off: 退了
+#   mute: true   # 进游戏把 Hub 音量收到 0，退出来恢复（F22）；false = 不动音量
 #
 # 日落联动（F16）：天黑灯自己亮，比任何语音都更像有人住。
 # 日落后 offset_min 分钟开始，ramp_min 分钟内把亮度从 0 推到 brightness，

@@ -270,6 +270,8 @@ class FocusConfig:
     enabled: bool = False
     on: str = ""
     off: str = ""
+    # F22：进游戏把 Hub 音量收到 0，退出恢复。false = 不动音量
+    mute: bool = True
 
 
 @dataclass
@@ -1190,6 +1192,7 @@ def _parse_focus(raw: Any, scenes: list[SceneConfig]) -> FocusConfig:
         off=_scene_ref(scenes, str(raw.get("off") or "").strip(), "focus.off")
         if str(raw.get("off") or "").strip()
         else "",
+        mute=bool(raw.get("mute", True)),
     )
 
 
@@ -1382,6 +1385,8 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
         focus_raw: dict[str, Any] = {"on": config.focus.on}
         if config.focus.off:
             focus_raw["off"] = config.focus.off
+        if not config.focus.mute:
+            focus_raw["mute"] = False
         raw["focus"] = focus_raw
     if config.dusk.enabled:
         raw["dusk"] = {
