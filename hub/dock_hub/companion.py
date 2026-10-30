@@ -28,12 +28,12 @@ import yaml
 from dock_hub.chat_log import ChatLog
 from dock_hub.config import CompanionConfig, ID_RE
 from dock_hub.errors import HubError
+from dock_hub.tts import Tts
 
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
 MAX_READ_JOBS = 24
 READ_CHARS_PER_SEC = 4.0
-READ_TTS_TIMEOUT_SEC = 90.0
 
 DEFAULT_PERSONA = """你是守岸人，正在漂泊者的书桌上值班。锚点：静、守、留白。说话慢、短、轻，偏诗意，不卖萌，不喊口号，不讲游戏剧情。
 每次只回 1～3 句。可以叫对方「漂泊者」。
@@ -150,6 +150,7 @@ class CompanionReply:
 class Companion:
     def __init__(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
+        self.tts = Tts.from_config(self.config, log=_latency)
         self._ready = False
         self._voice = False
         self._ready_at = 0.0
@@ -181,6 +182,7 @@ class Companion:
 
     def configure(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
+        self.tts = Tts.from_config(self.config, log=_latency)
         self._ready = False
         self._voice = False
         self._ready_at = 0.0
@@ -262,7 +264,7 @@ class Companion:
         with self._lock:
             self._seq += 1
             seq = self._seq
-        self._stop_tts()
+        self.tts.stop()
         taught = self._remember_skill(text)
         if taught or is_teach_attempt(text):
             spoken = taught or "这个只能绑已经配好的灯或启动项，不能自己加程序。"
@@ -299,7 +301,7 @@ class Companion:
         )
         messages = build_messages(text, extra, self.config.persona)
         llm_at = time.monotonic()
-        cue_as_we_go = bool(self.config.tts_base_url) and not self.config.tts_deliver
+        cue_as_we_go = self.tts.configured and not self.tts.deliver
         try:
             if cue_as_we_go:
                 raw = self._stream_and_cue(messages, turn, seq)
@@ -343,7 +345,7 @@ class Companion:
         self._ready = True
         self._ready_at = time.monotonic()
         audio_id = None
-        cue_as_we_go = bool(self.config.tts_base_url) and not self.config.tts_deliver
+        cue_as_we_go = self.tts.configured and not self.tts.deliver
         if not cue_as_we_go:
             with self._lock:
                 if seq != self._seq:
@@ -386,10 +388,10 @@ class Companion:
         with self._lock:
             self._seq += 1
             self._speaking = True
-        self._stop_tts()
+        self.tts.stop()
 
     def cue_story_sentence(self, text: str) -> bool:
-        if not self.config.enabled or not self.config.tts_base_url:
+        if not self.config.enabled or not self.tts.configured:
             return False
         with self._lock:
             seq = self._seq
@@ -399,7 +401,7 @@ class Companion:
         with self._lock:
             self._seq += 1
             self._speaking = False
-        self._stop_tts()
+        self.tts.stop()
 
     def stop(self) -> dict[str, Any]:
         if not self.config.enabled:
@@ -410,7 +412,7 @@ class Companion:
             self._seq += 1
             self._speaking = False
         self._cancel_running_reads()
-        self._stop_tts()
+        self.tts.stop()
         _latency("-", "stop")
         return {"ok": True}
 
@@ -435,7 +437,7 @@ class Companion:
         with self._lock:
             self._seq += 1
             seq = self._seq
-        self._stop_tts()
+        self.tts.stop()
         self._commit_reply(text)
         return self._finish_spoken(
             text, turn, seq, started, cue_llm=False, user="（微信）"
@@ -455,7 +457,7 @@ class Companion:
         mode = str(body.get("mode") or "play").strip()
         if mode not in {"play", "file"}:
             raise HubError("bad_request", "mode 只能是 play 或 file")
-        if not self.config.tts_base_url:
+        if not self.tts.configured:
             raise HubError("companion_unavailable", "还没接上嘴巴")
         if self._story_books is not None:
             self._story_books.pause()
@@ -596,7 +598,7 @@ class Companion:
             self._speaking = True
         try:
             if mode == "play":
-                self._stop_tts()
+                self.tts.stop()
             parts: list[bytes] = []
             for i, sent in enumerate(chunks, start=1):
                 self._raise_if_read_stopped(ident, seq)
@@ -604,7 +606,7 @@ class Companion:
                     if not self._cue_sentence(sent, ident, seq):
                         raise HubError("companion_unavailable", "被打断了")
                 else:
-                    wav = self._speak(sent, ident, play_only=False, play=False)
+                    wav = self.tts.speak(sent, ident, play_only=False, play=False)
                     if not wav:
                         raise HubError("companion_unavailable", "合成失败")
                     parts.append(wav)
@@ -688,7 +690,7 @@ class Companion:
             with self._lock:
                 self._seq += 1
                 self._speaking = False
-            self._stop_tts()
+            self.tts.stop()
         with self._read_lock:
             job = self._read_jobs.get(ident) or job
         return _read_job_public(job)
@@ -804,12 +806,12 @@ class Companion:
         return wav
 
     def voice(self) -> bool:
-        if not self.config.enabled or not self.config.tts_base_url:
+        if not self.config.enabled or not self.tts.configured:
             return False
         now = time.monotonic()
         if now - self._voice_at < 5:
             return self._voice
-        self._voice = self._ping_tts()
+        self._voice = self.tts.ping()
         self._voice_at = now
         return self._voice
 
@@ -1191,16 +1193,16 @@ class Companion:
         return applied
 
     def _maybe_speak(self, spoken: str, turn: str) -> str | None:
-        if not self.config.tts_base_url:
+        if not self.tts.configured:
             return None
         with self._lock:
             self._speaking = True
         try:
-            wav = self._speak(spoken, turn)
+            wav = self.tts.speak(spoken, turn)
         finally:
             with self._lock:
                 self._speaking = False
-        if not self.config.tts_deliver or not wav:
+        if not self.tts.deliver or not wav:
             return None
         ident = turn
         with self._lock:
@@ -1218,22 +1220,6 @@ class Companion:
             return
         self._reads_dir.mkdir(parents=True, exist_ok=True)
         (self._reads_dir / f"{ident}.wav").write_bytes(wav)
-
-    def _stop_tts(self) -> None:
-        if not self.config.tts_base_url:
-            return
-        url = _join(self.config.tts_base_url, "/v1/stop")
-        req = urllib.request.Request(
-            url,
-            data=b"{}",
-            method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=0.8) as resp:
-                resp.read()
-        except (TimeoutError, urllib.error.URLError, OSError):
-            return
 
     def _complete_endpoint(
         self,
@@ -1358,7 +1344,7 @@ class Companion:
         with self._lock:
             if seq != self._seq:
                 return False
-        self._speak(spoken, turn)
+        self.tts.speak(spoken, turn)
         return True
 
     def _llm_headers(self, accept: str | None = None) -> dict[str, str]:
@@ -1443,74 +1429,6 @@ class Companion:
         if not isinstance(body, dict):
             raise HubError("companion_unavailable", "大脑返回无法解析")
         return body
-
-    def _ping_tts(self) -> bool:
-        url = _join(self.config.tts_base_url or "", "/health")
-        try:
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=0.4) as resp:
-                if not (200 <= resp.status < 300):
-                    return False
-                raw = resp.read().decode("utf-8")
-        except (urllib.error.URLError, TimeoutError, OSError):
-            return False
-        try:
-            body = json.loads(raw)
-        except json.JSONDecodeError:
-            return False
-        return isinstance(body, dict) and bool(body.get("ready"))
-
-    def _speak(
-        self,
-        text: str,
-        turn: str,
-        *,
-        play_only: bool | None = None,
-        play: bool | None = None,
-    ) -> bytes | None:
-        url = _join(self.config.tts_base_url or "", "/v1/speak")
-        if play_only is None:
-            play_only = not self.config.tts_deliver
-        body: dict[str, Any] = {
-            "text": text,
-            "voice": "shorekeeper",
-            "language": "chinese",
-            "turn_id": turn,
-            "speed": round(float(getattr(self.config, "voice_speed", 1.0) or 1.0), 2),
-        }
-        if play_only:
-            body["play_only"] = True
-        if play is False:
-            body["play"] = False
-        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        accept = "application/json" if play_only else "audio/wav"
-        if play_only:
-            timeout = 3.0
-        elif play is False:
-            timeout = READ_TTS_TIMEOUT_SEC
-        else:
-            timeout = self.config.tts_timeout_sec
-        req = urllib.request.Request(
-            url,
-            data=payload,
-            method="POST",
-            headers={"Content-Type": "application/json", "Accept": accept},
-        )
-        tts_at = time.monotonic()
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-        except (TimeoutError, urllib.error.URLError, OSError):
-            _latency(turn, "tts_error", ms=_ms(tts_at))
-            return None
-        if play_only:
-            _latency(turn, "tts_cued", ms=_ms(tts_at), bytes=len(raw))
-            return None
-        if not raw:
-            _latency(turn, "tts_empty", ms=_ms(tts_at))
-            return None
-        _latency(turn, "tts_done", ms=_ms(tts_at), bytes=len(raw))
-        return raw
 
 
 def skill_prompt(skills: list[dict[str, str]]) -> str:
