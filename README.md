@@ -103,6 +103,26 @@ Mac 上日常启停这几个服务，用 [console/](console/README.md) 的控制
 5. 安卓设置页 **Hub** 填 Mini `10.83.22.121`、端口 `17890`、token，点测试连接；**Mini CPU** 填 `10.83.22.121:17891`
 6. 米家设备名在 Mini 侧用 `uv run dock-hub --list-devices` 核对
 
+## 测试
+
+改完别只靠手点。四件事，加起来一分钟：
+
+```bash
+# Hub：190 条，含协议、朗读、场景、长轮询
+cd hub && uv run python -m unittest discover -s tests -t .
+
+# Mini 监控 / 桌面控制台
+cd mini && PYTHONPATH=. uv run python -m unittest discover -s tests -p 'test_*.py'
+cd console && PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_*.py'
+
+# 接口文档和 server.py 有没有漂（只用标准库）
+python3 scripts/check_protocol.py
+```
+
+安卓：`cd android && ./gradlew testDebugUnitTest`（需要 `app/libs/sherpa-onnx-*.aar`，`./fetch-wake-word.sh` 会取）。
+
+`.github/workflows/ci.yml` 把这四条挂到了 push / PR 上。CI 验不了的只有三样：真机上的唤醒词识别、米家云、LLM 联调——这些只能上机。
+
 ## 许可
 
 - Hub 依赖 [mijia-api](https://github.com/Do1e/mijia-api)（GPL-3.0）；分发 Hub 需同样开源
