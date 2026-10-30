@@ -11,6 +11,7 @@ hub/
   dock_hub/           # 源码包
     __main__.py       # CLI 入口（--hub 完整 Hub / --probe Windows 探针 / 托盘）
     server.py         # HTTP
+    ratelimit.py      # 按来源 IP + 端点的令牌桶（429）
     service.py        # snapshot / command
     companion.py      # 守岸人：LLM 调度、口头技能
     books.py          # 睡前朗读

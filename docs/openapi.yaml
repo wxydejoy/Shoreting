@@ -70,6 +70,8 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/TooMany"
         "502":
           $ref: "#/components/responses/Error"
   /v1/companion/stop:
@@ -118,6 +120,9 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/TooMany"
+
   /v1/companion/read:
     post:
       summary: Hub reading page — play on Mini speakers or generate a downloadable wav
@@ -150,6 +155,8 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/TooMany"
         "502":
           $ref: "#/components/responses/Error"
   /v1/companion/read/jobs:
@@ -243,6 +250,8 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/TooMany"
         "502":
           $ref: "#/components/responses/Error"
         "503":
@@ -257,6 +266,19 @@ components:
   responses:
     Error:
       description: Error envelope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    TooMany:
+      description: >-
+        这一分钟内调得太勤（code = too_many）。按来源 IP + 端点分桶，
+        桶容量等于每分钟次数。Retry-After 是建议等待秒数。
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: 建议等待秒数（≥1）
       content:
         application/json:
           schema:
@@ -548,7 +570,7 @@ components:
         run:
           type: boolean
           enum: [true]
-          description: action only; Android must send exactly {"run": true}
+          description: 'action only; Android must send exactly {"run": true}'
         media:
           type: string
           enum: [toggle, next, previous]
