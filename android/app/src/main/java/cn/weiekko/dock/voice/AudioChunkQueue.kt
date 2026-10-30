@@ -54,6 +54,13 @@ internal class AudioChunkQueue(private val capacity: Int = 40) {
         }
     }
 
+    /** 丢掉还排着队的旧音频：麦克风断过档，之前那半句接不上了。 */
+    fun clear() {
+        synchronized(lock) {
+            items.clear()
+        }
+    }
+
     val size: Int
         get() = synchronized(lock) { items.size }
 }

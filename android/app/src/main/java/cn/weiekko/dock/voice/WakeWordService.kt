@@ -47,6 +47,9 @@ class WakeWordService : Service() {
     private var currentTurn = ""
     @Volatile
     private var chimePending = false
+    /** 采集线程重开过录音器，解码线程据此丢掉手上的流。 */
+    @Volatile
+    private var micGap = false
     private var turnAt = 0L
     private var asrAt = 0L
     private var loggedPartial = false
@@ -138,33 +141,12 @@ class WakeWordService : Service() {
         kwsStream = wakeStream
         asr = runCatching { buildAsr() }.onFailure { Log.e(TAG, "asr init failed", it) }.getOrNull()
 
-        val minBytes = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
-        if (minBytes <= 0) {
-            Log.e(TAG, "AudioRecord buffer size invalid: $minBytes")
+        var recorder: AudioRecord? = openRecorder() ?: run {
             stopSelf()
             return
         }
-        // 采集和解码分两条线程：采集只做搬运，内置缓冲给到 400ms，
-        // 解码偶尔慢一拍也不会溢出去丢掉「正在说的那几个字」。
-        val recorder = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBytes * 4, SAMPLE_RATE * 2 * MIC_BUFFER_MS / 1000),
-        )
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            recorder.release()
-            Log.e(TAG, "AudioRecord failed to initialize")
-            stopSelf()
-            return
-        }
-        audioRecord = recorder
-        recorder.startRecording()
+        val faults = MicFaults()
+        faults.opened()
 
         val queue = AudioChunkQueue(QUEUE_CHUNKS)
         val worker = thread(name = "wake-decode", isDaemon = true) {
@@ -180,13 +162,91 @@ class WakeWordService : Service() {
         val buffer = ShortArray(chunk)
         try {
             while (running) {
-                val n = recorder.read(buffer, 0, buffer.size)
-                if (n <= 0) continue
-                queue.offer(FloatArray(n) { buffer[it] / 32768.0f })
+                val mic = recorder ?: break
+                val n = mic.read(buffer, 0, buffer.size)
+                if (n > 0) {
+                    faults.data()
+                    queue.offer(FloatArray(n) { buffer[it] / 32768.0f })
+                    continue
+                }
+                if (n == 0) {
+                    // 这一拍没数据，不是错误，歇一下免得空转
+                    pause(READ_EMPTY_MS)
+                    continue
+                }
+                when (val action = faults.onError(SystemClock.elapsedRealtime())) {
+                    is MicAction.Wait -> {
+                        Log.w(TAG, "mic read error code=$n, retry in ${action.ms}ms")
+                        pause(action.ms)
+                    }
+                    MicAction.Reopen -> {
+                        // 麦克风被抢走或者驱动重挂：收掉重开。解码线程那边收到
+                        // micGap 后会把手上的流丢掉，不留半句旧音频。
+                        Log.w(TAG, "mic read error code=$n, reopening recorder")
+                        runCatching { mic.stop() }
+                        mic.release()
+                        if (audioRecord === mic) audioRecord = null
+                        val next = openRecorder()
+                        if (next == null) {
+                            Log.e(TAG, "recorder reopen failed, stopping voice")
+                            recorder = null
+                            micGap = true
+                            running = false
+                            break
+                        }
+                        recorder = next
+                        faults.opened()
+                        micGap = true
+                    }
+                }
             }
         } finally {
             queue.close()
             worker.join(400)
+            recorder?.let { mic ->
+                if (audioRecord === mic) audioRecord = null
+                runCatching { mic.release() }
+            }
+        }
+    }
+
+    /** 按当前参数开一个录音器；开不起来返回 null（调用方决定停不停）。 */
+    private fun openRecorder(): AudioRecord? {
+        val minBytes = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+        )
+        if (minBytes <= 0) {
+            Log.e(TAG, "AudioRecord buffer size invalid: $minBytes")
+            return null
+        }
+        // 采集和解码分两条线程：采集只做搬运，内置缓冲给到 400ms，
+        // 解码偶尔慢一拍也不会溢出去丢掉「正在说的那几个字」。
+        val recorder = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            maxOf(minBytes * 4, SAMPLE_RATE * 2 * MIC_BUFFER_MS / 1000),
+        )
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            recorder.release()
+            Log.e(TAG, "AudioRecord failed to initialize")
+            return null
+        }
+        audioRecord = recorder
+        recorder.startRecording()
+        return recorder
+    }
+
+    /** 分段睡，服务被收掉时能马上停下来。 */
+    private fun pause(ms: Long) {
+        var left = ms
+        while (left > 0 && running) {
+            val step = left.coerceAtMost(50L)
+            Thread.sleep(step)
+            left -= step
         }
     }
 
@@ -210,6 +270,19 @@ class WakeWordService : Service() {
         var bargeMs = 0L
 
         while (running) {
+            if (micGap) {
+                // 录音器重开过，音频断了一截：旧的一句不能再往下拼，
+                // 唤醒词也把缓冲清掉，免得拿断档前后的音频凑出一句话。
+                micGap = false
+                queue.clear()
+                if (capturing) {
+                    capturing = false
+                    asrStream?.release()
+                    asrStream = null
+                    emitTranscript("", settled = true)
+                }
+                spotter.reset(wakeStream)
+            }
             val samples = queue.poll(QUEUE_POLL_MS) ?: continue
             val n = samples.size
             val now = SystemClock.elapsedRealtime()
@@ -472,6 +545,9 @@ class WakeWordService : Service() {
         /** 队列最多存 2s 音频；再慢就丢最旧的，别把采集线程堵住。 */
         private const val QUEUE_CHUNKS = 40
         private const val QUEUE_POLL_MS = 120L
+
+        /** read 返回 0（这一拍没数据）时歇一下，别把核跑满。 */
+        private const val READ_EMPTY_MS = 20L
 
         const val ACTION_TRANSCRIPT = "cn.weiekko.dock.VOICE_TRANSCRIPT"
         const val EXTRA_TEXT = "text"

@@ -48,4 +48,16 @@ class AudioChunkQueueTest {
         assertNull(queue.poll(2_000))
         assertTrue(System.currentTimeMillis() - started < 1_000)
     }
+
+    @Test
+    fun clearDropsStaleAudioButKeepsTheQueueOpen() {
+        val queue = AudioChunkQueue(capacity = 4)
+        queue.offer(chunk(1f))
+        queue.offer(chunk(2f))
+        queue.clear()
+        assertEquals(0, queue.size)
+        // 断档之后还得能继续用
+        queue.offer(chunk(9f))
+        assertEquals(9f, queue.poll(10)!![0])
+    }
 }
