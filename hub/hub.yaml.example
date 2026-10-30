@@ -260,3 +260,10 @@ devices:
 # 守岸人日记（F29）：她每天 21:30 拿台账和当天的话写一段，/diary 页可回看可删。
 # 默认开着；diary: false 关掉，diary: {at: "23:00"} 换时刻。
 # diary: false
+#
+# 日程订阅（F13）：给一份 ICS 链接（iCloud / Google 日历的「秘密地址」，
+# webcal:// 开头的也认），问「今天有什么事」她就答，早间简报捎上第一件事。
+# 30 分钟拉一次，源挂了用旧账。不配她就照实说不知道。
+# calendar:
+#   url: "https://example.com/calendar.ics"
+#   name: "我的日历"

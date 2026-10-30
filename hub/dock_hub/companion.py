@@ -74,6 +74,7 @@ from dock_hub.intents import (
     parse_temp_actions,
     query_kind,
     resolve_skill,
+    schedule_day,
     skill_nicknames,
     skill_prompt,
 )
@@ -122,6 +123,7 @@ from dock_hub.persona import (
     speak_gpu,
     speak_last,
     speak_light,
+    speak_schedule,
     speak_media,
     speak_memory,
     speak_mini,
@@ -768,6 +770,16 @@ class Companion:
             return speak_light(text, self._skills, getter if callable(getter) else None)
         if kind == "media":
             return speak_media(_call_world(self._world.get("media")))
+        if kind == "schedule":
+            # F13 日程：日历拿不到就空手回，她照实说，不编
+            getter = self._world.get("calendar")
+            events: Any = None
+            if callable(getter):
+                try:
+                    events = getter(schedule_day(text))
+                except Exception:  # noqa: BLE001 - 日历挂了当没配
+                    events = None
+            return speak_schedule(events, schedule_day(text))
         if kind == "last":
             return speak_last(self._recent)
         return "我不太清楚。"

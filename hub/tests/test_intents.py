@@ -31,6 +31,7 @@ from dock_hub.intents import (
     parse_volume_action,
     query_kind,
     resolve_skill,
+    schedule_day,
     skill_prompt,
 )
 
@@ -141,6 +142,20 @@ class SkillTest(unittest.TestCase):
         self.assertEqual(query_kind("台灯开着吗"), "light")
         self.assertEqual(query_kind("在播什么歌"), "media")
         self.assertIsNone(query_kind("晚安"))
+
+    def test_query_kind_routes_schedule(self) -> None:
+        """F13：问日程的问题要接住；「帮我安排一下」不是在问日历。"""
+        self.assertEqual(query_kind("今天有什么事"), "schedule")
+        self.assertEqual(query_kind("明天有什么安排"), "schedule")
+        self.assertEqual(query_kind("看一下日程"), "schedule")
+        self.assertIsNone(query_kind("帮我安排一下"))
+
+    def test_schedule_day_picks_the_day(self) -> None:
+        self.assertEqual(schedule_day("今天有什么事"), 0)
+        self.assertEqual(schedule_day("明天有什么事"), 1)
+        self.assertEqual(schedule_day("后天呢"), 2)
+        self.assertEqual(schedule_day("大后天呢"), 3)
+        self.assertEqual(schedule_day("日程"), 0)  # 没提日子就是今天
 
 
 class TeachTest(unittest.TestCase):

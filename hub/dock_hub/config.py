@@ -333,6 +333,14 @@ class DiaryConfig:
 
 
 @dataclass
+class CalendarConfig:
+    """日程订阅（F13）。一份 ICS 链接；问「今天有什么事」和早间简报用。"""
+
+    url: str
+    name: str = ""
+
+
+@dataclass
 class SceneConfig:
     """一组「一起动」的设备，可以带一句话和一个语音口令。"""
 
@@ -379,6 +387,8 @@ class HubConfig:
     theme: ThemeConfig = field(default_factory=ThemeConfig)
     wallpaper: WallpaperConfig = field(default_factory=WallpaperConfig)
     diary: DiaryConfig = field(default_factory=DiaryConfig)
+    # 日程订阅（F13）；None = 没配，「今天有什么事」就照实说不知道
+    calendar: CalendarConfig | None = None
     # 回忆相框（F37）的图库目录；None = 没显式配（false 时 photos_off = True）
     photos: Path | None = None
     photos_off: bool = False
@@ -494,6 +504,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     theme = _parse_theme(raw.get("theme"))
     wallpaper = _parse_wallpaper(raw.get("wallpaper"))
     diary = _parse_diary(raw.get("diary"))
+    calendar = _parse_calendar(raw.get("calendar"))
     photos, photos_off = _parse_photos(raw.get("photos"), path)
 
     return HubConfig(
@@ -519,6 +530,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         theme=theme,
         wallpaper=wallpaper,
         diary=diary,
+        calendar=calendar,
         photos=photos,
         photos_off=photos_off,
         path=path,
@@ -1326,6 +1338,23 @@ def _parse_diary(raw: Any) -> DiaryConfig:
     raise ValueError("diary 要是 false 或 {at: \"21:30\"}")
 
 
+def _parse_calendar(raw: Any) -> CalendarConfig | None:
+    """日程订阅（F13）：不写或 false 关，字符串就是 ICS 链接，对象可带名字。"""
+    if raw is None or raw is False:
+        return None
+    if isinstance(raw, str):
+        url = raw.strip()
+        if not url:
+            return None
+        return CalendarConfig(url=url)
+    if isinstance(raw, dict):
+        url = str(raw.get("url") or "").strip()
+        if not url:
+            raise ValueError("calendar.url 不能为空")
+        return CalendarConfig(url=url, name=str(raw.get("name") or "").strip())
+    raise ValueError("calendar 要是 false、一个 ICS 链接，或 {url, name}")
+
+
 def _parse_photos(raw: Any, path: Path | None) -> tuple[Path | None, bool]:
     """回忆相框（F37）：false 关、路径换地方；不写就交给 photos.py 活检测旁目录。"""
     if raw is None or raw is True:
@@ -1530,6 +1559,12 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
         raw["diary"] = False
     elif config.diary.at != DiaryConfig().at:
         raw["diary"] = {"at": config.diary.at}
+    if config.calendar is not None:
+        # 日程订阅（F13）：配了才写回，没配不占 yaml 一行。
+        entry: dict[str, Any] = {"url": config.calendar.url}
+        if config.calendar.name:
+            entry["name"] = config.calendar.name
+        raw["calendar"] = entry
     if config.photos_off:
         # 回忆相框（F37）：只有配置过才写回，默认（旁目录活检测）不占 yaml 一行。
         raw["photos"] = False

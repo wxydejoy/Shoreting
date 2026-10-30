@@ -32,6 +32,7 @@ from dock_hub.persona import (
     speak_media,
     speak_mini,
     speak_pc,
+    speak_schedule,
     speak_temp,
     speak_time,
     speak_timer,
@@ -142,6 +143,15 @@ class SpokenCopyTest(unittest.TestCase):
         self.assertEqual(speak_temp({"celsius": 23, "humidity": 82}, "潮不潮"), "屋里23度。有一点潮。")
         self.assertEqual(speak_temp({"celsius": 23, "humidity": 50}, "潮不潮"), "屋里23度。还不潮。")
         self.assertEqual(speak_temp(None, "多少度"), "我这边还没有室温。")
+
+    def test_schedule(self) -> None:
+        """F13：日程的回答。没配认账、空天不寒暄、多的不报菜名。"""
+        self.assertEqual(speak_schedule(None, 0), "我还不知道你的日程，配好日历就能答今天的事了。")
+        self.assertEqual(speak_schedule([], 1), "明天没安排。")
+        day = [{"title": "组会", "start": "14:00"}, {"title": "缴房租", "start": ""}]
+        self.assertEqual(speak_schedule(day, 0), "今天2件事：14:00 组会、缴房租。")
+        many = [{"title": f"第{i}件", "start": f"0{i}:00"} for i in range(5)]
+        self.assertEqual(speak_schedule(many, 0), "今天5件事：00:00 第0件、01:00 第1件、02:00 第2件。还有2件。")
 
     def test_pc_offline_and_busy(self) -> None:
         self.assertEqual(speak_pc(None, "电脑占用"), "电脑那边还没连上。")

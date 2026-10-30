@@ -182,6 +182,22 @@ def looks_like_query(text: str) -> bool:
     return query_kind(text) is not None
 
 
+_QUERY_SCHEDULE = re.compile(r"(有什么(?:事|安排|计划|行程)|什么安排|日程|日历)")
+"""日程（F13）：问某天有什么事。要够具体——「帮我安排一下」不是在问日历。"""
+
+
+def schedule_day(text: str) -> int:
+    """问的是哪一天：0 今天、1 明天、2 后天。没提就是今天。"""
+    stripped = (text or "").strip()
+    if "大后天" in stripped:
+        return 3
+    if "后天" in stripped:
+        return 2
+    if "明天" in stripped:
+        return 1
+    return 0
+
+
 def query_kind(text: str) -> str | None:
     stripped = (text or "").strip()
     if not stripped:
@@ -206,6 +222,8 @@ def query_kind(text: str) -> str | None:
         return "pc"
     if "电脑" in stripped and _QUERY_PC.search(stripped):
         return "pc"
+    if _QUERY_SCHEDULE.search(stripped):
+        return "schedule"
     if _QUERY_TEMP.search(stripped):
         return "temp"
     if _QUERY_LIGHT.search(stripped) and ("灯" in stripped or "台灯" in stripped):
