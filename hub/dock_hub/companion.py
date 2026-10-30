@@ -281,6 +281,14 @@ class Companion:
             return self._finish_spoken(
                 spoken, turn, seq, started, cue_llm=False, user=heard
             )
+        scene = self._handle_scene(text, turn)
+        if scene:
+            spoken, events = scene
+            self._commit_reply(spoken)
+            _latency(turn, "scene", chars=len(spoken))
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+            )
         desk = self._handle_desk(text, turn)
         if desk:
             spoken, skills = desk
@@ -858,6 +866,41 @@ class Companion:
         if kind == "last":
             return speak_last(self._recent)
         return "我不太清楚。"
+
+    def _handle_scene(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """「我要睡了」这类口令直接跑预置场景，不用绕模型。"""
+        scenes = self._world.get("scenes") or []
+        run = self._world.get("scene")
+        if not scenes or not callable(run):
+            return None
+        needle = _normalize_phrase(text)
+        if not needle:
+            return None
+        hits: list[tuple[int, dict[str, Any]]] = []
+        for item in scenes:
+            for phrase in item.get("phrases") or []:
+                key = _normalize_phrase(str(phrase))
+                if key and key in needle:
+                    hits.append((len(key), item))
+                    break
+        if not hits:
+            return None
+        hits.sort(key=lambda row: row[0], reverse=True)
+        item = hits[0][1]
+        ident = str(item.get("id") or "")
+        name = str(item.get("name") or ident)
+        try:
+            result = run(ident, say=False)
+        except HubError as exc:
+            _latency(turn, "scene_error", id=ident, code=exc.code)
+            return (
+                "这次没动成。",
+                [{"id": ident, "name": name, "scene": True, "ok": False, "code": exc.code}],
+            )
+        ok = bool(result.get("ok"))
+        _latency(turn, "scene_ok", id=ident, ok=1 if ok else 0)
+        spoken = str(item.get("say") or "").strip() or f"好，{name}。"
+        return spoken, [{"id": ident, "name": name, "scene": True, "ok": ok}]
 
     def _handle_desk(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         seconds = parse_timer(text)

@@ -247,6 +247,35 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /v1/scenes/{id}:
+    post:
+      summary: Run one configured scene (a bundle of device commands)
+      operationId: postScene
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: bedtime
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Ignored; send {} or nothing.
+      responses:
+        "200":
+          description: Per-device result of the scene
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SceneRun"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
 security:
   - bearer: []
 components:
@@ -316,6 +345,57 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Device"
+        scenes:
+          type: array
+          description: >
+            Scenes from hub.yaml, in config order. Run one with
+            POST /v1/scenes/{id}. Empty array when none are configured.
+          items:
+            $ref: "#/components/schemas/Scene"
+    Scene:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    SceneRun:
+      type: object
+      required: [id, name, ok, actions]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        ok:
+          type: boolean
+          description: True only when every step succeeded.
+        said:
+          type: boolean
+          description: >
+            The companion is speaking the scene line asynchronously.
+            False when the companion is off or the scene has no say.
+        actions:
+          type: array
+          items:
+            type: object
+            required: [id, ok]
+            properties:
+              id:
+                type: string
+              on:
+                type: boolean
+              brightness:
+                type: integer
+                minimum: 1
+                maximum: 100
+              ok:
+                type: boolean
+              code:
+                type: string
+              message:
+                type: string
     HubStatus:
       type: object
       required: [name, mijia, message]
@@ -548,7 +628,7 @@ components:
         run:
           type: boolean
           enum: [true]
-          description: action only; Android must send exactly {"run": true}
+          description: 'action only; Android must send exactly {"run": true}'
         media:
           type: string
           enum: [toggle, next, previous]

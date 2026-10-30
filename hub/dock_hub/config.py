@@ -154,6 +154,26 @@ class ProbeConfig:
 
 
 @dataclass
+class SceneConfig:
+    """一组「一起动」的设备，可以带一句话和一个语音口令。"""
+
+    id: str
+    name: str
+    on: list[str] = field(default_factory=list)
+    off: list[str] = field(default_factory=list)
+    brightness: dict[str, int] = field(default_factory=dict)
+    say: str | None = None
+    phrases: list[str] = field(default_factory=list)
+
+    def triggers(self) -> list[str]:
+        """能被语音命中的说法：口令 + 场景名本身。"""
+        said = [item for item in self.phrases if item]
+        if self.name and self.name not in said:
+            said.append(self.name)
+        return said
+
+
+@dataclass
 class HubConfig:
     name: str
     token: str
@@ -166,6 +186,7 @@ class HubConfig:
     companion: CompanionConfig | None = None
     mini: MiniLinkConfig | None = None
     probe: ProbeConfig = field(default_factory=ProbeConfig)
+    scenes: list[SceneConfig] = field(default_factory=list)
     path: Path | None = None
 
     def device(self, device_id: str) -> DeviceConfig:
@@ -173,6 +194,12 @@ class HubConfig:
             if item.id == device_id:
                 return item
         raise HubError("not_found", f"设备 {device_id} 不在白名单")
+
+    def scene(self, scene_id: str) -> SceneConfig:
+        for item in self.scenes:
+            if item.id == scene_id:
+                return item
+        raise HubError("not_found", f"没有场景 {scene_id}")
 
 
 def config_search_paths(explicit: Path | None = None) -> list[Path]:
@@ -256,6 +283,8 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         seen.add(device.id)
         devices.append(device)
 
+    scenes = _parse_scenes(raw.get("scenes"), devices)
+
     return HubConfig(
         name=name,
         token=token,
@@ -268,8 +297,94 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         companion=companion,
         mini=mini,
         probe=probe,
+        scenes=scenes,
         path=path,
     )
+
+
+def _parse_scenes(raw: Any, devices: list[DeviceConfig]) -> list[SceneConfig]:
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("scenes 必须是列表")
+    by_id = {item.id: item for item in devices}
+    scenes: list[SceneConfig] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("scenes[] 每一项都要是对象")
+        ident = str(item.get("id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not ident or not name:
+            raise ValueError("scenes[] 需要 id、name")
+        _check_id(ident)
+        if ident in seen:
+            raise ValueError(f"重复的场景 id：{ident}")
+        seen.add(ident)
+        on = _scene_ids(ident, "on", item.get("on"), by_id)
+        off = _scene_ids(ident, "off", item.get("off"), by_id)
+        both = sorted(set(on) & set(off))
+        if both:
+            raise ValueError(f"场景 {ident} 里 {'、'.join(both)} 同时出现在 on 和 off")
+        brightness: dict[str, int] = {}
+        raw_brightness = item.get("brightness")
+        if raw_brightness is not None:
+            if not isinstance(raw_brightness, dict):
+                raise ValueError(f"场景 {ident} 的 brightness 要写成 {{设备id: 亮度}}")
+            for key, value in raw_brightness.items():
+                device_id = str(key).strip()
+                if device_id not in by_id:
+                    raise ValueError(f"场景 {ident} 的 brightness 引用了不存在的设备：{device_id}")
+                if by_id[device_id].is_action:
+                    raise ValueError(f"场景 {ident} 里 {device_id} 是启动项，不能调亮度")
+                try:
+                    level = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"场景 {ident} 里 {device_id} 的亮度不是整数") from exc
+                if not 1 <= level <= 100:
+                    raise ValueError(f"场景 {ident} 里 {device_id} 的亮度必须是 1–100")
+                brightness[device_id] = level
+        say = str(item.get("say") or "").strip() or None
+        raw_phrases = item.get("phrases") or []
+        if not isinstance(raw_phrases, list):
+            raise ValueError(f"场景 {ident} 的 phrases 必须是列表")
+        phrases = [str(p).strip() for p in raw_phrases if str(p).strip()]
+        scenes.append(
+            SceneConfig(
+                id=ident,
+                name=name,
+                on=on,
+                off=off,
+                brightness=brightness,
+                say=say,
+                phrases=phrases,
+            )
+        )
+    return scenes
+
+
+def _scene_ids(
+    scene_id: str,
+    field_name: str,
+    raw: Any,
+    by_id: dict[str, DeviceConfig],
+) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"场景 {scene_id} 的 {field_name} 必须是列表")
+    out: list[str] = []
+    for value in raw:
+        device_id = str(value).strip()
+        if not device_id:
+            continue
+        if device_id not in by_id:
+            raise ValueError(f"场景 {scene_id} 的 {field_name} 引用了不存在的设备：{device_id}")
+        if by_id[device_id].is_action:
+            raise ValueError(f"场景 {scene_id} 的 {field_name} 里有启动项 {device_id}，它不能开关")
+        if device_id not in out:
+            out.append(device_id)
+    return out
 
 
 def _parse_temperature(raw: dict[str, Any]) -> TemperatureConfig:
@@ -601,6 +716,21 @@ def device_to_raw(device: DeviceConfig) -> dict[str, Any]:
     return raw
 
 
+def scene_to_raw(scene: SceneConfig) -> dict[str, Any]:
+    raw: dict[str, Any] = {"id": scene.id, "name": scene.name}
+    if scene.on:
+        raw["on"] = list(scene.on)
+    if scene.off:
+        raw["off"] = list(scene.off)
+    if scene.brightness:
+        raw["brightness"] = dict(scene.brightness)
+    if scene.say:
+        raw["say"] = scene.say
+    if scene.phrases:
+        raw["phrases"] = list(scene.phrases)
+    return raw
+
+
 def prop_to_raw(item: PropConfig) -> dict[str, Any]:
     raw: dict[str, Any] = {"id": item.id, "prop": item.prop}
     if item.name:
@@ -638,6 +768,8 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
         "token": config.token,
         "devices": [device_to_raw(item) for item in config.devices],
     }
+    if config.scenes:
+        raw["scenes"] = [scene_to_raw(item) for item in config.scenes]
     if config.temperature:
         raw["temperature"] = temperature_to_raw(config.temperature)
     if config.pc is not None:

@@ -14,6 +14,7 @@ hub/
     service.py        # snapshot / command
     companion.py      # 守岸人：LLM 调度、口头技能
     books.py          # 睡前朗读
+    # 场景在 config.py 里（SceneConfig），执行在 service.run_scene
     probe.py          # 探针模式（CPU 上报 + 远程开程序）
     pc.py             # CPU / 内存 / GPU / CPU 温度
     ledstrip.py       # 书桌 WS2812 灯带（ESP32 HTTP）
@@ -89,6 +90,27 @@ powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 ## 桌面伴侣
 
 默认 `companion.tts.deliver: false`：Hub 流式读 LLM，每写出一句（`。！？`）就 cue Mini TTS（`play_only`）。`POST /v1/companion/chat` 仍等全文再返回给安卓字幕。`companion.llm.base_url` 可填 OpenAI 兼容地址（如阿里云 MaaS `qwen3.8-flash`），`api_key` 只写本机 yaml；请求顶层带 `enable_thinking: false`（推理型模型不关会把额度花在思考上）。未配密钥且 base 是 Ollama 时仍走 `/api/chat`（`think: false`）。TTS 仍指向 Mini。对话不预先读米家状态。白名单灯/开关/灯带可口头开关（`ACTION: id.on|off` 或「关灯」「开灯带」「开空调」兜底），真正执行仍走 devices/command。打断走 `POST /v1/companion/stop`。另有 `POST /v1/companion/announce` 让外部脚本（如微信机器人）直接让书桌喇叭说话；天气由 `GET /v1/weather` 代取。说明见 [docs/companion.md](../docs/companion.md)。
+
+## 场景
+
+`hub.yaml` 里写 `scenes`，把「一次要动的几台设备」打包成一个名字：
+
+```yaml
+scenes:
+- id: bedtime
+  name: 晚安
+  off: [desk-lamp, monitor-plug]
+  brightness:
+    ceiling: 15
+  say: "灯关了，早点睡。"
+  phrases: ["我要睡了", "睡觉了"]
+```
+
+- 执行顺序固定：先 `on`，再 `brightness`（会顺带开灯），最后 `off`。
+- `POST /v1/scenes/bedtime`（带 token）一次跑完，返回每台设备的结果；某台失败不影响其余的。
+- 手机说「我要睡了」直接命中，不经过模型；`say` 就是它回你的那句话。
+- 写错的设备 id、写成启动项的 id、同一台同时在 `on` 和 `off`、亮度超出 1–100，都会在加载配置时报错。
+- 向导里不能编辑场景，但保存配置会原样保留。
 
 ## 源码开发
 
