@@ -12,6 +12,7 @@ from dock_hub import DEFAULT_PORT
 from dock_hub.errors import HubError
 
 ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 DEVICE_TYPES = {"switch", "light", "action", "ws2812", "sensor"}
 
 
@@ -154,6 +155,18 @@ class ProbeConfig:
 
 
 @dataclass
+class ScheduleConfig:
+    """一句定时：到点开/关几件设备，可选让守岸人说句话。"""
+
+    id: str
+    at: str  # "07:30"，24 小时制
+    weekdays: list[int] = field(default_factory=list)  # 1=周一 … 7=周日；空=每天
+    say: str = ""
+    on: list[str] = field(default_factory=list)
+    off: list[str] = field(default_factory=list)
+
+
+@dataclass
 class HubConfig:
     name: str
     token: str
@@ -166,6 +179,7 @@ class HubConfig:
     companion: CompanionConfig | None = None
     mini: MiniLinkConfig | None = None
     probe: ProbeConfig = field(default_factory=ProbeConfig)
+    schedules: list[ScheduleConfig] = field(default_factory=list)
     path: Path | None = None
 
     def device(self, device_id: str) -> DeviceConfig:
@@ -268,7 +282,70 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         companion=companion,
         mini=mini,
         probe=probe,
+        schedules=_parse_schedules(raw.get("schedules"), devices),
         path=path,
+    )
+
+
+def _parse_schedules(raw: Any, devices: list[DeviceConfig]) -> list[ScheduleConfig]:
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("schedules 应该是列表")
+    known = {item.id for item in devices}
+    out: list[ScheduleConfig] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("schedules[] 应该是对象")
+        sched = _parse_schedule(item, known)
+        if sched.id in seen:
+            raise ValueError(f"重复的定时任务 id：{sched.id}")
+        seen.add(sched.id)
+        out.append(sched)
+    return out
+
+
+def _parse_schedule(raw: dict[str, Any], known: set[str]) -> ScheduleConfig:
+    ident = str(raw.get("id") or "").strip()
+    if not ident:
+        raise ValueError("schedules[] 需要 id")
+    _check_id(ident)
+    at = str(raw.get("at") or "").strip()
+    if not TIME_RE.match(at):
+        raise ValueError(f"定时任务 {ident} 的 at 要写成 HH:MM（24 小时制）")
+    weekdays: list[int] = []
+    for item in raw.get("weekdays") or []:
+        try:
+            day = int(item)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"定时任务 {ident} 的 weekdays 只接受 1–7（周一=1）") from exc
+        if day < 1 or day > 7:
+            raise ValueError(f"定时任务 {ident} 的 weekdays 只接受 1–7（周一=1）")
+        if day not in weekdays:
+            weekdays.append(day)
+    weekdays.sort()
+
+    def ids(key: str) -> list[str]:
+        picked: list[str] = []
+        for item in raw.get(key) or []:
+            device_id = str(item).strip()
+            if not device_id:
+                continue
+            if device_id not in known:
+                raise ValueError(f"定时任务 {ident} 引用了不存在的设备：{device_id}")
+            if device_id not in picked:
+                picked.append(device_id)
+        return picked
+
+    say = str(raw.get("say") or "").strip()[:200]
+    return ScheduleConfig(
+        id=ident,
+        at=at,
+        weekdays=weekdays,
+        say=say,
+        on=ids("on"),
+        off=ids("off"),
     )
 
 
@@ -630,6 +707,19 @@ def temperature_to_raw(temp: TemperatureConfig) -> dict[str, Any]:
     return raw
 
 
+def schedule_to_raw(sched: ScheduleConfig) -> dict[str, Any]:
+    raw: dict[str, Any] = {"id": sched.id, "at": sched.at}
+    if sched.weekdays:
+        raw["weekdays"] = list(sched.weekdays)
+    if sched.on:
+        raw["on"] = list(sched.on)
+    if sched.off:
+        raw["off"] = list(sched.off)
+    if sched.say:
+        raw["say"] = sched.say
+    return raw
+
+
 def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
     raw: dict[str, Any] = {
         "name": config.name,
@@ -706,6 +796,8 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             dumped["listen"] = probe.listen
         if dumped:
             raw["probe"] = dumped
+    if config.schedules:
+        raw["schedules"] = [schedule_to_raw(item) for item in config.schedules]
     return raw
 
 

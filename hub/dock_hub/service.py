@@ -32,6 +32,7 @@ from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read
 from dock_hub.pc import PcSampler, utc_now
 from dock_hub.media import MEDIA_ACTIONS, MediaSession
 from dock_hub.reporter import DeskReporter
+from dock_hub.schedule import Scheduler
 from dock_hub.mijia_bridge import (
     BoundDevice,
     MijiaSession,
@@ -101,6 +102,8 @@ class DockHub:
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
         self._wire_companion()
         self.reporter.start()
+        self.scheduler = Scheduler(config.schedules, self._run_schedule)
+        self.scheduler.start()
 
     def _attach_books(self) -> None:
         from dock_hub.books import Books
@@ -183,6 +186,9 @@ class DockHub:
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
         self._wire_companion()
         self.reporter.start()
+        self.scheduler.stop()
+        self.scheduler = Scheduler(config.schedules, self._run_schedule)
+        self.scheduler.start()
         threading.Thread(target=self.login, name="mijia-reload", daemon=True).start()
 
     def _print_bind_warnings(self) -> None:
@@ -432,6 +438,17 @@ class DockHub:
                 "desk": self.reporter.snapshot,
             },
         )
+
+    def _run_schedule(self, sched: Any) -> None:
+        """到点了：按顺序开关设备，最后再开口（说话最慢，放最后才不挡动作）。"""
+
+        for ident in getattr(sched, "on", []) or []:
+            self.command(ident, {"on": True})
+        for ident in getattr(sched, "off", []) or []:
+            self.command(ident, {"on": False})
+        say = str(getattr(sched, "say", "") or "").strip()
+        if say:
+            self.companion_announce({"text": say})
 
     def note_presence(self) -> None:
         self.companion.note_presence()

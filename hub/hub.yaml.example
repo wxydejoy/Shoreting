@@ -129,3 +129,17 @@ devices:
   #   run:
   #     program: "wegame://action=StartFor&game_id=2001715"
   #     process: ["VALORANT-Win64-Shipping.exe"]
+
+# 定时任务：到点开/关几件白名单设备，也可以让守岸人说一句。
+# at 是 24 小时制的 HH:MM；weekdays 不写就是每天（1=周一 … 7=周日）。
+# on / off 里只能写 devices 里的 id；say 走伴侣，companion 关着就只动作不说话。
+# schedules:
+# - id: morning
+#   at: "07:30"
+#   weekdays: [1, 2, 3, 4, 5]
+#   on: [desk-lamp]
+#   say: "早，今天也要好好干活。"
+# - id: bedtime
+#   at: "23:30"
+#   off: [desk-lamp]
+#   say: "灯关了，早点睡。"
