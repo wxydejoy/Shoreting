@@ -138,6 +138,44 @@ class HubClientTest {
     }
 
     @Test
+    fun snapshotWithoutSeqMeansOldHub() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"protocol":1,"hub":{"name":"study","mijia":"ok"}}""",
+            ),
+        )
+        val snapshot = client.snapshot(connection)
+        assertNull(snapshot.seq)
+        assertTrue(server.takeRequest().path!!.endsWith("/v1/snapshot"))
+    }
+
+    @Test
+    fun snapshotLongPollSendsSinceAndWait() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"protocol":1,"seq":41,"hub":{"name":"study","mijia":"ok"}}""",
+            ),
+        )
+        val snapshot = client.snapshot(connection, since = 40, waitSec = 25)
+        assertEquals(41, snapshot.seq)
+        val request = server.takeRequest()
+        assertTrue(request.path!!.startsWith("/v1/snapshot?"))
+        assertTrue(request.path!!.contains("since=40"))
+        assertTrue(request.path!!.contains("wait=25"))
+    }
+
+    @Test
+    fun snapshotIgnoresWaitWithoutSince() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"protocol":1,"seq":7,"hub":{"name":"study","mijia":"ok"}}""",
+            ),
+        )
+        client.snapshot(connection, since = null, waitSec = 25)
+        assertEquals("/v1/snapshot", server.takeRequest().path)
+    }
+
+    @Test
     fun commandSendsPartialBody() {
         server.enqueue(
             MockResponse().setBody(

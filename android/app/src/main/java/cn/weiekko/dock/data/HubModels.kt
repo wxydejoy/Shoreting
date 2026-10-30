@@ -26,6 +26,8 @@ data class Snapshot(
     val theme: ThemeStatus? = null,
     val photos: PhotoIds? = null,
     val wallpaper: WallpaperStatus? = null,
+    /** Hub 的状态版本号；旧版 Hub 没有这个字段，就用不了长轮询。 */
+    val seq: Int? = null,
 )
 
 /** 一句话壁纸（F39）：今天那句，画在背景上，淡。 */

@@ -216,6 +216,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private var hubSleepJob: Job? = null
     private var listeningJob: Job? = null
     private var disconnectedAt: Long? = null
+    /** 上一次看到的 snapshot.seq；非空说明 Hub 支持长轮询。 */
+    private var hubSeq: Int? = null
     private var tileLookJob: Job? = null
     private var typeLookJob: Job? = null
     private var layoutJob: Job? = null
@@ -1406,23 +1408,35 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         pollJob = viewModelScope.launch {
+            hubSeq = null
             pullSnapshot(connection, showLoading = _ui.value.snapshot == null)
             while (isActive) {
                 val down = disconnectedAt != null
-                val hasLive = _ui.value.snapshot?.pc != null
-                val wait = when {
-                    down -> _ui.value.hubReconnectSec.coerceIn(5, 120) * 1000L
-                    hasLive -> POLL_PC_MS
-                    else -> POLL_MS
-                }
-                delay(wait)
                 if (down) {
+                    delay(_ui.value.hubReconnectSec.coerceIn(5, 120) * 1000L)
                     val reachable = withContext(Dispatchers.IO) {
                         runCatching { client.health(connection) }.isSuccess
                     }
                     if (!reachable) continue
+                    pullSnapshot(connection, showLoading = false)
+                    continue
                 }
-                pullSnapshot(connection, showLoading = false)
+                val seq = hubSeq
+                if (seq == null) {
+                    // 旧版 Hub 不认 since/wait：老老实实按间隔轮询
+                    val hasLive = _ui.value.snapshot?.pc != null
+                    delay(if (hasLive) POLL_PC_MS else POLL_MS)
+                    pullSnapshot(connection, showLoading = false)
+                    continue
+                }
+                // 长轮询：Hub 状态一变就回；一直不变就挂到 wait 超时再回来
+                val started = SystemClock.elapsedRealtime()
+                pullSnapshot(connection, showLoading = false, since = seq, waitSec = LONG_POLL_SEC)
+                val spent = SystemClock.elapsedRealtime() - started
+                if (spent < LONG_POLL_MIN_GAP_MS) {
+                    // Hub 秒回（老版本把参数当空气、或 seq 抖了一下）时别打成忙等
+                    delay(LONG_POLL_MIN_GAP_MS - spent)
+                }
             }
         }
     }
@@ -1442,13 +1456,19 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun pullSnapshot(connection: HubConnection, showLoading: Boolean) {
+    private suspend fun pullSnapshot(
+        connection: HubConnection,
+        showLoading: Boolean,
+        since: Int? = null,
+        waitSec: Int = 0,
+    ) {
         if (showLoading) _ui.update { it.copy(loading = true) }
         val result = withContext(Dispatchers.IO) {
-            runCatching { client.snapshot(connection) }
+            runCatching { client.snapshot(connection, since = since, waitSec = waitSec) }
         }
         result.fold(
             onSuccess = { snapshot ->
+                hubSeq = snapshot.seq
                 val banner = when {
                     snapshot.hub.isLoginRequired() ->
                         snapshot.hub.message ?: "请在电脑上扫码登录米家"
@@ -1679,6 +1699,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         const val POLL_MS = 20_000L
         const val POLL_PC_MS = 3_000L
+        const val LONG_POLL_SEC = 25
+        const val LONG_POLL_MIN_GAP_MS = 800L
         const val PHONE_MEDIA_MS = 1_000L
         const val FRAME_PHOTO_MS = 45_000L
         const val WEATHER_OK_MS = 20 * 60 * 1000L

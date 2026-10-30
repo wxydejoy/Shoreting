@@ -75,9 +75,14 @@ class HubClient(
         return parsed.pc ?: PcStatus(online = false, updatedAt = "")
     }
 
-    fun snapshot(connection: HubConnection): Snapshot {
-        val request = authorized(connection, "/v1/snapshot").get().build()
-        val body = execute(request, readTimeoutMs = SNAPSHOT_TIMEOUT_MS)
+    fun snapshot(connection: HubConnection, since: Int? = null, waitSec: Int = 0): Snapshot {
+        // since + wait 是长轮询：Hub 状态没变就挂着，变了立刻回。
+        // 旧版 Hub 会忽略这两个参数、秒回一个没有 seq 的 snapshot，调用方据此回退到普通轮询。
+        val longPoll = since != null && waitSec > 0
+        val path = if (longPoll) "/v1/snapshot?since=$since&wait=$waitSec" else "/v1/snapshot"
+        val timeout = if (longPoll) (waitSec + 5) * 1000L else SNAPSHOT_TIMEOUT_MS
+        val request = authorized(connection, path).get().build()
+        val body = execute(request, readTimeoutMs = timeout)
         return decode(body)
     }
 
