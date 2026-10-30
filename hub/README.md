@@ -14,6 +14,7 @@ hub/
     service.py        # snapshot / command
     companion.py      # 守岸人：LLM 调度、口头技能
     books.py          # 睡前朗读
+    schedule.py       # 定时任务（到点开关设备 / 说一句）
     probe.py          # 探针模式（CPU 上报 + 远程开程序）
     pc.py             # CPU / 内存 / GPU / CPU 温度
     ledstrip.py       # 书桌 WS2812 灯带（ESP32 HTTP）
@@ -82,6 +83,27 @@ powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 ## 桌面伴侣
 
 默认 `companion.tts.deliver: false`：Hub 流式读 LLM，每写出一句（`。！？`）就 cue Mini TTS（`play_only`）。`POST /v1/companion/chat` 仍等全文再返回给安卓字幕。`companion.llm.base_url` 可填 OpenAI 兼容地址（如阿里云 MaaS `qwen3.8-flash`），`api_key` 只写本机 yaml；请求顶层带 `enable_thinking: false`（推理型模型不关会把额度花在思考上）。未配密钥且 base 是 Ollama 时仍走 `/api/chat`（`think: false`）。TTS 仍指向 Mini。对话不预先读米家状态。白名单灯/开关/灯带可口头开关（`ACTION: id.on|off` 或「关灯」「开灯带」「开空调」兜底），真正执行仍走 devices/command。打断走 `POST /v1/companion/stop`。另有 `POST /v1/companion/announce` 让外部脚本（如微信机器人）直接让书桌喇叭说话；天气由 `GET /v1/weather` 代取。说明见 [docs/companion.md](../docs/companion.md)。
+
+## 定时任务
+
+`hub.yaml` 里加 `schedules`，Hub 每 15 秒看一次表，到点执行：
+
+```yaml
+schedules:
+- id: morning
+  at: "07:30"
+  weekdays: [1, 2, 3, 4, 5]   # 不写就是每天；1=周一 … 7=周日
+  on: [desk-lamp]              # 只能是 devices 里的 id
+  say: "早，今天也要好好干活。"   # 走伴侣：companion 关着就只动作不说话
+- id: bedtime
+  at: "23:30"
+  off: [desk-lamp]
+  say: "灯关了，早点睡。"
+```
+
+- 只按分钟对齐，进程睡过头或那分钟没跑就跳过，不补发。
+- 写错的 `at`（不是 `HH:MM`）、引用了不存在的设备 id、重复的 `id` 都会让 Hub 启动时报错，不会静默忽略。
+- 定时任务在向导里不可编辑，但向导保存配置时会原样保留。
 
 ## 源码开发
 
