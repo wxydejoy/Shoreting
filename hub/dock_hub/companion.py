@@ -28,6 +28,7 @@ import yaml
 from dock_hub.chat_log import ChatLog
 from dock_hub.config import CompanionConfig, ID_RE
 from dock_hub.errors import HubError
+from dock_hub.reads import ReadJobs, job_public
 
 # 「听懂话」那一段搬去了 intents.py（纯函数：原话 + 技能表 → 设备动作）。
 # 这里把所有名字原样再导出一遍，外面照旧 from dock_hub.companion import ...，
@@ -116,7 +117,6 @@ from dock_hub.persona import (
 
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
-MAX_READ_JOBS = 24
 READ_TTS_TIMEOUT_SEC = 90.0
 
 
@@ -152,14 +152,8 @@ class Companion:
         self._timer: threading.Timer | None = None
         self._extra_llm_headers: dict[str, str] = {}
         self._k20_seen_at = 0.0
-        self._reads_dir: Path | None = None
         self._story_books = None
-        self._read_jobs: OrderedDict[str, dict[str, Any]] = OrderedDict()
-        self._read_queue: deque[str] = deque()
-        self._read_lock = threading.Lock()
-        self._read_cv = threading.Condition(self._read_lock)
-        self._read_worker: threading.Thread | None = None
-        self._read_cancel: set[str] = set()
+        self.reads = ReadJobs(self)
 
     def configure(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
@@ -195,7 +189,7 @@ class Companion:
         self._chat_log = log
 
     def set_reads_dir(self, path: str | Path | None) -> None:
-        self._reads_dir = Path(path) if path else None
+        self.reads.set_dir(path)
 
     def note_presence(self) -> None:
         """K20 刚打过认证过的 snapshot / chat：人还在这条链路上。"""
@@ -364,7 +358,7 @@ class Companion:
         self._story_books = books
 
     def begin_story_audio(self) -> None:
-        self._cancel_running_reads()
+        self.reads.cancel_all()
         with self._lock:
             self._seq += 1
             self._speaking = True
@@ -391,7 +385,7 @@ class Companion:
         with self._lock:
             self._seq += 1
             self._speaking = False
-        self._cancel_running_reads()
+        self.reads.cancel_all()
         self._stop_tts()
         _latency("-", "stop")
         return {"ok": True}
@@ -423,6 +417,44 @@ class Companion:
             text, turn, seq, started, cue_llm=False, user="（微信）"
         )
 
+    # ---- 朗读任务的回调 ------------------------------------------------------
+    # reads.ReadJobs 干活，出声和状态都在这一侧；下面几个方法就是两边之间的缝。
+
+    def stop_playback(self) -> None:
+        self._stop_tts()
+
+    def cue_sentence(self, text: str, ident: str, seq: int) -> bool:
+        return self._cue_sentence(text, ident, seq)
+
+    def synthesize(self, text: str, ident: str) -> bytes | None:
+        return self._speak(text, ident, play_only=False, play=False)
+
+    def next_seq(self) -> int:
+        with self._lock:
+            self._seq += 1
+            return self._seq
+
+    def still_current(self, seq: int) -> bool:
+        with self._lock:
+            return seq == self._seq
+
+    def set_speaking(self, speaking: bool) -> None:
+        with self._lock:
+            self._speaking = speaking
+
+    def keep_clip(self, ident: str, wav: bytes) -> None:
+        with self._lock:
+            self._clips[ident] = wav
+            while len(self._clips) > MAX_CLIPS:
+                self._clips.popitem(last=False)
+
+    def drop_clip(self, ident: str) -> None:
+        with self._lock:
+            self._clips.pop(ident, None)
+
+    def note(self, turn: str, stage: str, **fields: Any) -> None:
+        _latency(turn, stage, **fields)
+
     def read(self, body: dict[str, Any]) -> dict[str, Any]:
         """Hub 朗读页：预估时长后，书桌播放或生成可下载 wav。"""
         if not self.config.enabled:
@@ -449,33 +481,22 @@ class Companion:
         if not chunks:
             raise HubError("bad_request", "text 不能为空")
         _latency(turn, "read_start", mode=mode, chars=chars, chunks=len(chunks), raw=len(raw_chunks))
-        job = self._remember_read_job(
+        job = self.reads.submit(
             turn,
             mode=mode,
             text=text,
             chars=chars,
             estimate=estimate,
-            chunks=len(chunks),
-            status="queued",
-            done=0,
             pieces=chunks,
         )
-        self._ensure_read_worker()
-        with self._read_cv:
-            self._read_queue.append(turn)
-            self._read_cv.notify()
-        out = _read_job_public(job)
+        out = job_public(job)
         out["text"] = text
         return out
 
     def read_jobs(self) -> dict[str, Any]:
         if not self.config.enabled:
             raise HubError("not_found", "未开启桌面伴侣")
-        self._merge_disk_reads()
-        with self._read_lock:
-            items = [_read_job_public(job) for job in self._read_jobs.values()]
-        items.sort(key=lambda item: int(item.get("created_at") or 0), reverse=True)
-        return {"items": items}
+        return self.reads.list()
 
     def read_job_action(self, ident: str, action: str) -> dict[str, Any]:
         if not self.config.enabled:
@@ -484,290 +505,18 @@ class Companion:
             raise HubError("not_found", "没有这个任务")
         action = (action or "").strip()
         if action == "cancel":
-            return self._cancel_read_job(ident)
+            return self.reads.cancel(ident)
         if action == "delete":
-            return self._delete_read_job(ident)
+            return self.reads.delete(ident)
         if action == "replay":
             return self._replay_read_job(ident)
         raise HubError("bad_request", "action 只能是 cancel、delete 或 replay")
 
-    def _remember_read_job(
-        self,
-        ident: str,
-        *,
-        mode: str,
-        text: str,
-        chars: int,
-        estimate: int,
-        chunks: int,
-        status: str,
-        done: int,
-        pieces: list[str] | None = None,
-    ) -> dict[str, Any]:
-        preview = "".join(text.split())
-        if len(preview) > 36:
-            preview = preview[:35] + "…"
-        job: dict[str, Any] = {
-            "id": ident,
-            "mode": mode,
-            "status": status,
-            "chars": chars,
-            "estimate_sec": estimate,
-            "chunks": chunks,
-            "done": done,
-            "preview": preview,
-            "audio_id": None,
-            "duration_sec": None,
-            "bytes": None,
-            "filename": None,
-            "error": None,
-            "created_at": int(time.time()),
-            "_text": text,
-        }
-        if pieces is not None:
-            job["_chunks"] = list(pieces)
-        with self._read_lock:
-            self._read_jobs[ident] = job
-            while len(self._read_jobs) > MAX_READ_JOBS:
-                self._read_jobs.popitem(last=False)
-        return job
-
-    def _ensure_read_worker(self) -> None:
-        worker = self._read_worker
-        if worker is not None and worker.is_alive():
-            return
-        thread = threading.Thread(target=self._read_loop, name="read-jobs", daemon=True)
-        self._read_worker = thread
-        thread.start()
-
-    def _read_loop(self) -> None:
-        while True:
-            with self._read_cv:
-                while not self._read_queue:
-                    self._read_cv.wait()
-                ident = self._read_queue.popleft()
-            try:
-                self._run_read_job(ident)
-            except Exception as exc:  # noqa: BLE001
-                _latency(ident, "read_job_crash")
-                with self._read_lock:
-                    job = self._read_jobs.get(ident)
-                    if job is not None:
-                        job["status"] = "error"
-                        job["error"] = str(exc)[:120]
-
-    def _run_read_job(self, ident: str) -> None:
-        with self._read_lock:
-            if ident in self._read_cancel:
-                job = self._read_jobs.get(ident)
-                if job is not None and job.get("status") in {"queued", "running"}:
-                    job["status"] = "cancelled"
-                    job.pop("_chunks", None)
-                return
-            job = self._read_jobs.get(ident)
-            if job is None or job.get("status") == "cancelled":
-                return
-            chunks = list(job.get("_chunks") or [])
-            mode = str(job.get("mode") or "file")
-            job["status"] = "running"
-            job["done"] = 0
-        _latency(ident, "read_job_run", mode=mode, chunks=len(chunks))
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
-            self._speaking = True
-        try:
-            if mode == "play":
-                self._stop_tts()
-            parts: list[bytes] = []
-            for i, sent in enumerate(chunks, start=1):
-                self._raise_if_read_stopped(ident, seq)
-                if mode == "play":
-                    if not self._cue_sentence(sent, ident, seq):
-                        raise HubError("companion_unavailable", "被打断了")
-                else:
-                    wav = self._speak(sent, ident, play_only=False, play=False)
-                    if not wav:
-                        raise HubError("companion_unavailable", "合成失败")
-                    parts.append(wav)
-                with self._read_lock:
-                    current = self._read_jobs.get(ident)
-                    if current is not None:
-                        current["done"] = i
-                _latency(ident, "read_chunk", i=i, n=len(chunks), chars=len(sent), mode=mode)
-            if mode == "play":
-                with self._read_lock:
-                    current = self._read_jobs.get(ident)
-                    if current is not None:
-                        current["status"] = "done"
-                        current["done"] = len(chunks)
-                        current.pop("_chunks", None)
-                _latency(ident, "read_job_done", mode="play")
-                return
-            joined = join_wavs(parts)
-            self._store_read(ident, joined)
-            with self._read_lock:
-                current = self._read_jobs.get(ident)
-                if current is not None:
-                    current["status"] = "done"
-                    current["done"] = len(chunks)
-                    current["audio_id"] = ident
-                    current["duration_sec"] = round(wav_duration_sec(joined), 3)
-                    current["bytes"] = len(joined)
-                    current["filename"] = f"shorekeeper-{ident}.wav"
-                    current.pop("_chunks", None)
-                    self._write_read_meta(current)
-            _latency(ident, "read_job_done", bytes=len(joined))
-        except (HubError, ValueError, wave.Error) as exc:
-            interrupted = isinstance(exc, HubError) and exc.message == "被打断了"
-            message = exc.message if isinstance(exc, HubError) else "合成失败"
-            with self._read_lock:
-                current = self._read_jobs.get(ident)
-                if current is not None:
-                    current["status"] = "cancelled" if interrupted else "error"
-                    current["error"] = None if interrupted else message
-                    current.pop("_chunks", None)
-            _latency(ident, "read_job_error" if not interrupted else "read_job_cancel")
-        finally:
-            with self._lock:
-                self._speaking = False
-
-    def _raise_if_read_stopped(self, ident: str, seq: int) -> None:
-        with self._read_lock:
-            cancelled = ident in self._read_cancel
-        with self._lock:
-            barged = seq != self._seq
-        if cancelled or barged:
-            raise HubError("companion_unavailable", "被打断了")
-
-    def _cancel_running_reads(self) -> None:
-        with self._read_lock:
-            for ident, job in self._read_jobs.items():
-                if job.get("status") in {"queued", "running"}:
-                    job["status"] = "cancelled"
-                    job["error"] = None
-                    job.pop("_chunks", None)
-                    self._read_cancel.add(ident)
-            self._read_queue.clear()
-
-    def _cancel_read_job(self, ident: str) -> dict[str, Any]:
-        running = False
-        with self._read_lock:
-            job = self._read_jobs.get(ident)
-            if job is None:
-                raise HubError("not_found", "没有这个任务")
-            if job.get("status") in {"done", "error", "cancelled"}:
-                return _read_job_public(job)
-            job["status"] = "cancelled"
-            job["error"] = None
-            job.pop("_chunks", None)
-            self._read_cancel.add(ident)
-            try:
-                self._read_queue.remove(ident)
-            except ValueError:
-                running = True
-        if running:
-            with self._lock:
-                self._seq += 1
-                self._speaking = False
-            self._stop_tts()
-        with self._read_lock:
-            job = self._read_jobs.get(ident) or job
-        return _read_job_public(job)
-
-    def _delete_read_job(self, ident: str) -> dict[str, Any]:
-        with self._read_lock:
-            job = self._read_jobs.get(ident)
-        if job and job.get("status") in {"queued", "running"}:
-            self._cancel_read_job(ident)
-        with self._read_lock:
-            self._read_jobs.pop(ident, None)
-            self._read_cancel.discard(ident)
-        with self._lock:
-            self._clips.pop(ident, None)
-        if self._reads_dir and ID_RE.match(ident):
-            for suffix in (".wav", ".json"):
-                path = self._reads_dir / f"{ident}{suffix}"
-                if path.is_file():
-                    path.unlink()
-        return {"ok": True, "id": ident}
-
     def _replay_read_job(self, ident: str) -> dict[str, Any]:
-        with self._read_lock:
-            job = self._read_jobs.get(ident)
-            text = str((job or {}).get("_text") or "")
-        if not text:
-            self._merge_disk_reads()
-            with self._read_lock:
-                job = self._read_jobs.get(ident)
-                text = str((job or {}).get("_text") or "")
+        text = self.reads.text_of(ident)
         if not text:
             raise HubError("not_found", "这篇稿已经不在了")
         return self.read({"text": text, "mode": "play"})
-
-    def _merge_disk_reads(self) -> None:
-        if self._reads_dir is None or not self._reads_dir.is_dir():
-            return
-        wavs = sorted(self._reads_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
-        with self._read_lock:
-            for path in wavs:
-                ident = path.stem
-                if not ID_RE.match(ident) or ident in self._read_jobs:
-                    continue
-                if len(self._read_jobs) >= MAX_READ_JOBS:
-                    break
-                meta: dict[str, Any] = {}
-                sidecar = path.with_suffix(".json")
-                if sidecar.is_file():
-                    try:
-                        loaded = json.loads(sidecar.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError):
-                        loaded = {}
-                    if isinstance(loaded, dict):
-                        meta = loaded
-                self._read_jobs[ident] = {
-                    "id": ident,
-                    "mode": "file",
-                    "status": "done",
-                    "chars": meta.get("chars"),
-                    "estimate_sec": meta.get("estimate_sec"),
-                    "chunks": meta.get("chunks"),
-                    "done": meta.get("chunks") or meta.get("done"),
-                    "preview": meta.get("preview") or ident,
-                    "audio_id": ident,
-                    "duration_sec": meta.get("duration_sec"),
-                    "bytes": meta.get("bytes") or path.stat().st_size,
-                    "filename": meta.get("filename") or f"shorekeeper-{ident}.wav",
-                    "error": None,
-                    "created_at": meta.get("created_at") or int(path.stat().st_mtime),
-                    "_text": meta.get("text") or "",
-                }
-
-    def _write_read_meta(self, job: dict[str, Any]) -> None:
-        if self._reads_dir is None:
-            return
-        ident = str(job.get("id") or "")
-        if not ident or not ID_RE.match(ident):
-            return
-        payload = {
-            "id": ident,
-            "mode": "file",
-            "status": "done",
-            "chars": job.get("chars"),
-            "estimate_sec": job.get("estimate_sec"),
-            "chunks": job.get("chunks"),
-            "done": job.get("done"),
-            "preview": job.get("preview"),
-            "duration_sec": job.get("duration_sec"),
-            "bytes": job.get("bytes"),
-            "filename": job.get("filename"),
-            "created_at": job.get("created_at"),
-            "text": job.get("_text") or "",
-        }
-        self._reads_dir.mkdir(parents=True, exist_ok=True)
-        (self._reads_dir / f"{ident}.json").write_text(
-            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-        )
 
     def audio(self, ident: str) -> bytes:
         if not self.config.enabled:
@@ -776,10 +525,8 @@ class Companion:
             raise HubError("not_found", "没有这段声音")
         with self._lock:
             wav = self._clips.get(ident)
-        if not wav and self._reads_dir and ID_RE.match(ident):
-            stored = self._reads_dir / f"{ident}.wav"
-            if stored.is_file():
-                wav = stored.read_bytes()
+        if not wav:
+            wav = self.reads.stored(ident)
         if not wav:
             raise HubError("not_found", "没有这段声音")
         _latency(ident, "audio_get", bytes=len(wav))
@@ -1184,22 +931,8 @@ class Companion:
                 self._speaking = False
         if not self.config.tts_deliver or not wav:
             return None
-        ident = turn
-        with self._lock:
-            self._clips[ident] = wav
-            while len(self._clips) > MAX_CLIPS:
-                self._clips.popitem(last=False)
-        return ident
-
-    def _store_read(self, ident: str, wav: bytes) -> None:
-        with self._lock:
-            self._clips[ident] = wav
-            while len(self._clips) > MAX_CLIPS:
-                self._clips.popitem(last=False)
-        if self._reads_dir is None:
-            return
-        self._reads_dir.mkdir(parents=True, exist_ok=True)
-        (self._reads_dir / f"{ident}.wav").write_bytes(wav)
+        self.keep_clip(turn, wav)
+        return turn
 
     def _stop_tts(self) -> None:
         if not self.config.tts_base_url:
@@ -1536,27 +1269,6 @@ def save_aliases(path: Path | None, aliases: dict[str, dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = yaml.safe_dump(aliases, allow_unicode=True, sort_keys=True)
     path.write_text(body, encoding="utf-8")
-
-
-def _read_job_public(job: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": job.get("id"),
-        "job_id": job.get("id"),
-        "mode": job.get("mode"),
-        "status": job.get("status"),
-        "chars": job.get("chars"),
-        "estimate_sec": job.get("estimate_sec"),
-        "chunks": job.get("chunks"),
-        "done": job.get("done"),
-        "preview": job.get("preview"),
-        "audio_id": job.get("audio_id"),
-        "duration_sec": job.get("duration_sec"),
-        "bytes": job.get("bytes"),
-        "filename": job.get("filename"),
-        "error": job.get("error"),
-        "created_at": job.get("created_at"),
-        "format": "audio/wav",
-    }
 
 
 def _turn_id(body: dict[str, Any]) -> str:
