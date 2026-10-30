@@ -1404,16 +1404,16 @@ curl -s -o /dev/null -w "%{http_code}\n" http://HOST:17890/v1/snapshot
 
 Windows Hub 继续报 Win 的 CPU / 内存 / GPU。Mac Mini 另开一个小服务，手机**单独填 Mini 地址**轮询，数字画在主屏 CPU 块的**第二行**。不经过 Hub。
 
-- 默认 `http://10.83.22.121:17891`，Token `helm-mini-weiekko`（安卓与 Mini 服务同一套默认值）
-- snapshot 需要 Bearer。`/health` 仍无鉴权
+- 默认 `http://10.83.22.121:17891`，Token 由 `mini/install-launchd.sh` 生成并打印，需与 `hub.yaml` 的 `mini.token`、安卓「Mini CPU」栏一致
+- snapshot / desk / telemetry 都需要 Bearer。**服务没有配置 token 时拒绝启动**，`/health` 仍无鉴权
 - 实现见仓库 [`mini/`](../mini/README.md)，与 `dock_hub` 包分开
 
 | 方法 | 路径 | 鉴权 | 作用 |
 |---|---|---|---|
 | `GET` | `/health` | 否 | `service` 必须是 `helm-mini` |
-| `GET` | `/v1/snapshot` | Token 非空时要 | `{ "protocol": 1, "service": "helm-mini", "pc": { … } }` |
-| `GET` | `/v1/desk` | Token 非空时要 | `{ "protocol": 1, "service": "helm-mini", "desk": { windows, mini, updated_at } }` |
-| `POST` | `/v1/telemetry` | Token 非空时要 | Hub 上报 Windows `pc` / `media` / `devices` / `temperature`；响应 `desk` 为合并后的最新一份 |
+| `GET` | `/v1/snapshot` | 是 | `{ "protocol": 1, "service": "helm-mini", "pc": { … } }` |
+| `GET` | `/v1/desk` | 是 | `{ "protocol": 1, "service": "helm-mini", "desk": { windows, mini, updated_at } }` |
+| `POST` | `/v1/telemetry` | 是 | Hub 上报 Windows `pc` / `media` / `devices` / `temperature`；响应 `desk` 为合并后的最新一份 |
 
 `GET /v1/snapshot` **不要改形状**（安卓 CPU 第二行只认 `pc`）。书桌落盘是另一条口：Hub 约 **1 秒** POST 一次电脑状态，米家缓存约 **15 秒** 才刷新；Mini 把最新一份写到 `~/.config/helm-mini/desk-state.json`，按日 jsonl 留两天。守岸人对话读 Hub 内存里的 `desk`，不要在 chat 路径再 GET 米家或 Mini。
 
@@ -1422,9 +1422,9 @@ Windows Hub 继续报 Win 的 CPU / 内存 / GPU。Mac Mini 另开一个小服�
 ```bash
 curl -s http://MINI:17891/health
 curl -s http://MINI:17891/v1/snapshot \
-  -H "Authorization: Bearer helm-mini-weiekko"
+  -H "Authorization: Bearer $HELM_MINI_TOKEN"
 curl -s http://MINI:17891/v1/desk \
-  -H "Authorization: Bearer helm-mini-weiekko"
+  -H "Authorization: Bearer $HELM_MINI_TOKEN"
 ```
 
 通过标准：health 的 `service` 为 `helm-mini`；snapshot 有 `pc.cpu.percent`、`pc.memory.percent`；读得到则有 `pc.gpu`。`POST /v1/telemetry` 后 `GET /v1/desk` 能看到 `desk.windows` 与 `desk.mini`。

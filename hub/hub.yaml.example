@@ -47,7 +47,7 @@ media:
 mini:
   enabled: true
   base_url: "http://127.0.0.1:17891"
-  token: helm-mini-weiekko
+  token: ""            # 填 mini/install-launchd.sh 打印出来的那枚，没有它 Mini 服务会拒绝启动
   pc_ms: 1000          # 电脑约 1 秒一次
   mijia_ms: 15000      # 米家约 15 秒一次
 

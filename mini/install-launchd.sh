@@ -9,6 +9,14 @@ fi
 BIN="$ROOT/.venv/bin/python"
 LABEL="cn.weiekko.helm-mini"
 DEST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+# 口令优先级：环境变量 > 已安装的 plist（保持现有安卓配置可用）> 新生成
+TOKEN="${HELM_MINI_TOKEN:-}"
+if [[ -z "$TOKEN" && -f "$DEST" ]]; then
+  TOKEN="$(awk '/HELM_MINI_TOKEN/{getline; gsub(/.*<string>|<\/string>.*/, ""); print; exit}' "$DEST")"
+fi
+if [[ -z "$TOKEN" ]]; then
+  TOKEN="$(openssl rand -hex 16 2>/dev/null || uuidgen | tr -d '-' | tr 'A-Z' 'a-z')"
+fi
 cat > "$DEST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -36,7 +44,7 @@ cat > "$DEST" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>HELM_MINI_TOKEN</key>
-    <string>helm-mini-weiekko</string>
+    <string>${TOKEN}</string>
   </dict>
   <key>StandardOutPath</key>
   <string>${ROOT}/helm-mini.log</string>
@@ -59,3 +67,5 @@ launchctl enable "${DOMAIN}/${LABEL}" 2>/dev/null || true
 launchctl kickstart -k "${DOMAIN}/${LABEL}"
 echo "已安装 LaunchAgent：$DEST"
 echo "日志：$ROOT/helm-mini.log"
+echo "Mini 监控 Token：${TOKEN}"
+echo "（安卓设置里的 Mini CPU 那栏要填这枚；无口令时服务会拒绝启动）"
