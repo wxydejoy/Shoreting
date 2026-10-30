@@ -43,6 +43,8 @@ cat > "$DEST" <<EOF
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
   <key>LimitLoadToSessionType</key>
   <array>
     <string>Aqua</string>

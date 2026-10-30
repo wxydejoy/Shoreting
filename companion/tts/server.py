@@ -663,6 +663,20 @@ def _play_only(
     )
 
 
+def _retry_load(engine: "Engine", *, first_delay: float = 30.0, max_delay: float = 900.0) -> None:
+    """加载失败后的退避重试：30s 起，翻倍到 15 分钟封顶。"""
+    delay = first_delay
+    while not engine.ready():
+        time.sleep(delay)
+        print(f"重试加载模型（上次失败：{engine.error}）", flush=True)
+        engine.error = None
+        engine.load()
+        if engine.ready():
+            print("模型重试成功，开始接活", flush=True)
+            return
+        delay = min(max_delay, delay * 2)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Shoreting companion TTS")
     parser.add_argument("--host", default="0.0.0.0")
@@ -690,13 +704,24 @@ def main() -> None:
         default=str(HERE / "music"),
         help="F32 本地电台的目录；往里丢 mp3/flac/ogg 就能被「放点音乐」点到",
     )
+    parser.add_argument(
+        "--exit-on-load-error",
+        action="store_true",
+        help="模型加载失败就退出（调试用）。默认留在线上重试，别让 KeepAlive 每 10s 重读 2GB",
+    )
     args = parser.parse_args()
 
     ref_audio, ref_text = _resolve_refs(args)
     engine = Engine(args.model, args.voice, ref_audio, ref_text, args.play)
     engine.load()
     if not engine.ready():
-        raise SystemExit(1)
+        if args.exit_on_load_error:
+            raise SystemExit(1)
+        # KeepAlive 会立刻把进程拉起来，于是变成每 10 秒重读一遍 2GB 模型、
+        # 每次都失败、CPU 和磁盘全占着。这里留在线上：/health 报 ready:false
+        # 和具体错误，后台按退避重试，Hub 那边也能看出来是没就绪而不是连不上。
+        print(f"模型没加载成功（{engine.error}）：服务先留在线上，后台重试", flush=True)
+        threading.Thread(target=_retry_load, args=(engine,), name="tts-reload", daemon=True).start()
 
     server = ThreadingHTTPServer(
         (args.host, args.port),
