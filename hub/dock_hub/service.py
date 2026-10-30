@@ -29,6 +29,7 @@ class _StorySpeaker:
 from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig, PcConfig, PropConfig, TemperatureConfig, default_config_path
 from dock_hub.errors import HubError
 from dock_hub.metrics import METRICS
+from dock_hub.lanes import Lanes
 from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
 from dock_hub.pc import PcSampler, utc_now
@@ -96,6 +97,8 @@ class DockHub:
         self._login_tickets: dict[str, tuple[float, str]] = {}
         # 没开限流时是 None，调用方按「不限」处理，不用到处判断开关
         self.gate = Gate.from_config(config.limits)
+        # 慢请求（等模型、等 TTS）单独几个名额，满了回 503 而不是无限开线程
+        self.lanes = Lanes.from_config(config.limits)
         media_cfg = config.media or MediaConfig(enabled=True)
         self.media = MediaSession(enabled=media_cfg.enabled)
         self.companion = Companion(config.companion)
@@ -305,6 +308,9 @@ class DockHub:
         self._desk_pc_online = None
         media_cfg = config.media or MediaConfig(enabled=True)
         self.media = MediaSession(enabled=media_cfg.enabled)
+        # 限流与并发名额也按新配置重建，否则改了 yaml 得重启才生效
+        self.gate = Gate.from_config(config.limits)
+        self.lanes = Lanes.from_config(config.limits)
         self.companion.configure(config.companion)
         self._proactive_stop.set()
         self.proactive.configure(config.proactive)

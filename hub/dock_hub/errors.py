@@ -11,6 +11,7 @@ STATUS_BY_CODE = {
     "companion_unavailable": 502,
     "media_error": 502,
     "too_many": 429,
+    "busy": 503,
 }
 
 

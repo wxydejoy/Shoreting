@@ -24,6 +24,8 @@ token: "replace-with-a-long-random-string"
 #     value: "另一段同样够长的随机字符串"
 #   - id: tablet
 #     value: "第三段随机字符串"
+#   chat_lanes: 2          # 同时进行的对话（满了回 503，手机稍后再试）
+#   read_lanes: 2          # 同时进行的朗读
 
 # 电脑监控。Hub 在 Mini 上时不要本机采样，改走 Windows 探针上报
 pc:

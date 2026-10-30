@@ -14,6 +14,7 @@ hub/
     metrics.py        # 进程内计数与直方图，无依赖
     ratelimit.py      # 按来源 IP + 端点的令牌桶（429）
     accesslog.py      # 访问日志（按天滚，留 7 天，不记查询串）
+    lanes.py          # 慢请求的并发名额（chat / read 满了回 503）
     service.py        # snapshot / command
     companion.py      # 守岸人主流程：chat 一轮、打断；TTS 与朗读都已交出去
     tts.py            # 嘴巴：探活 / 合成 / 叫停
