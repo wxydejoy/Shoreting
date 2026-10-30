@@ -356,6 +356,12 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._limit("announce")
                     self._json(200, hub.ingest_wechat(self._read_json()))
                     return
+                if path == "/v1/mirror":
+                    # F35 通知镜像：安卓监听器把白名单应用的通知送来，书桌亮一下
+                    self._require_auth()
+                    self._limit("mirror")
+                    self._json(200, hub.ingest_mirror(self._read_json()))
+                    return
                 if path == "/v1/companion/read":
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")

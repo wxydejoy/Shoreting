@@ -39,6 +39,7 @@ from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
 from dock_hub.notify import NotifyBoard, parse_relay, wechat_say_text
+from dock_hub.mirror import MirrorBoard
 from dock_hub.weekly import DailyLedger, weekly_line
 from dock_hub.diary import (
     DayMaterial,
@@ -141,6 +142,8 @@ class DockHub:
         self.diary.configure(config.diary.enabled, config.diary.at)
         # F33/F4/F34：往手机递话的一条通道（对讲反向、语音留言、微信共用）
         self.notify = NotifyBoard()
+        # F35 通知镜像：手机（K20）收到的白名单通知，回到摆件屏幕上亮一下
+        self.mirror = MirrorBoard()
         self._attach_books()
         self._desk_lock = threading.Lock()
         self._desk_temp: dict[str, Any] | None = None
@@ -1168,6 +1171,24 @@ class DockHub:
         item = self.relay_to_phone(said or text, source="wechat")
         return {"ok": True, "said": spoken, "notify_id": item["id"]}
 
+    def ingest_mirror(self, body: dict[str, Any]) -> dict[str, Any]:
+        """`POST /v1/mirror`（F35）：安卓监听器把白名单应用的通知送过来。
+
+        60 秒内的同一条不算新消息（应用爱在更新时反复 post），照实回它 id。
+        """
+        data = body or {}
+        app = str(data.get("app") or "").strip()
+        text = str(data.get("text") or "").strip()
+        title = str(data.get("title") or "").strip()
+        if not app or not text:
+            raise HubError("bad_request", "app 和 text 不能为空")
+        item = self.mirror.post(app, text, title)
+        if item is None:
+            snap = self.mirror.snapshot()
+            return {"ok": True, "id": snap["last_id"], "duplicate": True}
+        self.note_change()
+        return {"ok": True, "id": item["id"], "duplicate": False}
+
     def companion_memory(self) -> dict[str, Any]:
         """设置页「她记得的事」：列表 + 上限，前端渲染成可删的条目。"""
         return {"items": self.memory.entries(), "limit": MEMORY_LIMIT}
@@ -1981,6 +2002,7 @@ class DockHub:
             "presence": self._presence_payload(),
             "at_desk": self._at_desk_payload(),
             "notify": self.notify.snapshot(),
+            "mirror": self.mirror.snapshot(),
             "alarm": self._alarm.snapshot() if self._alarm else None,
             "theme": self._theme_payload(),
             "photos": self._photos_payload(),

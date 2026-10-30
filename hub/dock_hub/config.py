@@ -55,6 +55,8 @@ class LimitsConfig:
     command_per_min: int = 60
     login_per_min: int = 10
     read_per_min: int = 20
+    # 通知镜像（F35）：应用爱连发，桶给宽一点，别让正常消息撞墙
+    mirror_per_min: int = 30
     # 慢请求的并发名额（`*_lanes`）：等她说话、等音频合成时各占一个位子。
     # 满了回 503，不排队——排队只会让安卓一直转圈。0 表示不限。
     chat_lanes: int = 2
