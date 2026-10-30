@@ -225,6 +225,20 @@ class ScheduleConfig:
 
 
 @dataclass
+class FocusConfig:
+    """打游戏时自动切场景。
+
+    检测的就是「启动项里的程序在不在跑」（跟守岸人判断在打游戏是同一套）。
+    `on` 是游戏开起来要切的场景（id 或名字），`off` 是退出来恢复的场景；
+    `off` 不写就不恢复。守岸人在游戏期间本来就不主动开口，不用另配。
+    """
+
+    enabled: bool = False
+    on: str = ""
+    off: str = ""
+
+
+@dataclass
 class SceneConfig:
     """一组「一起动」的设备，可以带一句话和一个语音口令。"""
 
@@ -263,6 +277,7 @@ class HubConfig:
     # 除主 token 之外按设备分发的 token；删一条即吊销一台
     tokens: list[TokenConfig] = field(default_factory=list)
     scenes: list[SceneConfig] = field(default_factory=list)
+    focus: FocusConfig = field(default_factory=FocusConfig)
     path: Path | None = None
 
     def auth_values(self) -> tuple[str, ...]:
@@ -369,6 +384,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         devices.append(device)
 
     scenes = _parse_scenes(raw.get("scenes"), devices)
+    focus = _parse_focus(raw.get("focus"), scenes)
 
     return HubConfig(
         name=name,
@@ -387,6 +403,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         limits=limits,
         tokens=tokens,
         scenes=scenes,
+        focus=focus,
         path=path,
     )
 
@@ -1008,6 +1025,31 @@ def device_to_raw(device: DeviceConfig) -> dict[str, Any]:
     return raw
 
 
+def _scene_ref(scenes: list[SceneConfig], value: str, label: str) -> str:
+    """id 或名字都行，落成 id。写了一个又不存在的就直接报错。"""
+    for item in scenes:
+        if item.id == value or (item.name and item.name == value):
+            return item.id
+    raise ValueError(f"{label} 指向的场景 {value!r} 不存在")
+
+
+def _parse_focus(raw: Any, scenes: list[SceneConfig]) -> FocusConfig:
+    if raw is None or raw is False:
+        return FocusConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("focus 必须是对象，或用 focus: false 关掉")
+    on = str(raw.get("on") or "").strip()
+    if not on:
+        return FocusConfig()
+    return FocusConfig(
+        enabled=True,
+        on=_scene_ref(scenes, on, "focus.on"),
+        off=_scene_ref(scenes, str(raw.get("off") or "").strip(), "focus.off")
+        if str(raw.get("off") or "").strip()
+        else "",
+    )
+
+
 def scene_to_raw(scene: SceneConfig) -> dict[str, Any]:
     raw: dict[str, Any] = {"id": scene.id, "name": scene.name}
     if scene.on:
@@ -1098,6 +1140,11 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
     }
     if config.scenes:
         raw["scenes"] = [scene_to_raw(item) for item in config.scenes]
+    if config.focus.enabled:
+        focus_raw: dict[str, Any] = {"on": config.focus.on}
+        if config.focus.off:
+            focus_raw["off"] = config.focus.off
+        raw["focus"] = focus_raw
     if config.temperature:
         raw["temperature"] = temperature_to_raw(config.temperature)
     if config.pc is not None:
