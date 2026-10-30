@@ -14,6 +14,7 @@ from dock_hub.assets import read_asset
 MAX_TEXT = 4000
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_RETURN = 500
+TAIL_BLOCK = 64 * 1024
 
 
 def chat_log_path(config_path: Path | None) -> Path | None:
@@ -62,7 +63,11 @@ class ChatLog:
         needle = query.strip().lower()
         day = day.strip()[:10]
         with self._lock:
-            raw = self.path.read_text(encoding="utf-8", errors="replace")
+            raw = (
+                self.path.read_text(encoding="utf-8", errors="replace")
+                if needle
+                else self._tail_text(cap)
+            )
         items: list[dict[str, Any]] = []
         for line in raw.splitlines():
             line = line.strip()
@@ -80,6 +85,34 @@ class ChatLog:
                 continue
             items.append(obj)
         return items[-cap:]
+
+    def _tail_text(self, cap: int) -> str:
+        """只看文件尾部：记录攒到 8MB 也不必为最后 200 条把全文读进来。"""
+
+        assert self.path is not None
+        size = self.path.stat().st_size
+        if size <= TAIL_BLOCK:
+            return self.path.read_text(encoding="utf-8", errors="replace")
+        chunks: list[bytes] = []
+        pos = size
+        breaks = 0
+        with self.path.open("rb") as handle:
+            while pos > 0:
+                step = min(TAIL_BLOCK, pos)
+                pos -= step
+                handle.seek(pos)
+                block = handle.read(step)
+                chunks.append(block)
+                breaks += block.count(b"\n")
+                # 末行可能没换行，多要一行兜底
+                if breaks > cap:
+                    break
+        raw = b"".join(reversed(chunks))
+        if pos > 0:
+            cut = raw.find(b"\n")
+            if cut >= 0:
+                raw = raw[cut + 1 :]
+        return raw.decode("utf-8", errors="replace")
 
     def days(self) -> list[str]:
         """记过话的日子（YYYY-MM-DD，旧→新）。时间线一天一档，翻旧账用。"""
