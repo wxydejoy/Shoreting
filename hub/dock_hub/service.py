@@ -28,6 +28,7 @@ class _StorySpeaker:
         self._companion.begin_story_audio()
 from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig, PcConfig, PropConfig, TemperatureConfig, default_config_path
 from dock_hub.errors import HubError
+from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
 from dock_hub.lanes import Lanes
 from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
@@ -105,6 +106,11 @@ class DockHub:
         self.chat_log = ChatLog(chat_log_path(config.path))
         self.companion.set_chat_log(self.chat_log)
         self.companion.set_reads_dir((config.path or default_config_path()).parent / "reads")
+        # F28 长期记忆：hub.yaml 同目录一份 companion-memory.yaml，设置页可见可删
+        self.memory = MemoryStore(
+            (config.path or default_config_path()).with_name("companion-memory.yaml")
+        )
+        self.companion.set_memory(self.memory)
         self._attach_books()
         self._desk_lock = threading.Lock()
         self._desk_temp: dict[str, Any] | None = None
@@ -821,9 +827,20 @@ class DockHub:
         self.command(device_id, body)
 
     def companion_chat(self, body: dict[str, Any] | None) -> dict[str, Any]:
-        out = self.companion.chat(body or {}, "")
+        # F28：她早就记住的事随对话注入，自然用上
+        facts = self.memory.facts()
+        out = self.companion.chat(body or {}, facts)
         self.note_change()
         return out
+
+    def companion_memory(self) -> dict[str, Any]:
+        """设置页「她记得的事」：列表 + 上限，前端渲染成可删的条目。"""
+        return {"items": self.memory.entries(), "limit": MEMORY_LIMIT}
+
+    def companion_memory_delete(self, key: str) -> dict[str, Any]:
+        if not self.memory.forget_key(key):
+            raise HubError("not_found", f"没有这条记忆：{key}")
+        return {"ok": True, "key": key}
 
     def companion_chats(self, *, limit: int = 200, query: str = "") -> dict[str, Any]:
         return {"items": self.chat_log.list(limit=limit, query=query)}

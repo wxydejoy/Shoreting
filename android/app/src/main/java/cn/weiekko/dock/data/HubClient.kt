@@ -152,6 +152,22 @@ class HubClient(
         execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
     }
 
+    /** 她记得的事（F28）：列表给设置页「她记得的事」分区。 */
+    fun companionMemory(connection: HubConnection): MemoryList {
+        val request = authorized(connection, "/v1/companion/memory").get().build()
+        val body = execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
+        return decode(body)
+    }
+
+    /** 删一条记忆。404 说明这条已经不在了，当成功处理。 */
+    fun companionMemoryDelete(connection: HubConnection, key: String) {
+        val encoded = java.net.URLEncoder.encode(key, "UTF-8")
+        val request = authorized(connection, "/v1/companion/memory/$encoded")
+            .delete()
+            .build()
+        execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
+    }
+
     /**
      * 在桌上报（F24）：away_sec 是这次离座了多少秒（present=false 时省略），
      * 语义见 lan-protocol §6.13。失败静默——下次边沿再报。

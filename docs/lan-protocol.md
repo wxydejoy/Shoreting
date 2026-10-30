@@ -892,6 +892,43 @@ hub_mijia_login_ok 1
 计数在进程内，重启归零；要长期趋势就接到真正的时间序列库上。桶的边界是
 300 / 600 / 1000 / 1500 / 2500 / 4000 / 8000 毫秒。
 
+### 6.15 `GET /v1/companion/memory` · `DELETE /v1/companion/memory/{key}`
+
+长期记忆（F28）：她记得的事，条目化，设置页可见、逐条可删。**安卓可以打**（设置页用），
+Hub web 页也可以打。落到 hub.yaml 旁的 `companion-memory.yaml`，上限 60 条。
+
+「记住，……」在对话里说一句就落一条（`source: taught`）；日常聊天里高置信的事实
+（忌口、生日、称呼、宠物这类固定句式）她自己记（`source: chat`）。记忆随
+`POST /v1/companion/chat` 的注入进提示词，她自然用上，不逐条复述。
+
+```http
+GET /v1/companion/memory
+Authorization: Bearer <token>
+```
+
+**200**
+
+```json
+{
+  "limit": 60,
+  "items": [
+    {"key": "忌口", "value": "冰的", "source": "chat", "learned_at": "2026-10-31"}
+  ]
+}
+```
+
+```http
+DELETE /v1/companion/memory/%E5%BF%8C%E5%8F%A3
+Authorization: Bearer <token>
+```
+
+**200** `{"ok": true, "key": "忌口"}`；**404** 没有这条。
+
+- `key` 是删除句柄，URL 编码后放路径里；`/` 开头的 key 不存在。
+- 删除即生效：下一轮对话她就真的不知道这件事了，不进上下文。
+- 超 60 条先挤 `chat` 来源里最旧的，你亲手教的（`taught`）最后动。
+- 本机直连免 Token（同 `/chats`）；跨机要 Bearer。
+
 ---
 
 ## 7. 错误格式

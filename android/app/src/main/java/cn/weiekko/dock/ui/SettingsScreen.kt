@@ -36,6 +36,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -46,6 +47,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -71,6 +73,7 @@ import cn.weiekko.dock.data.MiniConnection
 import cn.weiekko.dock.background.BackgroundServer
 import cn.weiekko.dock.background.lanIpv4
 import cn.weiekko.dock.data.HubPreferences
+import cn.weiekko.dock.data.MemoryEntry
 import cn.weiekko.dock.data.TileLook
 import cn.weiekko.dock.data.TileStyle
 import cn.weiekko.dock.data.TypeLook
@@ -96,6 +99,8 @@ fun SettingsScreen(
     onSetWeatherCity: (String) -> Unit = {},
     onSetWakeWord: (Boolean) -> Unit = {},
     onSetDeskPresence: (Boolean) -> Unit = {},
+    onLoadMemory: () -> Unit = {},
+    onDeleteMemory: (String) -> Unit = {},
     onSetHubEnabled: (Boolean) -> Unit = {},
     onEditLayout: () -> Unit = {},
     onSetModuleVisible: (DockModule, Boolean) -> Unit = { _, _ -> },
@@ -136,6 +141,8 @@ fun SettingsScreen(
     val videoName = remember(state.backgroundVideoUri) {
         state.backgroundVideoUri?.let { displayName(context, Uri.parse(it)) }
     }
+    // F28：进设置页拉一次「她记得的事」
+    LaunchedEffect(Unit) { onLoadMemory() }
     val colors = MaterialTheme.colorScheme
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = colors.primary,
@@ -898,6 +905,62 @@ fun SettingsScreen(
             }
         }
         Spacer(Modifier.height(20.dp))
+        // F28 长期记忆：记忆必须可见可撤销，否则会变成毛骨悚然
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = colors.surface,
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Text("她记得的事", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "聊天里她记下的偏好与约定。说「记住，……」她会当场记下；不要了就删掉，她不会再提。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onSurfaceVariant,
+                )
+                if (state.memoryError != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        state.memoryError!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.error,
+                    )
+                }
+                if (state.memoryItems.isEmpty() && !state.memoryLoading && state.memoryError == null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "现在还空着。跟她说一句「记住，我不喝冰的」试试。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+                if (state.memoryLoading) {
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                state.memoryItems.forEach { entry ->
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(entry.value, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                memoryMeta(entry),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = { onDeleteMemory(entry.key) }) {
+                            Text("删")
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(20.dp))
         Surface(
             modifier = Modifier.fillMaxWidth(),
             color = colors.surface,
@@ -978,6 +1041,14 @@ fun SettingsScreen(
         Spacer(Modifier.height(24.dp))
     }
     }
+}
+
+private fun memoryMeta(entry: MemoryEntry): String {
+    val source = when (entry.source) {
+        "taught" -> "你教她的"
+        else -> "她自己记的"
+    }
+    return if (entry.learnedAt.isNotBlank()) "$source · ${entry.learnedAt}" else source
 }
 
 private fun displayName(context: android.content.Context, uri: Uri): String? {

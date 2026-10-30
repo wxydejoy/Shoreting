@@ -129,6 +129,21 @@ data class CompanionChatResponse(
     val audioId: String? = null,
 )
 
+/** 她记得的事（F28）：条目可见、逐条可删，key 是删除句柄。 */
+@Serializable
+data class MemoryEntry(
+    val key: String,
+    val value: String,
+    val source: String = "chat",
+    val learnedAt: String = "",
+)
+
+@Serializable
+data class MemoryList(
+    val limit: Int = 60,
+    val items: List<MemoryEntry> = emptyList(),
+)
+
 @Serializable
 data class HubDevice(
     val id: String,

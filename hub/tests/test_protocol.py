@@ -43,7 +43,9 @@ class ProtocolTest(unittest.TestCase):
                     },
                 ],
                 "mini": False,
-            }
+            },
+            # 配置路径按在临时目录：记忆/别名/心情等伴生文件都写在 hub.yaml 旁边
+            root / "hub.yaml",
         )
         self.hub = DockHub(cfg)
         handler = make_handler(self.hub)
@@ -159,6 +161,7 @@ class ProtocolTest(unittest.TestCase):
 
     def test_companion_chats_page(self) -> None:
         status, body = self._request("GET", "/v1/companion/chats", token=None)
+
         self.assertEqual(status, 200)
         self.assertEqual(body["items"], [])
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -169,6 +172,27 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn("text/html", resp.getheader("Content-Type") or "")
         self.assertIn("守岸人", html)
         conn.close()
+
+    def test_companion_memory_endpoints(self) -> None:
+        # F28：她记得的事——可见、可删。本机直通（同 /chats），跨机要 Bearer
+        status, body = self._request("GET", "/v1/companion/memory")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["items"], [])
+        self.assertIn("limit", body)
+
+        self.hub.memory.remember("忌口", "冰的")
+        status, body = self._request("GET", "/v1/companion/memory")
+        self.assertEqual([item["key"] for item in body["items"]], ["忌口"])
+        self.assertEqual(body["items"][0]["value"], "冰的")
+        self.assertEqual(body["items"][0]["source"], "chat")
+
+        status, body = self._request("DELETE", "/v1/companion/memory/%E5%BF%8C%E5%8F%A3")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        status, body = self._request("DELETE", "/v1/companion/memory/%E5%BF%8C%E5%8F%A3")
+        self.assertEqual(status, 404)
+        status, body = self._request("DELETE", "/v1/companion/memory/a/b")
+        self.assertEqual(status, 404)
 
     def test_companion_read_page(self) -> None:
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -264,30 +288,34 @@ devices:
             )
 
     def test_media_disabled_is_null(self) -> None:
-        cfg = parse_config(
-            {
-                "name": "study",
-                "token": "secret-token-value",
-                "media": {"enabled": False},
-                "devices": [],
-                "mini": False,
-            }
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = parse_config(
+                {
+                    "name": "study",
+                    "token": "secret-token-value",
+                    "media": {"enabled": False},
+                    "devices": [],
+                    "mini": False,
+                },
+                Path(tmp) / "hub.yaml",
+            )
         hub = DockHub(cfg)
         snap = hub.snapshot()
         self.assertIn("media", snap)
         self.assertIsNone(snap["media"])
 
     def test_pc_enabled_in_snapshot(self) -> None:
-        cfg = parse_config(
-            {
-                "name": "study",
-                "token": "secret-token-value",
-                "pc": {"enabled": True, "sample_ms": 1000, "gpu": False, "cpu_temp": False},
-                "devices": [],
-                "mini": False,
-            }
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = parse_config(
+                {
+                    "name": "study",
+                    "token": "secret-token-value",
+                    "pc": {"enabled": True, "sample_ms": 1000, "gpu": False, "cpu_temp": False},
+                    "devices": [],
+                    "mini": False,
+                },
+                Path(tmp) / "hub.yaml",
+            )
         hub = DockHub(cfg)
         snap = hub.snapshot()
         self.assertIsNotNone(snap["pc"])

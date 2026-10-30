@@ -180,6 +180,12 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     q = unquote((query.get("q") or [""])[0])
                     self._json(200, hub.companion_chats(limit=limit, query=q))
                     return
+                if path == "/v1/companion/memory":
+                    # F28：她记得的事。设置页读它，和 chats 一样走聊天鉴权
+                    if not self._chats_ok():
+                        raise HubError("unauthorized", "Token 不正确")
+                    self._json(200, hub.companion_memory())
+                    return
                 if path == "/v1/snapshot":
                     self._require_auth()
                     hub.note_presence()
@@ -560,6 +566,27 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 self.send_header("Content-Disposition", f'attachment; filename="{safe}"')
             self.end_headers()
             self.wfile.write(payload)
+
+        # 注意：这个方法必须留在 Handler 类的最后。check_protocol.py 把每个
+        # do_* 的源码段切到下一个 do_* 为止，放在前面会把后面 helper 里的
+        # GET 字面量误算进 DELETE 的账（比如 _books_get 的 books 路由）。
+        def do_DELETE(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or "/"
+            try:
+                memory_prefix = "/v1/companion/memory/"
+                if path.startswith(memory_prefix):
+                    # F28：逐条删除。「记忆必须可见可撤销，否则会变成毛骨悚然」
+                    key = unquote(path[len(memory_prefix) :])
+                    if not key or "/" in key:
+                        raise HubError("not_found", "未知接口")
+                    if not self._chats_ok():
+                        raise HubError("unauthorized", "Token 不正确")
+                    self._json(200, hub.companion_memory_delete(key))
+                    return
+                raise HubError("not_found", "未知接口")
+            except HubError as exc:
+                self._json(exc.status, exc.body(), headers=exc.headers)
 
     return Handler
 

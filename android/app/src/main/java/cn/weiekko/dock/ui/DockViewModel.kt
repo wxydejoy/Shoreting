@@ -28,6 +28,7 @@ import cn.weiekko.dock.data.HubException
 import cn.weiekko.dock.data.HubNetworkException
 import cn.weiekko.dock.data.HubPreferences
 import cn.weiekko.dock.data.MediaInfo
+import cn.weiekko.dock.data.MemoryEntry
 import cn.weiekko.dock.data.MiniConnection
 import cn.weiekko.dock.data.ModuleRect
 import cn.weiekko.dock.data.PcStatus
@@ -119,6 +120,9 @@ data class DockUiState(
     val companionReply: String? = null,
     val companionBusy: Boolean = false,
     val companionError: String? = null,
+    val memoryItems: List<MemoryEntry> = emptyList(),
+    val memoryLoading: Boolean = false,
+    val memoryError: String? = null,
 ) {
     val configured: Boolean get() = connection.isConfigured
 }
@@ -906,6 +910,60 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun companionReady(): Boolean {
         val state = _ui.value
         return state.snapshot?.companion?.ready == true
+    }
+
+    /** 她记得的事（F28）：进设置页拉一次，删一条后原地刷新。 */
+    fun loadMemory() {
+        val connection = _ui.value.connection
+        if (!currentLink().pollsHub || !connection.isConfigured) {
+            _ui.update { it.copy(memoryItems = emptyList(), memoryError = null) }
+            return
+        }
+        _ui.update { it.copy(memoryLoading = true, memoryError = null) }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { client.companionMemory(connection) }
+            }
+            _ui.update { state ->
+                result.fold(
+                    onSuccess = { list ->
+                        state.copy(
+                            memoryItems = list.items,
+                            memoryLoading = false,
+                            memoryError = null,
+                        )
+                    },
+                    onFailure = { exc ->
+                        state.copy(
+                            memoryLoading = false,
+                            memoryError = (exc as? HubException)?.message
+                                ?: (exc.message ?: "拉不下来她记的事"),
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    fun deleteMemory(key: String) {
+        val connection = _ui.value.connection
+        if (!currentLink().pollsHub || !connection.isConfigured) return
+        _ui.update { it.copy(memoryLoading = true, memoryError = null) }
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { client.companionMemoryDelete(connection, key) }.isSuccess
+            }
+            _ui.update { state ->
+                if (ok) {
+                    state.copy(
+                        memoryItems = state.memoryItems.filterNot { it.key == key },
+                        memoryLoading = false,
+                    )
+                } else {
+                    state.copy(memoryLoading = false, memoryError = "没删掉，再试一次。")
+                }
+            }
+        }
     }
 
     fun openCompanion() {

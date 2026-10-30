@@ -29,6 +29,12 @@ from dock_hub.actions import apply_device_skills, launch_apps, set_temperature
 from dock_hub.chat_log import ChatLog
 from dock_hub.config import CompanionConfig, ID_RE
 from dock_hub.errors import HubError
+from dock_hub import logs
+from dock_hub.memory import (
+    MemoryStore,
+    parse_forget as parse_memory_forget,
+    parse_teach as parse_memory_teach,
+)
 from dock_hub.reads import ReadJobs, job_public
 
 # 「听懂话」那一段搬去了 intents.py（纯函数：原话 + 技能表 → 设备动作）。
@@ -165,6 +171,7 @@ class Companion:
         self._k20_seen_at = 0.0
         self._story_books = None
         self.reads = ReadJobs(self)
+        self._memory: MemoryStore | None = None
 
     def configure(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
@@ -203,6 +210,10 @@ class Companion:
     def set_reads_dir(self, path: str | Path | None) -> None:
         self.reads.set_dir(path)
 
+    def set_memory(self, store: MemoryStore | None) -> None:
+        """F28 长期记忆：放进来说明这条通道开着。"""
+        self._memory = store
+
     def note_presence(self) -> None:
         """K20 刚打过认证过的 snapshot / chat：人还在这条链路上。"""
         self._k20_seen_at = time.monotonic()
@@ -236,7 +247,7 @@ class Companion:
         self._ready_at = now
         return self._ready
 
-    def chat(self, body: dict[str, Any], facts: str) -> dict[str, Any]:
+    def chat(self, body: dict[str, Any], facts: str = "") -> dict[str, Any]:
         if not self.config.enabled:
             raise HubError("not_found", "未开启桌面伴侣")
         if not isinstance(body, dict):
@@ -257,6 +268,27 @@ class Companion:
             spoken = taught or "这个只能绑已经配好的灯或启动项，不能自己加程序。"
             self._prepare_mood(text, control=False)
             self._commit_reply(spoken)
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard
+            )
+        # F28：「记住，……」当场落盘并短确认，不绕模型——记忆这事确定性比文采重要
+        memo = parse_memory_teach(text)
+        if memo and self._memory is not None:
+            key = self._memory.teach(memo)
+            spoken = "记住了。" if key else "这条太长，你拆成短一点的说。"
+            self._prepare_mood(text, control=False)
+            self._commit_reply(spoken)
+            _latency(turn, "memory_teach", ok=1 if key else 0)
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard
+            )
+        memo_forget = parse_memory_forget(text)
+        if memo_forget is not None and self._memory is not None:
+            gone = self._memory.forget(memo_forget)
+            spoken = f"忘掉了，{gone}。" if gone else "这个我本来就没记住。"
+            self._prepare_mood(text, control=False)
+            self._commit_reply(spoken)
+            _latency(turn, "memory_forget", ok=1 if gone else 0)
             return self._finish_spoken(
                 spoken, turn, seq, started, cue_llm=False, user=heard
             )
@@ -836,6 +868,15 @@ class Companion:
         if not spoken or not heard:
             return
         self._recent.append((heard, spoken))
+        if self._memory is not None and not looks_like_control(heard):
+            # F28：闲聊里捞候选事实。失败不影响本轮对话，留一行痕迹就好
+            try:
+                learned = self._memory.note_turn(heard)
+            except Exception as exc:  # noqa: BLE001 - 记忆坏了不该连累说话
+                logs.swallowed("长期记忆抽取", exc)
+                return
+            if learned:
+                _latency("-", "memory_learn", n=len(learned))
 
     def _apply_device_skills(
         self, user_text: str, raw_reply: str, turn: str

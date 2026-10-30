@@ -209,6 +209,8 @@ class MainActivity : ComponentActivity() {
                                     onSetWeatherCity = viewModel::setWeatherCity,
                                     onSetWakeWord = viewModel::setWakeWord,
                                     onSetDeskPresence = viewModel::setDeskPresence,
+                                    onLoadMemory = viewModel::loadMemory,
+                                    onDeleteMemory = viewModel::deleteMemory,
                                     onSetHubEnabled = viewModel::setHubEnabled,
                                     onEditLayout = viewModel::enterEdit,
                                     onSetModuleVisible = viewModel::setModuleVisible,

@@ -413,6 +413,62 @@ paths:
                       $ref: "#/components/schemas/ChatTurn"
         "401":
           $ref: "#/components/responses/Error"
+  /v1/companion/memory:
+    get:
+      summary: 长期记忆列表（F28）。设置页「她记得的事」，逐条可见可删。
+      operationId: getCompanionMemory
+      responses:
+        "200":
+          description: 按学会时间排序，旧的在前
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  limit:
+                    type: integer
+                    description: 记忆上限（超出时最旧的聊天来源先被挤掉）
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                          description: 条目标识（忌口 / 生日 / 记事1 …），删除时用它
+                        value:
+                          type: string
+                        source:
+                          type: string
+                          enum: [chat, taught]
+                        learned_at:
+                          type: string
+                          description: YYYY-MM-DD
+        "401":
+          $ref: "#/components/responses/Error"
+    delete:
+      summary: 删一条记忆（按 key）。404 表示没有这条。
+      operationId: deleteCompanionMemory
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 删掉了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  key: { type: string }
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /v1/companion/books:
     get:
       summary: Shelf listing for the reading page
