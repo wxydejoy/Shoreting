@@ -42,6 +42,12 @@ OPEN_PAGES = {
 }
 
 
+# Hub 就在局域网 / 本机回环上：环境里的 http_proxy 指到别处时（比如桌面
+# 端代理把 127.0.0.1 的流量也收走），urlopen 会间歇性地把探针自己的请求
+# 也送进代理然后 502。这里一律直连，不读任何代理环境变量。
+_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def mint_claim_url(config: HubConfig, next_path: str = "/setup") -> str:
     base = hub_lan_base(config)
     url = base + "/v1/login-ticket"
@@ -53,7 +59,7 @@ def mint_claim_url(config: HubConfig, next_path: str = "/setup") -> str:
     }
     req = urllib.request.Request(url, data=raw, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with _DIRECT_OPENER.open(req, timeout=3) as resp:
             body = json.loads(resp.read().decode("utf-8") or "{}")
     except (TimeoutError, urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as exc:
         raise HubError("offline", "无法自动登录 Mini Hub") from exc
