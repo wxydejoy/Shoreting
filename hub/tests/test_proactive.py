@@ -4,7 +4,13 @@ import unittest
 from datetime import datetime, timedelta
 
 from dock_hub.config import hub_config_to_raw, parse_config
-from dock_hub.proactive import MORNING_WINDOW, Proactive, Sustained, in_quiet_hours
+from dock_hub.proactive import (
+    MORNING_WINDOW,
+    Proactive,
+    SedentaryWatch,
+    Sustained,
+    in_quiet_hours,
+)
 
 
 def at(hour: int, minute: int = 0) -> datetime:
@@ -351,6 +357,43 @@ class TestSpeakUp(unittest.TestCase):
         self.assertFalse(bot.speak_up("   "))
 
 
+class TestSedentaryWatch(unittest.TestCase):
+    def test_needs_full_time(self) -> None:
+        watch = SedentaryWatch()
+        t0 = at(10, 0)
+        self.assertFalse(watch.tick(5.0, t0, 90))
+        self.assertFalse(watch.tick(30.0, t0 + timedelta(minutes=89), 90))
+        self.assertTrue(watch.tick(30.0, t0 + timedelta(minutes=90), 90))
+
+    def test_break_resets(self) -> None:
+        watch = SedentaryWatch()
+        t0 = at(10, 0)
+        watch.tick(5.0, t0, 90)
+        # 离开 6 分钟：休息过了，计时清零
+        self.assertFalse(watch.tick(360.0, t0 + timedelta(minutes=89), 90))
+        self.assertFalse(watch.tick(5.0, t0 + timedelta(minutes=95), 90), "重新坐，重新计")
+
+    def test_no_data_keeps_counting(self) -> None:
+        watch = SedentaryWatch()
+        t0 = at(10, 0)
+        watch.tick(5.0, t0, 90)
+        # 探针没报（None）：不当成在休息，也不清零
+        self.assertTrue(watch.tick(None, t0 + timedelta(minutes=95), 90))
+
+    def test_zero_limit_off(self) -> None:
+        watch = SedentaryWatch()
+        t0 = at(10, 0)
+        watch.tick(5.0, t0, 0)
+        self.assertFalse(watch.tick(5.0, t0 + timedelta(hours=5), 0))
+
+    def test_reset(self) -> None:
+        watch = SedentaryWatch()
+        t0 = at(10, 0)
+        watch.tick(5.0, t0, 90)
+        watch.reset()
+        self.assertFalse(watch.tick(5.0, t0 + timedelta(minutes=89), 90))
+
+
 class TestServiceAlerts(unittest.TestCase):
     """温度与离线的判定在 service 一侧：坏够久才说，说过的不再说。"""
 
@@ -419,6 +462,29 @@ class TestServiceAlerts(unittest.TestCase):
         self._ready(hub, "offline:lamp", minutes=11)
         hub._evaluate_alerts()
         self.assertEqual(said, ["台灯有一阵没应答了。"])
+
+    def test_sedentary_alerts_once_then_retimes(self) -> None:
+        hub, said = self._hub()
+        hub._idle_seconds = lambda: 10.0  # 一直在动
+        hub._sedentary._since = datetime.now().astimezone() - timedelta(minutes=95)
+        hub._evaluate_alerts()
+        self.assertEqual(said, ["坐了一阵了，起来走走。"])
+        hub._evaluate_alerts()  # 提过重新计时，不再连环催
+        self.assertEqual(said, ["坐了一阵了，起来走走。"])
+
+    def test_sedentary_break_clears(self) -> None:
+        hub, said = self._hub()
+        hub._idle_seconds = lambda: 600.0  # 已经离开十分钟
+        hub._evaluate_alerts()
+        self.assertEqual(said, [])
+        self.assertIsNone(hub._sedentary._since)
+
+    def test_telemetry_idle_is_stored(self) -> None:
+        hub, _ = self._hub()
+        hub.ingest_telemetry({"pc": {"online": True}, "running": [], "idle_sec": 12.5})
+        self.assertAlmostEqual(hub._idle_seconds(), 12.5)
+        hub.ingest_telemetry({"pc": {"online": True}, "running": [], "idle_sec": "bad"})
+        self.assertIsNone(hub._idle_seconds())
 
     def test_offline_too_soon_is_silent(self) -> None:
         hub, said = self._hub()

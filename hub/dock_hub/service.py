@@ -34,7 +34,7 @@ from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read
 from dock_hub.pc import PcSampler, utc_now
 from dock_hub.ratelimit import Gate
 from dock_hub.persona import speak_temp
-from dock_hub.proactive import Proactive, Sustained
+from dock_hub.proactive import Proactive, SedentaryWatch, Sustained
 from dock_hub.media import MEDIA_ACTIONS, MediaSession
 from dock_hub.reporter import DeskReporter
 from dock_hub.schedule import Scheduler
@@ -90,6 +90,7 @@ class DockHub:
         self._remote_pc: dict[str, Any] | None = None
         self._remote_running: set[str] = set()
         self._remote_at = 0.0
+        self._remote_idle: float | None = None
         self._desk_pc_online: bool | None = None
         self._ticket_lock = threading.Lock()
         self._login_tickets: dict[str, tuple[float, str]] = {}
@@ -116,6 +117,7 @@ class DockHub:
             compose_morning=self._morning_text,
         )
         self._alert_state = Sustained()
+        self._sedentary = SedentaryWatch()
         self._proactive_stop = threading.Event()
         self._start_proactive()
         self.reporter.start()
@@ -195,6 +197,12 @@ class DockHub:
                 if said.spoke:
                     self._alert_state.clear("temp")  # 说过了，降温前不再提
                 print(f"[proactive] 温度提醒：{said.text or said.reason}")
+        if alerts.sedentary_minutes > 0 and self.proactive.config.enabled:
+            if self._sedentary.tick(self._idle_seconds(), now, alerts.sedentary_minutes):
+                said = self.proactive.alert("sedentary", "坐了一阵了，起来走走。", now)
+                if said.spoke:
+                    self._sedentary.reset()  # 提过就重新计时，别连环催
+                print(f"[proactive] 久坐提醒：{said.text or said.reason}")
         if alerts.offline_minutes > 0:
             for item in self._offline_mijia_devices():
                 key = f"offline:{item['id']}"
@@ -203,6 +211,15 @@ class DockHub:
                     if said.spoke:
                         self._alert_state.clear(key)
                     print(f"[proactive] 离线提醒：{said.text or said.reason}")
+
+    def _idle_seconds(self) -> float | None:
+        """键鼠空闲秒数。只有探针在报且报得新鲜才有；拿不到就 None。"""
+        with self._probe_lock:
+            age = time.monotonic() - self._remote_at if self._remote_at else None
+            stale = max(0.2, self.config.probe.stale_ms / 1000.0)
+            if age is None or age > stale:
+                return None
+            return self._remote_idle
 
     def _offline_mijia_devices(self) -> list[dict[str, str]]:
         """配置里走米家、此刻离线的设备。启动项、灯带、探针电脑不算——
@@ -281,6 +298,7 @@ class DockHub:
             self._remote_pc = None
             self._remote_running = set()
             self._remote_at = 0.0
+            self._remote_idle = None
         self._desk_pc_online = None
         media_cfg = config.media or MediaConfig(enabled=True)
         self.media = MediaSession(enabled=media_cfg.enabled)
@@ -357,10 +375,16 @@ class DockHub:
         running_raw = body.get("running") or []
         if isinstance(running_raw, list):
             names = {str(item).strip().lower() for item in running_raw if str(item).strip()}
+        idle_raw = body.get("idle_sec")
+        try:
+            idle = float(idle_raw) if idle_raw is not None else None
+        except (TypeError, ValueError):
+            idle = None
         with self._probe_lock:
             self._remote_pc = sample
             self._remote_running = names
             self._remote_at = time.monotonic()
+            self._remote_idle = idle
         self._set_desk_pc_online(bool(sample.get("online")))
         self.note_change()
         return {"ok": True}

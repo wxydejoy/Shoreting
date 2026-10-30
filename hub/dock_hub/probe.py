@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -171,12 +172,36 @@ def handle_launch(config: HubConfig, body: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "id": cfg.id}
 
 
+def idle_seconds() -> float | None:
+    """键鼠空闲了多少秒（Windows）。拿不到（非 Windows / API 失败）就 None，
+    Hub 侧的久坐提醒会安静跳过，不会瞎猜。"""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        info = LASTINPUTINFO()
+        info.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return None
+        return max(0.0, (ctypes.windll.kernel32.GetTickCount() - info.dwTime) / 1000.0)
+    except Exception:
+        return None
+
+
 def _windows_sample(sampler: PcSampler) -> dict[str, Any]:
     pc = sampler.snapshot() or {"online": True}
-    return {
+    idle = idle_seconds()
+    sample: dict[str, Any] = {
         "pc": pc,
         "running": sorted(running_image_names()),
     }
+    if idle is not None:
+        sample["idle_sec"] = round(idle, 1)
+    return sample
 
 
 def _report_loop(config: HubConfig, sampler: PcSampler, stop: threading.Event) -> None:
