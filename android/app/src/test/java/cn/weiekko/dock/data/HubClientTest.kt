@@ -253,7 +253,7 @@ class HubClientTest {
                 """{"ok":true,"service":"helm-mini","protocol":1,"name":"mini"}""",
             ),
         )
-        val mini = MiniConnection(host = server.hostName, port = server.port, token = MiniConnection.DEFAULT_TOKEN)
+        val mini = MiniConnection(host = server.hostName, port = server.port, token = "mini-test-token")
         val health = client.miniHealth(mini)
         assertEquals("mini", health.name)
         assertEquals(0, server.takeRequest().headers["Authorization"]?.length ?: 0)
@@ -278,14 +278,21 @@ class HubClientTest {
                 """.trimIndent(),
             ),
         )
-        val mini = MiniConnection(host = server.hostName, port = server.port)
+        val mini = MiniConnection(host = server.hostName, port = server.port, token = "mini-test-token")
         val pc = client.miniSnapshot(mini)
         assertEquals(18.2, pc.cpu!!.percent, 0.01)
         assertEquals(8.0, pc.gpu!!.percent!!, 0.01)
         assertEquals("M4", pc.gpu!!.name)
         val request = server.takeRequest()
-        assertEquals("Bearer ${MiniConnection.DEFAULT_TOKEN}", request.getHeader("Authorization"))
+        assertEquals("Bearer mini-test-token", request.getHeader("Authorization"))
         assertTrue(request.path!!.endsWith("/v1/snapshot"))
+    }
+
+    @Test
+    fun apkShipsWithoutDefaultTokens() {
+        // 仓库是公开的：APK 里带 Hub / Mini 的默认口令等于把灯和开机键送出去
+        assertEquals("", HubConnection.DEFAULT_TOKEN)
+        assertEquals("", MiniConnection.DEFAULT_TOKEN)
     }
 
     @Test

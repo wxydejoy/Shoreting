@@ -8,7 +8,7 @@
 
 ## 三台机器
 
-下面 IP 是**本宅当前地址**。换网络请改成自己的，安卓默认值也在 `HubPreferences` / `MiniConnection` 里。
+下面 IP 是**本宅当前地址**。换网络请改成自己的，安卓的默认地址在 `HubPreferences` / `MiniConnection` 里；**口令没有默认值**，Hub 的从配置向导复制、Mini 的看 `install-launchd.sh` 装完那行。
 
 ```
 K20 岸亭（脸+耳+字幕）
