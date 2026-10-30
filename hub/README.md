@@ -12,7 +12,8 @@ hub/
     __main__.py       # CLI 入口（--hub 完整 Hub / --probe Windows 探针 / 托盘）
     server.py         # HTTP
     service.py        # snapshot / command
-    companion.py      # 守岸人：LLM 调度、口头技能
+    companion.py      # 守岸人：LLM 调度、朗读线程、TTS 队列、人设与情绪
+    intents.py        # 听懂一句话：中文数字、灯 / 亮度 / 温度、ACTION 行、口误折叠
     books.py          # 睡前朗读
     probe.py          # 探针模式（CPU 上报 + 远程开程序）
     pc.py             # CPU / 内存 / GPU / CPU 温度
