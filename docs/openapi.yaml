@@ -639,6 +639,9 @@ components:
     bearer:
       type: http
       scheme: bearer
+      description: >-
+        Hub 可以配多枚 token（主 token + 每台设备一枚，见 hub.yaml 的 tokens:），
+        任一命中即放行。吊销一台 = 删掉 tokens: 里那一条并重载配置。
   responses:
     Error:
       description: Error envelope

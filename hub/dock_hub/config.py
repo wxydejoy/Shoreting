@@ -55,6 +55,12 @@ class LimitsConfig:
     command_per_min: int = 60
     login_per_min: int = 10
     read_per_min: int = 20
+class TokenConfig:
+    """一枚给某台设备的 token。删掉这一条就等于吊销它。"""
+
+    id: str
+    value: str
+    name: str | None = None
 
 
 @dataclass
@@ -200,7 +206,15 @@ class HubConfig:
     probe: ProbeConfig = field(default_factory=ProbeConfig)
     schedules: list[ScheduleConfig] = field(default_factory=list)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
+    # 除主 token 之外按设备分发的 token；删一条即吊销一台
+    tokens: list[TokenConfig] = field(default_factory=list)
     path: Path | None = None
+
+    def auth_values(self) -> tuple[str, ...]:
+        """所有算数的 token：主 token + 每台设备那一枚。拿去常量时间比对。"""
+        values = [self.token]
+        values.extend(item.value for item in self.tokens if item.value)
+        return tuple(dict.fromkeys(v for v in values if v))
 
     def device(self, device_id: str) -> DeviceConfig:
         for item in self.devices:
@@ -281,6 +295,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     mini = _parse_mini(raw.get("mini"))
     probe = _parse_probe(raw.get("probe"))
     limits = _parse_limits(raw.get("limits"))
+    tokens = _parse_tokens(raw.get("tokens"), token)
 
     devices: list[DeviceConfig] = []
     seen: set[str] = set()
@@ -305,6 +320,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         probe=probe,
         schedules=_parse_schedules(raw.get("schedules"), devices),
         limits=limits,
+        tokens=tokens,
         path=path,
     )
 
@@ -502,6 +518,34 @@ def _parse_limits(raw: Any) -> LimitsConfig:
         login_per_min=rate("login_per_min", 10, "登录尝试"),
         read_per_min=rate("read_per_min", 20, "朗读"),
     )
+def _parse_tokens(raw: Any, owner: str) -> list[TokenConfig]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("tokens 必须是列表，每项写成 {id, value}")
+    seen: set[str] = set()
+    values: set[str] = {owner}
+    parsed: list[TokenConfig] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"tokens 第 {index} 项必须是对象")
+        ident = str(item.get("id") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not ident:
+            raise ValueError(f"tokens 第 {index} 项缺少 id")
+        _check_id(ident)
+        if ident in seen:
+            raise ValueError(f"重复的 token id：{ident}")
+        seen.add(ident)
+        if len(value) < 8:
+            # 短 token 在局域网里等于没有：脚本几秒就能撞出来
+            raise ValueError(f"token {ident} 太短，至少 8 个字符")
+        if value in values:
+            raise ValueError(f"token {ident} 和别的 token 重复")
+        values.add(value)
+        name = str(item.get("name") or "").strip() or None
+        parsed.append(TokenConfig(id=ident, value=value, name=name))
+    return parsed
 
 
 def _parse_probe(raw: Any) -> ProbeConfig:
@@ -843,6 +887,11 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             if value != getattr(defaults, key):
                 limits[key] = value
         raw["limits"] = limits
+    if config.tokens:
+        raw["tokens"] = [
+            {"id": item.id, "value": item.value, **({"name": item.name} if item.name else {})}
+            for item in config.tokens
+        ]
     probe = config.probe
     if probe.url or probe.token or probe.stale_ms != 4000 or probe.hub_url != DEFAULT_PROBE_HUB_URL or probe.listen != DEFAULT_PROBE_LISTEN:
         dumped: dict[str, Any] = {}

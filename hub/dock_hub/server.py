@@ -240,8 +240,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._limit("login")
                     body = self._read_json()
                     token = str(body.get("token") or "").strip()
-                    expected = hub.config.token
-                    if not token or not hmac.compare_digest(token, expected):
+                    if not self._token_ok(token):
                         raise HubError("unauthorized", "Token 不正确")
                     data = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
                     self.send_response(200)
@@ -348,18 +347,27 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     return unquote(value.strip())
             return ""
 
+        def _token_ok(self, got: str) -> bool:
+            """任一配置过的 token 命中就算过。
+
+            逐个比而不是先查表：hmac.compare_digest 的耗时和内容无关，但「比了几
+            次」会泄露「前面几枚对不上」，家用无所谓，既然写了就写对。
+            """
+            if not got:
+                return False
+            matched = False
+            for expected in hub.config.auth_values():
+                matched |= hmac.compare_digest(got, expected)
+            return matched
+
         def _chats_ok(self) -> bool:
             if is_local_client(self.client_address):
                 return True
-            expected = hub.config.token
             header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
             bearer = header.strip()
-            if bearer.lower().startswith("bearer "):
-                got = bearer[7:].strip()
-                if got and hmac.compare_digest(got, expected):
-                    return True
-            cookie = self._cookie("helm_chats")
-            return bool(cookie) and hmac.compare_digest(cookie, expected)
+            if bearer.lower().startswith("bearer ") and self._token_ok(bearer[7:].strip()):
+                return True
+            return self._token_ok(self._cookie("helm_chats"))
 
         def _limit(self, bucket: str) -> None:
             """按来源 IP 扣一次额度，超了抛 429。
@@ -381,8 +389,9 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
 
         def _require_auth(self) -> None:
             header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
-            expected = f"Bearer {hub.config.token}"
-            if header.strip() != expected:
+            bearer = header.strip()
+            got = bearer[7:].strip() if bearer.lower().startswith("bearer ") else ""
+            if not self._token_ok(got):
                 raise HubError("unauthorized", "Token 不正确")
 
         def _story_ok(self) -> None:
