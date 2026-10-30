@@ -27,6 +27,7 @@ class _StorySpeaker:
     def cancel_short_reads(self) -> None:
         self._companion.begin_story_audio()
 from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig, PcConfig, PropConfig, TemperatureConfig, default_config_path
+from dock_hub.dusk import DuskRamp
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
@@ -151,6 +152,8 @@ class DockHub:
         self._focus_active: bool | None = None  # None = 还没看过一眼，不触发
         self._focus_stop = threading.Event()
         self._start_focus()
+        self._dusk: DuskRamp | None = None
+        self._start_dusk()
         self.reporter.start()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
         self.scheduler.start()
@@ -438,6 +441,7 @@ class DockHub:
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
         self._wire_companion()
         self._start_focus()
+        self._start_dusk()
         self.reporter.start()
         self.scheduler.stop()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
@@ -736,6 +740,7 @@ class DockHub:
                 "scene": self.run_scene,
                 "leave": self.leave_home,
                 "notify": self.relay_to_phone,
+                "noise": self.companion_noise,
                 "scenes": [
                     {
                         "id": item.id,
@@ -868,6 +873,23 @@ class DockHub:
         item = self.notify.post(text, source=source)
         self.note_change()
         return item
+
+    def companion_noise(self, act: dict[str, Any]) -> dict[str, Any]:
+        """F31 白噪音：转给 Mini 的 TTS 服务（`:18100 /v1/noise`）。
+
+        放不上就抛错，守岸人会照着 world 回调的规矩说「这次没动成」，
+        不假装放上了。
+        """
+        name = "off" if act.get("action") == "off" else str(act.get("name") or "rain")
+        state = self.companion.tts.noise(name, act.get("minutes"))
+        if not state or not state.get("ok"):
+            raise HubError("tts_unavailable", "白噪音没放成")
+        return {
+            "ok": True,
+            "name": state.get("name"),
+            "minutes": state.get("minutes") or 30,
+            "seconds_left": state.get("seconds_left"),
+        }
 
     def notify_phone(self, body: dict[str, Any]) -> dict[str, Any]:
         """`POST /v1/notify/phone`：脚本、电脑、任何拿得到 token 的东西都能递话。"""
@@ -1152,6 +1174,42 @@ class DockHub:
                     print(f"[focus] 出错：{exc}")
 
         threading.Thread(target=loop, name="focus", daemon=True).start()
+
+    def _start_dusk(self) -> None:
+        """日落联动（F16）。没配就不起线程；改了配置重建线程。"""
+        if self._dusk is not None:
+            self._dusk.stop()
+        self._dusk = None
+        if not self.config.dusk.enabled or not self.config.dusk.device:
+            return
+        self._dusk = DuskRamp(
+            self.config.dusk,
+            sunset=self._dusk_sunset,
+            set_brightness=self._dusk_set,
+            device_on=self._dusk_device_on,
+        )
+        self._dusk.start()
+
+    def _dusk_sunset(self) -> str | None:
+        """今天这座城的日落，"HH:MM"。城市按配置写死的，没写就跟着手机查天气的那座。"""
+        from dock_hub.weather import fetch_sun, last_city
+
+        city = self.config.dusk.city or last_city()
+        if not city:
+            return None
+        try:
+            return str(fetch_sun(city).get("sunset") or "") or None
+        except Exception as exc:  # noqa: BLE001 - 天气源挂了等下一分钟再问
+            print(f"[dusk] 日落时间没拿到：{exc}")
+            return None
+
+    def _dusk_set(self, device_id: str, level: int) -> None:
+        self.command(device_id, {"on": True, "brightness": level})
+
+    def _dusk_device_on(self, device_id: str) -> bool:
+        """灯现在亮不亮。拿不到状态就当亮着——联动不因读不到状态就罢工。"""
+        state = self._companion_device_state(device_id)
+        return bool(state is None or state.get("on") is not False)
 
     def _evaluate_focus(self) -> None:
         """边沿触发：从「没在玩」变「在玩」切 on 场景，反过来切 off 场景。

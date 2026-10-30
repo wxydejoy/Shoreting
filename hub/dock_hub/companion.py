@@ -58,6 +58,7 @@ from dock_hub.intents import (
     fold_game_asr,
     infer_brightness,
     infer_control,
+    infer_noise,
     infer_temp,
     is_teach_attempt,
     looks_like_control,
@@ -134,6 +135,9 @@ from dock_hub.tts import Tts
 
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
+
+# 白噪音没放成时的统一口径（_handle_desk 里用它判断 ok）
+_NOISE_FAIL_SPOKEN = ("这次没动成。", "这台 Mini 还不能放白噪音。")
 
 
 PRESENCE_SEC = 90
@@ -794,6 +798,11 @@ class Companion:
             spoken = self._run_volume(volume_act, turn)
             ok = spoken not in {"这次没动成。", "音量我还调不了。"}
             return spoken, [{"id": "volume", "action": volume_act, "ok": ok}]
+        noise_act = infer_noise(text)
+        if noise_act:
+            spoken = self._run_noise(noise_act, turn)
+            ok = spoken not in _NOISE_FAIL_SPOKEN
+            return spoken, [{"id": "noise", **noise_act, "ok": ok}]
         launched = self._run_launch(text, turn)
         if launched:
             return launched
@@ -856,6 +865,30 @@ class Companion:
         if action == "down":
             return "好，小声一点。"
         return "好，大声一点。"
+
+    def _run_noise(self, act: dict[str, Any], turn: str) -> str:
+        """F31 白噪音：放/停。到点她自己淡出，不用再喊一声。"""
+        fn = self._world.get("noise")
+        if not callable(fn):
+            return "这台 Mini 还不能放白噪音。"
+        try:
+            result = fn(act)
+        except HubError as exc:
+            _latency(turn, "skill_error", id="noise", code=exc.code)
+            return _NOISE_FAIL_SPOKEN[0]
+        except Exception:  # noqa: BLE001 - Mini 连不上也算没动成
+            _latency(turn, "skill_error", id="noise", code="offline")
+            return _NOISE_FAIL_SPOKEN[0]
+        if not isinstance(result, dict) or not result.get("ok"):
+            return _NOISE_FAIL_SPOKEN[0]
+        if act.get("action") == "off":
+            _latency(turn, "skill_ok", id="noise", action="off")
+            return "关掉了。"
+        labels = {"rain": "雨声", "waves": "海浪", "fan": "风扇", "brown": "白噪音"}
+        label = labels.get(str(result.get("name") or ""), "白噪音")
+        minutes = result.get("minutes") or 30
+        _latency(turn, "skill_ok", id="noise", name=result.get("name"), minutes=minutes)
+        return f"{label}放上了，{minutes} 分钟后停。"
 
     def _arm_timer(self, seconds: int) -> str:
         self._cancel_timer()

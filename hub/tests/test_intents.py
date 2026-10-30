@@ -18,6 +18,7 @@ from dock_hub.intents import (
     fold_game_asr,
     infer_brightness,
     infer_control,
+    infer_noise,
     infer_temp,
     normalize_phrase,
     parse_bri_actions,
@@ -212,6 +213,40 @@ class TimerTest(unittest.TestCase):
         self.assertEqual(parse_timer_action("ACTION: timer.5"), 300)
         self.assertIsNone(parse_timer_action("ACTION: timer.500"))
         self.assertEqual(parse_timer("ACTION: timer.5"), 300)
+
+
+class NoiseTest(unittest.TestCase):
+    def test_on_phrases(self) -> None:
+        self.assertEqual(
+            infer_noise("放点雨声"),
+            {"action": "on", "name": "rain", "minutes": None},
+        )
+        self.assertEqual(
+            infer_noise("来点海浪"),
+            {"action": "on", "name": "waves", "minutes": None},
+        )
+        self.assertEqual(infer_noise("开一下风扇")["name"], "fan")
+        self.assertEqual(infer_noise("听布朗噪音")["name"], "brown")
+
+    def test_white_noise_is_a_category_defaulting_to_rain(self) -> None:
+        # 「白噪音」是类目不是具体声音，默认给雨声——它最不会错
+        self.assertEqual(infer_noise("听白噪音")["name"], "rain")
+
+    def test_minutes_clamped(self) -> None:
+        self.assertEqual(infer_noise("放点雨声 45 分钟")["minutes"], 45)
+        self.assertEqual(infer_noise("放点雨声 999 分钟")["minutes"], 180)
+
+    def test_off_phrases(self) -> None:
+        self.assertEqual(infer_noise("把白噪音关了"), {"action": "off"})
+        self.assertEqual(infer_noise("雨声停一下"), {"action": "off"})
+        self.assertEqual(infer_noise("白噪音别放了"), {"action": "off"})
+
+    def test_plain_talk_is_not_noise(self) -> None:
+        # 「别放了」没点名是哪种声音，不猜——可能说的是朗读
+        self.assertIsNone(infer_noise("别放了"))
+        # 聊天里聊到雨，不是要放雨声
+        self.assertIsNone(infer_noise("外面下雨了吗"))
+        self.assertIsNone(infer_noise("明天有雨"))
 
 
 class IndependenceTest(unittest.TestCase):

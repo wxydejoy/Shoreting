@@ -657,3 +657,46 @@ def parse_teach(text: str, skills: list[dict[str, str]]) -> dict[str, Any] | Non
 
 def normalize_phrase(raw: str) -> str:
     return _PUNCT.sub("", (raw or "").strip())
+
+
+# ---- F31 白噪音 ---------------------------------------------------------
+
+# 「放点雨声」「来点白噪音」「开一下海浪」；声音词 → synth 名
+_NOISE_WORDS = {
+    "雨声": "rain",
+    "雨": "rain",
+    "白噪音": "rain",
+    "白噪声": "rain",
+    "海浪": "waves",
+    "浪声": "waves",
+    "风扇": "fan",
+    "布朗": "brown",
+    "布朗噪音": "brown",
+}
+_NOISE_ON = re.compile(r"(?:放|来|开|听)(?:点|一点|一些|个)?(.{0,4}?)(" + "|".join(_NOISE_WORDS) + r")")
+_NOISE_OFF = re.compile(
+    "(" + "|".join(_NOISE_WORDS) + r").{0,4}(?:停|关|别放)|(?:把|将)?(?:雨声|白噪音|白噪声|声音)停掉?|(?:雨声|白噪音|白噪声)(?:关掉|别放了?)"
+)
+_NOISE_MINUTES = re.compile(r"(\d{1,3})\s*分钟")
+
+
+def infer_noise(text: str) -> dict[str, Any] | None:
+    """「放点雨声」→ {"name": "rain", "action": "on", "minutes": None}。
+
+    「白噪音」是类目不是具体声音，默认给雨声——它最不会错。
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    if _NOISE_OFF.search(stripped):
+        return {"action": "off"}
+    match = _NOISE_ON.search(stripped)
+    if match:
+        word = match.group(2)
+        name = _NOISE_WORDS.get(word) or _NOISE_WORDS.get(word.replace("声", "")) or "rain"
+        minutes = None
+        minutes_match = _NOISE_MINUTES.search(stripped)
+        if minutes_match:
+            minutes = max(1, min(180, int(minutes_match.group(1))))
+        return {"action": "on", "name": name, "minutes": minutes}
+    return None

@@ -86,6 +86,8 @@ HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
 - `POST /v1/speak` + `play_only: true` → **202**，本机边合成边播
 - 同一轮可以多次 speak（边写边念）：音频接到**同一条播放队列**，下一句不要 `flush` 上一句
 - `POST /v1/stop` → 立刻清缓冲并丢掉这一轮合成（再喊「小岸」走这条）
+- `POST /v1/noise` `{name: rain|waves|fan|brown|off, minutes}` → 白噪音（F31）：四种声音全靠合成，循环播放，起播 2 秒淡入、到点前 45 秒淡出，默认 30 分钟；`name: "off"` 是停。音量压在 0.32，她说话时雨声当底
+- `GET /v1/noise` → 现在放没放、放的什么、还剩几秒
 - 安卓不要直连 `:18100`
 
 ## 一轮说话
