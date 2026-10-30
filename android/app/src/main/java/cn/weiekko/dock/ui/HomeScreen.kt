@@ -56,6 +56,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -101,6 +102,10 @@ import cn.weiekko.dock.data.WinApp
 import cn.weiekko.dock.data.defaultDockLayout
 import cn.weiekko.dock.data.deviceType
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -115,6 +120,8 @@ private val StatShadow = Shadow(color = Color.Black.copy(alpha = 0.95f), offset 
 @Composable
 fun HomeScreen(
     state: DockUiState,
+    media: StateFlow<MediaInfo>,
+    voice: StateFlow<VoiceState>,
     onOpenSettings: () -> Unit,
     onPower: (HubDevice, Boolean) -> Unit,
     onWinClick: (WinApp) -> Unit,
@@ -139,6 +146,11 @@ fun HomeScreen(
         Shadow()
     }
     val editing = state.editing
+    // 只订阅「有没有在听」：ASR 的半句交给下面的叶子节点自己收，
+    // 否则一句话里十几二十次 partial 会把整个主屏重新组合一遍。
+    val voiceListening by remember(voice) {
+        voice.map { it.listening }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = false)
     BackHandler(enabled = editing, onBack = onExitEdit)
 
     // F37 回忆相框：没有数据可看的时刻，整块屏幕交给一张慢慢换的照片
@@ -444,8 +456,8 @@ fun HomeScreen(
                     }
 
                     PlaceModule(DockModule.Media, edit) {
-                        MediaTile(
-                            media = state.media,
+                        LiveMediaTile(
+                            media = media,
                             interactive = !editing,
                             onAction = onMedia,
                             onLongPress = { onSelectModule(DockModule.Media) },
@@ -539,7 +551,7 @@ fun HomeScreen(
             }
 
             val captionText = when {
-                state.hubSleeping || state.voiceListening -> null
+                state.hubSleeping || voiceListening -> null
                 state.companionBusy -> "……"
                 !state.companionError.isNullOrBlank() -> state.companionError
                 !state.companionReply.isNullOrBlank() -> state.companionReply
@@ -569,7 +581,7 @@ fun HomeScreen(
                 )
             }
 
-            if (state.hubSleeping && !state.voiceListening) {
+            if (state.hubSleeping && !voiceListening) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -599,10 +611,9 @@ fun HomeScreen(
                 )
             }
 
-            if (state.voiceListening) {
-                WakeListeningChip(
-                    text = state.voiceText,
-                    settled = state.voiceSettled,
+            if (voiceListening) {
+                LiveWakeListeningChip(
+                    voice = voice,
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = 20.dp, bottom = 16.dp, end = 80.dp)
@@ -1445,6 +1456,33 @@ private fun WinTile(
     }
 }
 
+/** 每秒一次的媒体状态只在这里收，主屏本体不跟着重组。 */
+@Composable
+private fun LiveMediaTile(
+    media: StateFlow<MediaInfo>,
+    interactive: Boolean,
+    onAction: (String) -> Unit,
+    onLongPress: () -> Unit = {},
+) {
+    val info by media.collectAsStateWithLifecycle()
+    MediaTile(
+        media = info,
+        interactive = interactive,
+        onAction = onAction,
+        onLongPress = onLongPress,
+    )
+}
+
+/** ASR 半句只在这里收，只有这颗胶囊随它重组。 */
+@Composable
+private fun LiveWakeListeningChip(
+    voice: StateFlow<VoiceState>,
+    modifier: Modifier = Modifier,
+) {
+    val state by voice.collectAsStateWithLifecycle()
+    WakeListeningChip(text = state.text, settled = state.settled, modifier = modifier)
+}
+
 @Composable
 private fun WakeListeningChip(
     text: String,
@@ -1615,9 +1653,10 @@ private fun HomePreview() {
                 prefsReady = true,
                 preview = true,
                 snapshot = DemoSnapshot.create(),
-                media = DemoSnapshot.media,
                 weather = DemoSnapshot.weather,
             ),
+            media = remember { MutableStateFlow(DemoSnapshot.media) },
+            voice = remember { MutableStateFlow(VoiceState()) },
             onOpenSettings = {},
             onPower = { _, _ -> },
             onWinClick = {},

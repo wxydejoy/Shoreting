@@ -187,6 +187,8 @@ class MainActivity : ComponentActivity() {
                             composable("home") {
                                 HomeScreen(
                                     state = state,
+                                    media = viewModel.media,
+                                    voice = viewModel.voice,
                                     onOpenSettings = { navController.navigate("settings") },
                                     onPower = viewModel::setPower,
                                     onWinClick = viewModel::tapWinApp,

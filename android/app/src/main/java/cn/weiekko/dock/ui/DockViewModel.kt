@@ -102,7 +102,6 @@ data class DockUiState(
     val weatherError: String? = null,
     val winApps: List<WinApp> = DemoSnapshot.winApps,
     val selectedWinId: String? = null,
-    val media: MediaInfo = MediaInfo.phoneIdle(),
     val backgroundVideoUri: String? = null,
     val backgroundPageUrl: String? = null,
     val tileLook: TileLook = TileLook(),
@@ -118,10 +117,8 @@ data class DockUiState(
     // F35 通知镜像：白名单应用的通知，亮在屏幕上，30 秒自己收走
     val mirrorText: String? = null,
     val wakeWordEnabled: Boolean = true,
-    val voiceListening: Boolean = false,
+    // 免唤醒对话窗是冷状态（开关各一次），留在 UiState；热的听写走 voice 流
     val conversationOpen: Boolean = false,
-    val voiceText: String = "",
-    val voiceSettled: Boolean = false,
     val layout: DockLayout = DockLayout(),
     val editing: Boolean = false,
     val selectedModule: DockModule? = null,
@@ -137,6 +134,16 @@ data class DockUiState(
 ) {
     val configured: Boolean get() = connection.isConfigured
 }
+
+/**
+ * 语音这一路单独走一条流：ASR 每出半句就更新一次（一句话里十几二十次），
+ * 塞进 DockUiState 会让整棵界面跟着重组。同理 [DockViewModel.media] 每秒一次。
+ */
+data class VoiceState(
+    val listening: Boolean = false,
+    val text: String = "",
+    val settled: Boolean = false,
+)
 
 class DockViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = HubPreferences(application)
@@ -187,6 +194,13 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private val _ui = MutableStateFlow(DockUiState())
     val ui: StateFlow<DockUiState> = _ui.asStateFlow()
 
+    // 高频变的两块单独放，读的人只在叶子节点收集，别让主屏每秒重跑一遍
+    private val _media = MutableStateFlow(MediaInfo.phoneIdle())
+    val media: StateFlow<MediaInfo> = _media.asStateFlow()
+
+    private val _voice = MutableStateFlow(VoiceState())
+    val voice: StateFlow<VoiceState> = _voice.asStateFlow()
+
     private val _goHome = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val goHome: SharedFlow<Unit> = _goHome.asSharedFlow()
 
@@ -222,8 +236,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         registerNetworkWatch()
         viewModelScope.launch {
             while (isActive) {
-                val local = phoneMedia.snapshot()
-                _ui.update { it.copy(media = local) }
+                _media.value = phoneMedia.snapshot()
                 delay(PHONE_MEDIA_MS)
             }
         }
@@ -433,15 +446,9 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setWakeWord(enabled: Boolean) {
-        _ui.update {
-            it.copy(
-                wakeWordEnabled = enabled,
-                voiceListening = if (enabled) it.voiceListening else false,
-                voiceText = if (enabled) it.voiceText else "",
-                voiceSettled = if (enabled) it.voiceSettled else false,
-            )
-        }
+        _ui.update { it.copy(wakeWordEnabled = enabled) }
         if (!enabled) {
+            _voice.value = VoiceState()
             listeningJob?.cancel()
             closeConversation()
         }
@@ -533,22 +540,16 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         listeningJob?.cancel()
         rememberTurn(turnId)
         val wasSleeping = _ui.value.hubSleeping
-        _ui.update {
-            it.copy(
-                voiceListening = true,
-                voiceText = "",
-                voiceSettled = false,
-                hubSleeping = false,
-            )
-        }
+        _voice.value = VoiceState(listening = true)
+        _ui.update { it.copy(hubSleeping = false) }
         if (wasSleeping || _ui.value.powerScreen) {
             _screenCommands.tryEmit(ScreenCommand.VoiceWake)
         }
         listeningJob = viewModelScope.launch {
             delay(VOICE_FALLBACK_MS)
-            val current = _ui.value
-            if (current.voiceListening && current.voiceText.isBlank()) {
-                _ui.update { it.copy(voiceListening = false) }
+            val current = _voice.value
+            if (current.listening && current.text.isBlank()) {
+                _voice.value = current.copy(listening = false)
                 if (_ui.value.powerScreen) noteDeskPc(_ui.value.snapshot?.pc?.online)
             }
         }
@@ -557,19 +558,13 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun onVoiceTranscript(text: String, settled: Boolean, turnId: String = "") {
         listeningJob?.cancel()
         rememberTurn(turnId)
-        _ui.update {
-            it.copy(
-                voiceListening = true,
-                voiceText = text,
-                voiceSettled = settled,
-            )
-        }
+        _voice.value = VoiceState(listening = true, text = text, settled = settled)
         if (!settled) return
         val spoken = text.trim()
         val now = HelmLatency.now()
         if (spoken.isNotEmpty() && companionReady()) {
             conversationWindow.onInput(now)
-            _ui.update { it.copy(voiceListening = false) }
+            _voice.value = _voice.value.copy(listening = false)
             hearCompanion(spoken)
             return
         }
@@ -580,7 +575,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         val hold = if (spoken.isEmpty()) VOICE_MISS_MS else VOICE_HOLD_MS
         listeningJob = viewModelScope.launch {
             delay(hold)
-            _ui.update { it.copy(voiceListening = false) }
+            _voice.value = _voice.value.copy(listening = false)
             if (_ui.value.powerScreen) noteDeskPc(_ui.value.snapshot?.pc?.online)
         }
     }
@@ -927,19 +922,15 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendMedia(action: String) {
         if (action !in MEDIA_ACTIONS) return
-        val before = _ui.value.media
+        val before = _media.value
         phoneMedia.dispatch(action)
-        _ui.update {
-            it.copy(
-                media = when (action) {
-                    "toggle" -> before.copy(playing = !before.playing)
-                    else -> before.copy(playing = true)
-                },
-            )
+        _media.value = when (action) {
+            "toggle" -> before.copy(playing = !before.playing)
+            else -> before.copy(playing = true)
         }
         viewModelScope.launch {
             delay(400)
-            _ui.update { it.copy(media = phoneMedia.snapshot()) }
+            _media.value = phoneMedia.snapshot()
         }
     }
 
