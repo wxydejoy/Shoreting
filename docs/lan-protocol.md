@@ -147,6 +147,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `POST` | `/v1/companion/story/timer` | 是（本机可免） | 睡前定时 0 / 15 / 30 / 45 / 60 分钟。**安卓不要打** |
 | `POST` | `/v1/scenes/{id}` | 是 | 一次开关一组设备（配置里的场景） |
 | `POST` | `/v1/leave` | 是 | 离家总控：能关的全关，报告没关掉的（F18） |
+| `POST` | `/v1/presence` | 是 | 在场上报：手机连上 / 离开家里 WiFi（F25） |
 
 没有单独的「读温度」「读电脑性能」「跑脚本」「读正在播放」接口。米家温度、logo、电脑监控、正在播放、伴侣是否就绪都在 snapshot 里；点击 logo 和播放键走同一个 command；说话走 companion/chat，再喊唤醒词打断走 companion/stop，声音走 companion/audio。
 
@@ -788,7 +789,39 @@ Content-Type: application/json
 
 ---
 
-### 6.10 `GET /metrics`
+### 6.12 `POST /v1/presence`
+
+在场上报（F25）：安卓端监听网络变化，手机**连上家里 WiFi** 报 `home`，**断开 10 分钟**报 `away`。Hub 只记状态并在 snapshot 里带出；`away → home` 的那一刻她按主动播报的规矩说一句「回来了」（受 `proactive.enabled`、免打扰时段、每日配额管——配额用完或免打扰就不说，不补）。`unknown → home`（Hub 刚重启的第一报）不问候，免得每次重启都「欢迎回家」。同一状态重复上报幂等，不算状态变化。
+
+不做成「欢迎回家」那种假热情：默认就一句「回来了。」，之后只在她有信息时补一句（那是早间简报 / 周报的事）。
+
+```http
+POST /v1/presence
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"state": "home"}
+```
+
+**200**
+
+```json
+{
+  "ok": true,
+  "state": "home",
+  "previous": "away",
+  "said": "回来了。"
+}
+```
+
+- `state` 只有 `home` / `away` 两个值，其他值 400。
+- `previous` 是上一个状态，第一次上报是 `null`。
+- `said` 是这次她实际说出口的话；没说就是 `null`（被配额 / 免打扰 / 主动播报关着拦下），不重试、不补发。
+- 掉线误报由安卓侧负责去抖（连上才算 home，断开满 10 分钟才算 away），Hub 不做第二次判断。
+
+---
+
+### 6.13 `GET /metrics`
 
 给 Prometheus 抓的纯文本指标。**安卓不打**，它不是协议面的一部分，改起来也不受 v1 约束。
 
@@ -1121,6 +1154,7 @@ devices:
 - `action` 成功：logo 短暂高亮即可。首版**不**查询电脑上程序是否还在运行
 - 开了 `pc` 或 `media` 时轮询可改为 2–5 秒（见 §2.3）
 - 图标请求失败不要整屏报错；保留上次缓存图或回退首字
+- 在场上报（F25）：监听 WiFi 连接变化，**连上家里 WiFi** 就 `POST /v1/presence {"state":"home"}`，**断开满 10 分钟**才报 `away`（去抖在安卓侧做，蜂窝 / 别的 WiFi 中间态不上报）。snapshot 的 `presence.state` 只是参考展示
 
 ---
 
@@ -1175,6 +1209,12 @@ curl -s http://HOST:17890/v1/companion/announce \
 curl -s http://HOST:17890/v1/companion/audio/AUDIO_ID \
   -H "Authorization: Bearer TOKEN" \
   -o /tmp/companion.wav
+
+# 在场上报：手机连上家里 WiFi（主动播报开着时她会说「回来了。」）
+curl -s http://HOST:17890/v1/presence \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"state":"home"}'
 
 # 错 token → 401
 curl -s -o /dev/null -w "%{http_code}\n" http://HOST:17890/v1/snapshot

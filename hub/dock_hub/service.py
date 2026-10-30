@@ -35,7 +35,7 @@ from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read
 from dock_hub.pc import PcSampler, utc_now
 from dock_hub.ratelimit import Gate
 from dock_hub.persona import speak_temp
-from dock_hub.proactive import Proactive, SedentaryWatch, Sustained, finished_text
+from dock_hub.proactive import Proactive, Said, SedentaryWatch, Sustained, finished_text
 from dock_hub.media import MEDIA_ACTIONS, MediaSession
 from dock_hub.reporter import DeskReporter
 from dock_hub.schedule import Scheduler
@@ -124,6 +124,9 @@ class DockHub:
         self._weather_check_at = 0.0
         self._finished_lock = threading.Lock()
         self._finished_queue: list[dict[str, Any]] = []
+        self._presence_lock = threading.Lock()
+        self._presence: str | None = None  # None = 还没报过，第一报不问候
+        self._presence_at: str | None = None
         self._proactive_stop = threading.Event()
         self._start_proactive()
         self._focus_active: bool | None = None  # None = 还没看过一眼，不触发
@@ -929,6 +932,39 @@ class DockHub:
             "spoken": spoken,
         }
 
+    def report_presence(self, state: str, now: datetime | None = None) -> dict[str, Any]:
+        """在场上报（F25）：手机连上 / 离开家里 WiFi。
+
+        与 `note_presence()` 不同：那个记的是「K20 刚来过 snapshot，人还在
+        链路上」，这里记的是「人在不在家」这个状态本身。只在 away → home
+        那一刻问候一句；unknown → home（Hub 刚起来的第一报）不问候，免得
+        每次重启都「欢迎回家」。同一状态重复上报幂等。被配额或免打扰拦下
+        就不说，不补发。
+        """
+        if state not in ("home", "away"):
+            raise HubError("bad_request", "state 只能是 home 或 away")
+        now = now or datetime.now().astimezone()
+        with self._presence_lock:
+            previous = self._presence
+            self._presence = state
+            self._presence_at = now.isoformat(timespec="seconds")
+        said: Said | None = None
+        if previous == "away" and state == "home":
+            text = self.proactive.config.presence.home_text
+            if text:
+                said = self.proactive.presence(text, now)
+                print(f"[proactive] 回家问候：{said.text or said.reason}")
+        return {
+            "ok": True,
+            "state": state,
+            "previous": previous,
+            "said": said.text if said else None,
+        }
+
+    def _presence_payload(self) -> dict[str, Any]:
+        with self._presence_lock:
+            return {"state": self._presence, "since": self._presence_at}
+
     def _scene_step(
         self, scene_id: str, device_id: str, body: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1379,6 +1415,7 @@ class DockHub:
             "scenes": [
                 {"id": item.id, "name": item.name} for item in self.config.scenes
             ],
+            "presence": self._presence_payload(),
         }
         self._note_desk_snapshot(body)
         return body

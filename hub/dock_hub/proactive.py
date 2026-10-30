@@ -241,6 +241,22 @@ class Proactive:
             self._alerted[key] = now.date()
         return said
 
+    def presence(self, text: str, now: datetime | None = None) -> Said:
+        """回家问候（F25）：away → home 的那一刻最多一句。
+
+        和 `alert` 的区别是不做「一天只说一次」——一天来回几趟就说几句，
+        但配额、免打扰、主动播报总开关照样兜底。拦下时不补发。
+        """
+        now = now or datetime.now().astimezone()
+        if not self.config.enabled:
+            return Said(reason="off")
+        self._reset_if_new_day(now.date())
+        if in_quiet_hours(self.config.quiet, now):
+            return Said(reason="quiet")
+        if self.config.daily_limit and self._count >= self.config.daily_limit:
+            return Said(reason="quota")
+        return self._say(text, now)
+
     def _morning_due(self, now: datetime) -> str | None:
         at = self.config.morning.at
         if not at:

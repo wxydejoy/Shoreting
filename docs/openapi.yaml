@@ -658,6 +658,35 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /v1/presence:
+    post:
+      summary: Presence report — phone joined / left the home Wi-Fi (F25)
+      operationId: postPresence
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state:
+                  type: string
+                  enum: [home, away]
+                  description: >
+                    home when the phone joins the home Wi-Fi, away after it has
+                    been off it for 10 minutes. Debouncing is the client's job.
+      responses:
+        "200":
+          description: Recorded state; `said` is the greeting she actually spoke, if any
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PresenceReport"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
   /v1/scenes/{id}:
     post:
       summary: Run one configured scene (a bundle of device commands)
@@ -799,6 +828,45 @@ components:
             POST /v1/scenes/{id}. Empty array when none are configured.
           items:
             $ref: "#/components/schemas/Scene"
+        presence:
+          allOf:
+            - $ref: "#/components/schemas/Presence"
+          nullable: true
+          description: >
+            Phone presence from POST /v1/presence. null until the first
+            report after the Hub started.
+    Presence:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          nullable: true
+          enum: [home, away]
+        since:
+          type: string
+          nullable: true
+          description: ISO local time of the last state change.
+    PresenceReport:
+      type: object
+      required: [ok, state, previous, said]
+      properties:
+        ok:
+          type: boolean
+        state:
+          type: string
+          enum: [home, away]
+        previous:
+          type: string
+          nullable: true
+          enum: [home, away]
+          description: null on the first report after the Hub started.
+        said:
+          type: string
+          nullable: true
+          description: >
+            The away → home greeting she spoke, null when quiet hours, the
+            daily quota or proactive.enabled=false kept her silent.
     Scene:
       type: object
       required: [id, name]

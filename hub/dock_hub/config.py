@@ -95,6 +95,16 @@ class AlertsConfig:
 
 
 @dataclass
+class PresenceConfig:
+    """回家问候（F25）：手机 away → home 的那一句。
+
+    只有一句、只在回家的那一刻。不放假热情，`home_text` 置空就是彻底不问候。
+    """
+
+    home_text: str = "回来了。"
+
+
+@dataclass
 class ProactiveConfig:
     """她不等人喊也可以开口的时刻。
 
@@ -107,6 +117,7 @@ class ProactiveConfig:
     quiet: tuple[str, str] = ("23:00", "07:00")
     morning: MorningConfig = field(default_factory=MorningConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
+    presence: PresenceConfig = field(default_factory=PresenceConfig)
 
 
 @dataclass
@@ -854,8 +865,22 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
         )
     else:
         raise ValueError("proactive.alerts 必须是对象，或用 alerts: false 全关")
+    presence_raw = raw.get("presence")
+    if presence_raw is None or presence_raw is True:
+        presence = PresenceConfig()
+    elif presence_raw is False:
+        presence = PresenceConfig(home_text="")
+    elif isinstance(presence_raw, dict):
+        presence = PresenceConfig(home_text=str(presence_raw.get("home_text") or "").strip())
+    else:
+        raise ValueError("proactive.presence 必须是对象，或用 presence: false 关掉问候")
     return ProactiveConfig(
-        enabled=True, daily_limit=limit, quiet=quiet, morning=morning, alerts=alerts
+        enabled=True,
+        daily_limit=limit,
+        quiet=quiet,
+        morning=morning,
+        alerts=alerts,
+        presence=presence,
     )
 
 
@@ -1202,6 +1227,8 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
             raw["alerts"]["memory_percent"] = config.alerts.memory_percent
         if config.alerts.finished:
             raw["alerts"]["finished"] = list(config.alerts.finished)
+    if config.presence.home_text != PresenceConfig().home_text:
+        raw["presence"] = {"home_text": config.presence.home_text}
     return raw
 
 

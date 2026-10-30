@@ -134,6 +134,8 @@ HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
 
 **任务完成**（`alerts.finished`）是「她真的在看着你的电脑」的那句：探针每轮上报进程列表，谁不见了就记一笔「跑完了」，名单里的说一句「Blender 跑完了，用了 4 分钟」。名单 = 启动项里的进程（她本来就在盯着）+ `alerts.finished` 里额外点的名。免打扰、每日配额、一天一个进程最多一句照旧；进程名只在内存里路过，不落盘。
 
+**回家问候**（`proactive.presence`，默认「回来了。」）：手机连上家里 WiFi 的那一刻（`POST /v1/presence`，安卓去抖后上报）说一句，只有 away → home 那个边沿说，一天来回几趟就说几句，但没有「欢迎回家」式的第二句。Hub 刚重启的第一报不问候。免打扰、每日配额、三道闸照走，被拦下不补发；`presence: false` 或把 `home_text` 置空就彻底不开口。
+
 ```yaml
 proactive:
   daily_limit: 6
