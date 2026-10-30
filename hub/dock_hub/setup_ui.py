@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 import yaml
 
+from dock_hub.assets import read_asset
 from dock_hub.config import (
     default_config_path,
     device_to_raw,
@@ -45,7 +46,7 @@ def setup_asset_path() -> Path:
 
 
 def setup_page_html() -> bytes:
-    return setup_asset_path().read_bytes()
+    return read_asset(setup_asset_path())
 
 
 def is_local_client(address: tuple[str, int] | str) -> bool:

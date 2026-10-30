@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from dock_hub.accesslog import AccessLog
+from dock_hub.assets import etag_for
 from dock_hub.books import MAX_BOOK_BYTES
 from dock_hub.chat_log import asset_page_html, chats_page_html, diary_page_html, read_page_html, week_page_html
 from dock_hub.errors import HubError
@@ -112,7 +113,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     ctype = _STATIC.get(name)
                     if ctype is None:
                         raise HubError("not_found", "未知接口")
-                    self._html(200, asset_page_html(name), ctype)
+                    self._asset(asset_page_html(name), ctype)
                     return
                 if path.startswith("/setup"):
                     from dock_hub import setup_ui
@@ -618,6 +619,24 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
+
+        def _asset(self, payload: bytes, content_type: str) -> None:
+            """打包进来的 css/js 不会变，给浏览器留一份，省掉每次刷新的重下。"""
+
+            tag = etag_for(payload)
+            if (self.headers.get("If-None-Match") or "").strip() == tag:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.send_header("Cache-Control", "public, max-age=3600")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "public, max-age=3600")
+            self.send_header("ETag", tag)
+            self.end_headers()
+            self.wfile.write(payload)
 
         def _html(self, status: int, payload: bytes, content_type: str) -> None:
             self.send_response(status)

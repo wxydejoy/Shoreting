@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from dock_hub.assets import read_asset
+
 MAX_TEXT = 4000
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_RETURN = 500
@@ -121,8 +123,8 @@ def asset_page_html(name: str) -> bytes:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         bundled = Path(sys._MEIPASS) / name  # type: ignore[attr-defined]
         if bundled.is_file():
-            return bundled.read_bytes()
-    return (Path(__file__).resolve().parent / "assets" / name).read_bytes()
+            return read_asset(bundled)
+    return read_asset(Path(__file__).resolve().parent / "assets" / name)
 
 
 def chats_page_html() -> bytes:
