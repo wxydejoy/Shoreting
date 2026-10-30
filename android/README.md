@@ -36,6 +36,7 @@ APK：`android/app/build/outputs/apk/debug/app-debug.apk`。装到横屏设备�
 ## 语音
 
 - 唤醒词「小岸」（sherpa-onnx zipformer KWS）
+- 唤醒词先上线，ASR 模型在后台线程装：开机就能叫醒，装好之前叫醒的那一句会等模型（最多 1.2s）再识别
 - 听写：流式 zipformer transducer（`2025-06-30` int8，encoder 约 154MB）+ `modified_beam_search` + 热词（词表里有的字才会加权，如台灯/空调；小岸等靠模型本身）
 - 听完由 `UtteranceGate`：结束静音 1s、最短句 1.5s
 - 字幕等 `POST /v1/companion/chat` 全文；声音由 Mini TTS 出，本机不播守岸人 wav

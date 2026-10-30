@@ -40,9 +40,17 @@ class WakeWordService : Service() {
     private var recordThread: Thread? = null
     private var kws: KeywordSpotter? = null
     private var kwsStream: OnlineStream? = null
+    private var asrLoader: Thread? = null
+    @Volatile
     private var asr: OnlineRecognizer? = null
+    /** 模型装不起来（文件缺失之类），之后唤醒就只亮灯、不识别。 */
+    @Volatile
+    private var asrFailed = false
     private var asrStream: OnlineStream? = null
     private var audioRecord: AudioRecord? = null
+    /** 服务在拆了，迟到的模型要自己收掉。 */
+    @Volatile
+    private var closed = false
     @Volatile
     private var currentTurn = ""
     @Volatile
@@ -70,8 +78,10 @@ class WakeWordService : Service() {
 
     override fun onDestroy() {
         running = false
+        closed = true
         capturing = false
         recordThread?.join(400)
+        asrLoader?.join(ASR_LOAD_JOIN_MS)
         releaseMic()
         kwsStream?.release()
         kwsStream = null
@@ -92,6 +102,7 @@ class WakeWordService : Service() {
             return
         }
         running = true
+        closed = false
         recordThread = thread(name = "wake-kws", isDaemon = true) {
             try {
                 listen()
@@ -139,7 +150,10 @@ class WakeWordService : Service() {
         kws = spotter
         val wakeStream = spotter.createStream(WakeKeywords.STREAM)
         kwsStream = wakeStream
-        asr = runCatching { buildAsr() }.onFailure { Log.e(TAG, "asr init failed", it) }.getOrNull()
+        // ASR 模型比唤醒词大一个量级，加载要几百毫秒。原来是在这里同步加载，
+        // 麦克风要等它加载完才开：开机头一秒喊「小岸」是没人应的。
+        // 现在先开麦，模型在后台线程里装，装好之前叫醒的那一句会等它一会儿。
+        startAsrLoader()
 
         var recorder: AudioRecord? = openRecorder() ?: run {
             stopSelf()
@@ -201,8 +215,10 @@ class WakeWordService : Service() {
                 }
             }
         } finally {
+            closed = true
             queue.close()
             worker.join(400)
+            asrLoader?.join(ASR_LOAD_JOIN_MS)
             recorder?.let { mic ->
                 if (audioRecord === mic) audioRecord = null
                 runCatching { mic.release() }
@@ -263,7 +279,7 @@ class WakeWordService : Service() {
     ) {
         var lastDetectAt = 0L
         var processedMs = 0L
-        var skipUntil = 0L
+        var skipMs = 0L
         var lastEmitted = ""
         var gate = UtteranceGate()
         var vadMs = 0L
@@ -283,6 +299,13 @@ class WakeWordService : Service() {
                 }
                 spotter.reset(wakeStream)
             }
+            if (capturing && asr == null && !asrFailed &&
+                SystemClock.elapsedRealtime() - turnAt < ASR_WAIT_MS
+            ) {
+                // 模型还在后台装：先把音频留在队列里排队，别把这一句吃掉。
+                Thread.sleep(ASR_POLL_MS)
+                continue
+            }
             val samples = queue.poll(QUEUE_POLL_MS) ?: continue
             val n = samples.size
             val now = SystemClock.elapsedRealtime()
@@ -293,14 +316,17 @@ class WakeWordService : Service() {
                 if (recognizer == null) {
                     capturing = false
                     emitTranscript("", settled = true)
+                    HelmLatency.log(currentTurn, "asr_miss", "reason=model_not_ready")
                     continue
                 }
                 var stream = asrStream
                 if (stream == null) {
                     stream = recognizer.createStream()
                     asrStream = stream
-                    // 喊小岸后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了
-                    skipUntil = now + (if (chimePending) CHIME_SKIP_MS else 0L)
+                    // 喊小岸后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了。
+                    // 只丢「音频」不按墙钟丢：等过模型之后队列里排着的是刚唤醒时的
+                    // 音频，按墙钟会把用户的话丢掉。
+                    skipMs = if (chimePending) CHIME_SKIP_MS else 0L
                     chimePending = false
                     processedMs = 0L
                     lastEmitted = ""
@@ -308,7 +334,10 @@ class WakeWordService : Service() {
                     loggedPartial = false
                     gate = UtteranceGate()
                 }
-                if (now < skipUntil) continue
+                if (skipMs > 0L) {
+                    skipMs -= dtMs
+                    continue
+                }
                 processedMs += dtMs
                 if (asrAt == 0L) {
                     asrAt = now
@@ -408,6 +437,32 @@ class WakeWordService : Service() {
         return text
     }
 
+    /**
+     * 模型在后台线程里装：麦克风和唤醒词先上线，装好了再把它挂上。
+     * 服务正在拆的话，装出来的模型自己 release 掉，别漏一份几百兆的 native 内存。
+     */
+    private fun startAsrLoader() {
+        asrLoader = thread(name = "asr-load", isDaemon = true) {
+            val started = SystemClock.elapsedRealtime()
+            val built = runCatching { buildAsr() }
+                .onFailure { Log.e(TAG, "asr init failed", it) }
+                .getOrNull()
+            val cost = SystemClock.elapsedRealtime() - started
+            if (built == null) {
+                asrFailed = true
+                HelmLatency.log(currentTurn.ifBlank { "-" }, "asr_model", "ms=$cost failed=1")
+                return@thread
+            }
+            if (closed) {
+                built.release()
+                return@thread
+            }
+            asr = built
+            Log.i(TAG, "asr ready in ${cost}ms")
+            HelmLatency.log(currentTurn.ifBlank { "-" }, "asr_model", "ms=$cost")
+        }
+    }
+
     private fun buildAsr(): OnlineRecognizer {
         return OnlineRecognizer(
             assetManager = assets,
@@ -441,11 +496,16 @@ class WakeWordService : Service() {
         Log.i(TAG, "wake word: $keyword")
         WakeChime.play()
         startActivity(MainActivity.wakeWordIntent(this, keyword, currentTurn))
-        capturing = asr != null
-        if (!capturing) {
-            Log.w(TAG, "asr unavailable, wake only")
-            HelmLatency.log(currentTurn, "asr_skip", "reason=unavailable")
-            emitTranscript("", settled = true)
+        capturing = asr != null || !asrFailed
+        if (asr == null) {
+            if (asrFailed) {
+                Log.w(TAG, "asr unavailable, wake only")
+                HelmLatency.log(currentTurn, "asr_skip", "reason=unavailable")
+                emitTranscript("", settled = true)
+            } else {
+                // 模型还在装：解码线程会等它（最多 ASR_WAIT_MS）再开始识别
+                HelmLatency.log(currentTurn, "asr_wait", "model=loading")
+            }
         }
     }
 
@@ -548,6 +608,11 @@ class WakeWordService : Service() {
 
         /** read 返回 0（这一拍没数据）时歇一下，别把核跑满。 */
         private const val READ_EMPTY_MS = 20L
+
+        /** 唤醒时模型还没装好的话，最多等这么久再放弃这一句。 */
+        private const val ASR_WAIT_MS = 1_200L
+        private const val ASR_POLL_MS = 20L
+        private const val ASR_LOAD_JOIN_MS = 1_500L
 
         const val ACTION_TRANSCRIPT = "cn.weiekko.dock.VOICE_TRANSCRIPT"
         const val EXTRA_TEXT = "text"
