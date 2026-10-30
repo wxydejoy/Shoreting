@@ -39,6 +39,7 @@ Hub 用配置文件**白名单**暴露米家设备和可启动的程序。没写
 | 版本 | URL 前缀 `/v1`，JSON 里同时带 `"protocol": 1` |
 | 时间 | ISO-8601 UTC，例如 `2026-08-15T15:30:01Z` |
 | 数字 | JSON number；温度保留一位小数即可 |
+| 连接 | keep-alive；空闲 20 秒没请求就断开。Hub 同时最多处理 32 条连接，满了回 `503 busy` |
 
 Hub 必须在启动时打印本机局域网 IP 和端口，方便在安卓里填写，例如：
 
@@ -1037,6 +1038,7 @@ Content-Type: application/json
 | `unsupported` | 400 | 该设备类型不支持该字段 |
 | `not_found` | 404 | 设备 id 不在白名单；或 companion 未开启 |
 | `offline` | 409 | 设备离线，无法控制 |
+| `busy` | 503 | Hub 同时在处理的连接已满，退避后重试即可 |
 | `login_required` | 503 | 米家需要扫码 |
 | `mijia_error` | 502 | 米家调用失败 |
 | `action_error` | 502 | 本机程序/脚本拉起失败 |
