@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from dock_hub.config import DEFAULT_PROBE_HUB_URL, HubConfig, PcConfig
+from dock_hub.accesslog import AccessLog
 from dock_hub.errors import HubError
 from dock_hub.launch import launch, running_image_names
 from dock_hub.pc import PcSampler
@@ -65,12 +66,14 @@ def probe_token(config: HubConfig) -> str:
 
 
 def make_probe_handler(config: HubConfig) -> type[BaseHTTPRequestHandler]:
+    # 探针和 Hub 共用同一套访问日志：默认落文件、按天滚、不记查询串
+    access = AccessLog.from_config(config, service="probe")
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt: str, *args: Any) -> None:
-            if os.environ.get("DOCK_HUB_ACCESS_LOG"):
-                print(f"{self.address_string()} {fmt % args}")
+            access.write(self.client_address[0], fmt % args)
 
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path.rstrip("/") or "/"

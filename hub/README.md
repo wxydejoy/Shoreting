@@ -13,6 +13,7 @@ hub/
     server.py         # HTTP（含 /metrics 的 Prometheus 文本）
     metrics.py        # 进程内计数与直方图，无依赖
     ratelimit.py      # 按来源 IP + 端点的令牌桶（429）
+    accesslog.py      # 访问日志（按天滚，留 7 天，不记查询串）
     service.py        # snapshot / command
     companion.py      # 守岸人主流程：chat 一轮、TTS 队列、打断；朗读任务已交出去
     intents.py        # 听懂一句话：中文数字、灯 / 亮度 / 温度、ACTION 行、口误折叠
@@ -66,6 +67,27 @@ uv sync
 ```
 
 配置向导：`http://127.0.0.1:17890/setup`（本机直接开；局域网先打开 `/chats` 登录或带 Token）。
+
+### 日志
+
+访问日志默认开，落在配置目录下的 `logs/access-YYYY-MM-DD.log`，留 7 天，
+启动时会打印实际路径。一行一条请求：
+
+```
+2026-10-30T19:52:03+08:00 hub 10.83.22.31 200 1204 4ms "GET /v1/snapshot"
+```
+
+**查询串一律不上盘**：`/chats/claim?ticket=…` 里是登录凭据，`/v1/companion/chats?q=…`
+里是搜过的原文，所以只留路径，问号之后记成 `?…`。
+
+| 环境变量 | 作用 |
+|---|---|
+| `DOCK_HUB_ACCESS_LOG=0` | 关掉（`off` / `false` / `no` 同义） |
+| `DOCK_HUB_ACCESS_LOG=1` | 除了写文件，同时打到 stdout |
+| `DOCK_HUB_LOG_KEEP_DAYS=14` | 改保留天数，默认 7 |
+
+Windows 探针用同一套（文件名一样，行里的服务名是 `probe`）。写不进去时
+（磁盘满、目录只读）只丢那一行，不影响请求。
 
 ## Windows 探针
 

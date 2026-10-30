@@ -5,10 +5,12 @@ import json
 import math
 import os
 import socket
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from dock_hub.accesslog import AccessLog
 from dock_hub.books import MAX_BOOK_BYTES
 from dock_hub.chat_log import asset_page_html, chats_page_html, read_page_html
 from dock_hub.errors import HubError
@@ -77,12 +79,26 @@ def _query_float(query: dict[str, list[str]], key: str, default: float) -> float
 
 
 def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
+    # 一个服务器一个：整个进程共用同一份按天滚动的文件
+    access = AccessLog.from_config(hub.config)
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
+        def handle_one_request(self) -> None:
+            # 记一下开始时间，供访问日志算耗时。每条请求单独算，keep-alive 也对
+            self._started = time.perf_counter()
+            super().handle_one_request()
+
+        def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+            started = getattr(self, "_started", None)
+            ms = (time.perf_counter() - started) * 1000.0 if started else 0.0
+            access.write(self.client_address[0], f"{self.command} {self.path}", code, size, ms)
+
         def log_message(self, fmt: str, *args: Any) -> None:
-            if os.environ.get("DOCK_HUB_ACCESS_LOG"):
-                print(f"{self.address_string()} {fmt % args}")
+            # 协议层的事（请求行看不懂、连接断了）没有状态码，走这条。
+            # 以前这里只在开了环境变量时才打，现在默认落文件。
+            access.write(self.client_address[0], fmt % args)
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -507,6 +523,11 @@ def serve(hub: DockHub, *, blocking: bool = True) -> ThreadingHTTPServer:
     print(f"朗读         http://127.0.0.1:{hub.config.port}/read   （本机直接开；局域网要 Token）", flush=True)
     if hub.config.path:
         print(f"配置         {hub.config.path}", flush=True)
+    access = AccessLog.from_config(hub.config)
+    if access.directory is not None:
+        print(f"访问日志     {access.directory}/access-YYYY-MM-DD.log（留 {access.keep_days} 天）", flush=True)
+    else:
+        print("访问日志     关闭（DOCK_HUB_ACCESS_LOG=0，或没有配置文件）", flush=True)
     if hub.uses_probe():
         print(f"Windows 探针 {hub.config.probe.url}", flush=True)
         snap = hub.pc_snapshot() or {}
