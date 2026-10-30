@@ -148,6 +148,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `POST` | `/v1/scenes/{id}` | 是 | 一次开关一组设备（配置里的场景） |
 | `POST` | `/v1/leave` | 是 | 离家总控：能关的全关，报告没关掉的（F18） |
 | `POST` | `/v1/presence` | 是 | 在场上报：手机连上 / 离开家里 WiFi（F25） |
+| `POST` | `/v1/at-desk` | 是 | 在桌上报：摄像头本地检测的「有人/没人」（F24） |
 
 没有单独的「读温度」「读电脑性能」「跑脚本」「读正在播放」接口。米家温度、logo、电脑监控、正在播放、伴侣是否就绪都在 snapshot 里；点击 logo 和播放键走同一个 command；说话走 companion/chat，再喊唤醒词打断走 companion/stop，声音走 companion/audio。
 
@@ -821,7 +822,40 @@ Content-Type: application/json
 
 ---
 
-### 6.13 `GET /metrics`
+### 6.13 `POST /v1/at-desk`
+
+在桌上报（F24）：安卓摄像头**本地**跑人脸检测，只产出「有人 / 没人」布尔值送到电源侧——有人亮屏、离座 5 分钟压暗。画面不出设备、不存储，协议里也没有任何图像字段。
+
+离座满 5 分钟后回来（`away → present` 的边沿）她按主动播报的规矩说一句（`proactive.enabled`、免打扰、每日配额照走，被拦下不补）；坐下→离开只记状态不说话。`away_sec` 是这次离座的秒数，安卓去抖、Hub 用它把关闸复算一遍（不足 300 秒不问候——门口取个快递不换来一句「回来了」）。
+
+```http
+POST /v1/at-desk
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"present": true, "away_sec": 312}
+```
+
+**200**
+
+```json
+{
+  "ok": true,
+  "present": true,
+  "away_sec": 312,
+  "said": "回来了。"
+}
+```
+
+- `present` 必须是布尔值，其他类型 400。
+- `away_sec` 可省（按 `0` 算）；Hub 复算离座时长，`present: true` 且离座满 5 分钟才可能问候。
+- `said` 是这次她实际说出口的话；没说就是 `null`（被配额 / 免打扰 / 主动播报关着拦下），不重试、不补发。
+- 同一状态重复上报幂等；`present: false` 只记状态，不说话。
+- snapshot 的 `at_desk` 带出 `{state: present|away, since}`，第一次上报前为 `null`。
+
+---
+
+### 6.14 `GET /metrics`
 
 给 Prometheus 抓的纯文本指标。**安卓不打**，它不是协议面的一部分，改起来也不受 v1 约束。
 
@@ -1155,6 +1189,7 @@ devices:
 - 开了 `pc` 或 `media` 时轮询可改为 2–5 秒（见 §2.3）
 - 图标请求失败不要整屏报错；保留上次缓存图或回退首字
 - 在场上报（F25）：监听 WiFi 连接变化，**连上家里 WiFi** 就 `POST /v1/presence {"state":"home"}`，**断开满 10 分钟**才报 `away`（去抖在安卓侧做，蜂窝 / 别的 WiFi 中间态不上报）。snapshot 的 `presence.state` 只是参考展示
+- 在桌检测（F24）：开了摄像头在场开关才做。本地人脸检测只出布尔值，**画面不出设备、不存储**；离座满 5 分钟回座沿 `POST /v1/at-desk {"present":true,"away_sec":N}`，离开沿报 `present:false`（不说话）。检测不开就永远不打这个接口
 
 ---
 
@@ -1215,6 +1250,12 @@ curl -s http://HOST:17890/v1/presence \
   -H "Authorization: Bearer TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"state":"home"}'
+
+# 在桌上报：离座 5 分钟后回座（主动播报开着时她会说一句）
+curl -s http://HOST:17890/v1/at-desk \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"present":true,"away_sec":312}'
 
 # 错 token → 401
 curl -s -o /dev/null -w "%{http_code}\n" http://HOST:17890/v1/snapshot

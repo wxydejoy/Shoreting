@@ -127,6 +127,9 @@ class DockHub:
         self._presence_lock = threading.Lock()
         self._presence: str | None = None  # None = 还没报过，第一报不问候
         self._presence_at: str | None = None
+        self._at_desk_lock = threading.Lock()
+        self._at_desk: str | None = None
+        self._at_desk_at: str | None = None
         self._proactive_stop = threading.Event()
         self._start_proactive()
         self._focus_active: bool | None = None  # None = 还没看过一眼，不触发
@@ -277,6 +280,7 @@ class DockHub:
             print(f"[proactive] 任务完成：{said.text or said.reason}")
 
     WEATHER_CHECK_SEC = 3600.0
+    DESK_AWAY_MIN_SEC = 300  # 离座不足这个数不问候（安卓侧会先去抖，这里兜底）
 
     def _evaluate_weather_alert(self, now: datetime) -> None:
         """天气突变（F15）：每小时比对一次逐小时预报，只推「变化」。
@@ -965,6 +969,43 @@ class DockHub:
         with self._presence_lock:
             return {"state": self._presence, "since": self._presence_at}
 
+    def report_desk(self, present: bool, away_sec: int | None = None, now: datetime | None = None) -> dict[str, Any]:
+        """在桌上报（F24）：摄像头本地检测的「有人 / 没人」。
+
+        图像不出设备，这里只收一个布尔值。离座满 5 分钟后回来
+        （away → present 且复算离座够长）问候一句；坐下→离开只记状态
+        不说话。同一状态重复上报幂等。去抖在安卓侧，这里只把关闸
+        （DESK_AWAY_MIN_SEC）复算一遍。
+        """
+        if not isinstance(present, bool):
+            raise HubError("bad_request", "present 必须是布尔值")
+        if away_sec is not None:
+            if not isinstance(away_sec, int) or isinstance(away_sec, bool) or away_sec < 0:
+                raise HubError("bad_request", "away_sec 必须是非负整数")
+        now = now or datetime.now().astimezone()
+        with self._at_desk_lock:
+            previous = self._at_desk
+            self._at_desk = "present" if present else "away"
+            self._at_desk_at = now.isoformat(timespec="seconds")
+        said: Said | None = None
+        if previous == "away" and present:
+            gap = away_sec if away_sec is not None else 0
+            if gap >= self.DESK_AWAY_MIN_SEC:
+                text = self.proactive.config.presence.desk_text
+                if text:
+                    said = self.proactive.desk(text, now)
+                    print(f"[proactive] 回座问候：{said.text or said.reason}")
+        return {
+            "ok": True,
+            "present": present,
+            "away_sec": away_sec,
+            "said": said.text if said else None,
+        }
+
+    def _at_desk_payload(self) -> dict[str, Any]:
+        with self._at_desk_lock:
+            return {"state": self._at_desk, "since": self._at_desk_at}
+
     def _scene_step(
         self, scene_id: str, device_id: str, body: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1416,6 +1457,7 @@ class DockHub:
                 {"id": item.id, "name": item.name} for item in self.config.scenes
             ],
             "presence": self._presence_payload(),
+            "at_desk": self._at_desk_payload(),
         }
         self._note_desk_snapshot(body)
         return body

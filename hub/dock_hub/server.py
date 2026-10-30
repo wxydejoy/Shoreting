@@ -336,6 +336,21 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     body = self._read_json()
                     self._json(200, hub.report_presence(str(body.get("state") or "")))
                     return
+                if path == "/v1/at-desk":
+                    self._require_auth()
+                    body = self._read_json()
+                    present = body.get("present")
+                    if not isinstance(present, bool):
+                        raise HubError("bad_request", "present 必须是布尔值")
+                    away_sec = body.get("away_sec")
+                    if away_sec is not None and (
+                        not isinstance(away_sec, int)
+                        or isinstance(away_sec, bool)
+                        or away_sec < 0
+                    ):
+                        raise HubError("bad_request", "away_sec 必须是非负整数")
+                    self._json(200, hub.report_desk(present, away_sec))
+                    return
                 scenes_prefix = "/v1/scenes/"
                 if path.startswith(scenes_prefix):
                     scene_id = unquote(path[len(scenes_prefix) :])

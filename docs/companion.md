@@ -136,6 +136,8 @@ HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
 
 **回家问候**（`proactive.presence`，默认「回来了。」）：手机连上家里 WiFi 的那一刻（`POST /v1/presence`，安卓去抖后上报）说一句，只有 away → home 那个边沿说，一天来回几趟就说几句，但没有「欢迎回家」式的第二句。Hub 刚重启的第一报不问候。免打扰、每日配额、三道闸照走，被拦下不补发；`presence: false` 或把 `home_text` 置空就彻底不开口。
 
+**回座问候**（同 `proactive.presence` 的 `desk_text`，默认「回来了。」）：摄像头看到人回到桌前、离座满 5 分钟（`POST /v1/at-desk`，安卓去抖后上报）说一句。画面不出设备、不存储，Hub 只收一个布尔值。`desk_text` 置空就只亮屏不说话——不想让「回家」和「坐下」各来一句，就把这处置空。
+
 ```yaml
 proactive:
   daily_limit: 6
