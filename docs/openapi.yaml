@@ -636,6 +636,28 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+  /v1/leave:
+    post:
+      summary: Leave home — switch off every switchable device, report the ones that failed
+      operationId: postLeave
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Ignored; send {} or nothing.
+      responses:
+        "200":
+          description: Per-device results and what is left on
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaveRun"
+        "401":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /v1/scenes/{id}:
     post:
       summary: Run one configured scene (a bundle of device commands)
@@ -821,6 +843,35 @@ components:
                 type: string
               message:
                 type: string
+    LeaveRun:
+      type: object
+      required: [ok, actions, left, spoken]
+      description: 「我出门了」的结果。left 是没关掉的设备 id；spoken 是她要说的那句话。
+      properties:
+        ok:
+          type: boolean
+        actions:
+          type: array
+          items:
+            type: object
+            required: [id, on, ok]
+            properties:
+              id:
+                type: string
+              on:
+                type: boolean
+              ok:
+                type: boolean
+              code:
+                type: string
+              message:
+                type: string
+        left:
+          type: array
+          items:
+            type: string
+        spoken:
+          type: string
     HubStatus:
       type: object
       required: [name, mijia, message]
@@ -833,6 +884,35 @@ components:
         message:
           type: string
           nullable: true
+    LeaveRun:
+      type: object
+      required: [ok, actions, left, spoken]
+      description: 「我出门了」的结果。left 是没关掉的设备 id；spoken 是她要说的那句话。
+      properties:
+        ok:
+          type: boolean
+        actions:
+          type: array
+          items:
+            type: object
+            required: [id, on, ok]
+            properties:
+              id:
+                type: string
+              on:
+                type: boolean
+              ok:
+                type: boolean
+              code:
+                type: string
+              message:
+                type: string
+        left:
+          type: array
+          items:
+            type: string
+        spoken:
+          type: string
     Temperature:
       type: object
       required: [id, name, celsius, updated_at, online]

@@ -276,6 +276,14 @@ class Companion:
             return self._finish_spoken(
                 spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
             )
+        leaving = self._handle_leaving(text, turn)
+        if leaving:
+            spoken, events = leaving
+            self._commit_reply(spoken)
+            _latency(turn, "leave", chars=len(spoken))
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+            )
         desk = self._handle_desk(text, turn)
         if desk:
             spoken, skills = desk
@@ -665,6 +673,22 @@ class Companion:
         spoken = str(item.get("say") or "").strip() or f"好，{name}。"
         return spoken, [{"id": ident, "name": name, "scene": True, "ok": ok}]
 
+    def _handle_leaving(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """「我出门了」（F18）：能关的全关，报告没关掉的。没接 Hub 就不认。"""
+        if not parse_leaving(text) and not parse_leave_action(text):
+            return None
+        leave = self._world.get("leave")
+        if not callable(leave):
+            return None
+        try:
+            result = leave()
+        except HubError as exc:
+            _latency(turn, "leave_error", code=exc.code)
+            return "这次没动成。", [{"id": "leave", "leave": True, "ok": False, "code": exc.code}]
+        spoken = str(result.get("spoken") or "都关好了，路上小心。")
+        _latency(turn, "leave_ok", ok=1 if result.get("ok") else 0, left=len(result.get("left") or []))
+        return spoken, [{"id": "leave", "leave": True, "ok": bool(result.get("ok"))}]
+
     def _handle_desk(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         act = parse_stopwatch_action(text)
         if act is None:
@@ -854,6 +878,18 @@ class Companion:
             self._arm_timer(seconds)
             events.append({"id": "timer", "sec": seconds, "ok": True})
             applied = True
+        if parse_leave_action(raw_reply):
+            leave = self._world.get("leave")
+            if callable(leave):
+                try:
+                    result = leave()
+                except HubError as exc:
+                    events.append(
+                        {"id": "leave", "leave": True, "ok": False, "code": exc.code}
+                    )
+                else:
+                    events.append({"id": "leave", "leave": True, "ok": bool(result.get("ok"))})
+                    applied = True
         return applied
 
     def _maybe_speak(self, spoken: str, turn: str) -> str | None:
@@ -1079,8 +1115,6 @@ class Companion:
         if not isinstance(body, dict):
             raise HubError("companion_unavailable", "大脑返回无法解析")
         return body
-
-
 
 
 def _call_world(fn: Any) -> Any:

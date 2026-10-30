@@ -166,6 +166,11 @@ class DeviceConfig:
     def is_ws2812(self) -> bool:
         return self.type == "ws2812"
 
+    @property
+    def is_switchable(self) -> bool:
+        """「我出门了」要关的对象：灯、插座、灯带。启动项和传感器不算。"""
+        return self.type in {"switch", "light", "ws2812"}
+
     def effective_props(self) -> list[PropConfig]:
         if self.props:
             return list(self.props)

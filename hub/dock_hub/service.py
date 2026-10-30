@@ -701,6 +701,7 @@ class DockHub:
                 "game": self._game_running,
                 "desk": self.reporter.snapshot,
                 "scene": self.run_scene,
+                "leave": self.leave_home,
                 "scenes": [
                     {
                         "id": item.id,
@@ -896,6 +897,36 @@ class DockHub:
             "ok": all(item["ok"] for item in actions),
             "actions": actions,
             "said": spoke,
+        }
+
+    def leave_home(self) -> dict[str, Any]:
+        """「我出门了」（F18）：能关的全关，回头报告没关掉的。
+
+        对象是所有能开关的设备（灯 / 插座 / 灯带）；启动项是「开」的东西，
+        传感器没有开关，都不碰。报的结果里 `left` 是没关掉的，
+        话里点两名（最多两个，多了念不完）。
+        """
+        actions: list[dict[str, Any]] = []
+        for device in self.config.devices:
+            if not device.is_switchable:
+                continue
+            actions.append(self._scene_step("leave", device.id, {"on": False}))
+        left = [item for item in actions if not item["ok"]]
+        label = {cfg.id: cfg.name for cfg in self.config.devices}
+        missed = [label.get(item["id"], item["id"]) for item in left]
+        if not actions:
+            spoken = "家里没有归我管的灯和插座。"
+        elif not missed:
+            spoken = f"都关好了，{len(actions)} 个，路上小心。"
+        elif len(missed) == len(actions):
+            spoken = f"一个都没关成，{'、'.join(missed[:2])}还开着，回头看看。"
+        else:
+            spoken = f"{'、'.join(missed[:2])}没关上，其他的都关了。"
+        return {
+            "ok": not missed and bool(actions),
+            "actions": actions,
+            "left": [item["id"] for item in left],
+            "spoken": spoken,
         }
 
     def _scene_step(
