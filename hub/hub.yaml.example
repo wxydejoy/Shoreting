@@ -42,6 +42,7 @@ mini:
 #   # 异常提醒：坏够久才说，一天一件事最多一句，同一份每日配额
 #   alerts:
 #     temp_celsius: 85      # Windows CPU 温度阈值（热满 3 分钟才说）；0 = 不提
+#     memory_percent: 90    # 内存占用阈值（满 3 分钟才说）；0 = 不提
 #     offline_minutes: 10   # 米家设备离线多久提醒；0 = 不提
 #     sedentary_minutes: 90 # 连续用电脑多久提醒起身（键鼠空 5 分钟算休息过）；0 = 不提
 #     weather: true         # 天气突变提醒：未来两小时有雨/骤降 5 度/大风，一天最多一句；

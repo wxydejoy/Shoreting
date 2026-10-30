@@ -3,7 +3,7 @@
 import unittest
 from datetime import datetime, timedelta
 
-from dock_hub.config import hub_config_to_raw, parse_config
+from dock_hub.config import AlertsConfig, hub_config_to_raw, parse_config
 from dock_hub.proactive import (
     MORNING_WINDOW,
     Proactive,
@@ -289,6 +289,7 @@ class TestConfigAlerts(unittest.TestCase):
         cfg = self._parse({"morning": {"at": "07:30"}})
         self.assertEqual(cfg.proactive.alerts.temp_celsius, 85)
         self.assertEqual(cfg.proactive.alerts.offline_minutes, 10)
+        self.assertEqual(cfg.proactive.alerts.memory_percent, 90)
 
     def test_false_disables_both(self) -> None:
         cfg = self._parse({"morning": {"at": "07:30"}, "alerts": False})
@@ -303,6 +304,17 @@ class TestConfigAlerts(unittest.TestCase):
     def test_negative_raises(self) -> None:
         with self.assertRaises(ValueError):
             self._parse({"alerts": {"temp_celsius": -1}})
+
+    def test_memory_threshold_configures(self) -> None:
+        cfg = self._parse({"alerts": {"memory_percent": 95}})
+        self.assertEqual(cfg.proactive.alerts.memory_percent, 95)
+        again = parse_config(hub_config_to_raw(cfg))
+        self.assertEqual(again.proactive.alerts, cfg.proactive.alerts)
+
+    def test_memory_zero_means_off_and_drops_from_raw(self) -> None:
+        cfg = self._parse({"alerts": {"memory_percent": 0}})
+        self.assertEqual(cfg.proactive.alerts.memory_percent, 0)
+        self.assertNotIn("memory_percent", hub_config_to_raw(cfg)["proactive"]["alerts"])
 
     def test_roundtrip(self) -> None:
         cfg = self._parse({"alerts": {"temp_celsius": 90, "offline_minutes": 5}})
@@ -466,6 +478,52 @@ class TestServiceAlerts(unittest.TestCase):
         hub.pc_snapshot = lambda: {"online": True, "cpu": {"temp_celsius": 60, "percent": 10}}
         hub._evaluate_alerts()
         self.assertEqual(hub._alert_state._first.get("temp"), None)
+
+    def test_memory_alerts_after_sustained_and_once(self) -> None:
+        hub, said = self._hub()
+        hub.pc_snapshot = lambda: {
+            "online": True,
+            "cpu": {"temp_celsius": 50, "percent": 10},
+            "memory": {"percent": 94, "used_gb": 30, "total_gb": 32},
+        }
+        hub._evaluate_alerts()  # 刚开始满：只计时，不开口
+        self.assertEqual(said, [])
+        self._ready(hub, "mem", minutes=4)
+        hub._evaluate_alerts()
+        self.assertEqual(said, ["内存用到 94% 了，后台该收一收。"])
+        hub._evaluate_alerts()  # 说过的这轮不再说
+        self.assertEqual(said, ["内存用到 94% 了，后台该收一收。"])
+
+    def test_memory_frees_clears_timer(self) -> None:
+        hub, said = self._hub()
+        hub.pc_snapshot = lambda: {
+            "online": True,
+            "cpu": {"temp_celsius": 50, "percent": 10},
+            "memory": {"percent": 60, "used_gb": 19, "total_gb": 32},
+        }
+        hub._evaluate_alerts()
+        self.assertEqual(hub._alert_state._first.get("mem"), None)
+        self.assertEqual(said, [])
+
+    def test_memory_off_when_zero(self) -> None:
+        from dock_hub.config import ProactiveConfig
+
+        hub, said = self._hub()
+        hub.proactive.configure(
+            ProactiveConfig(
+                enabled=True,
+                daily_limit=5,
+                alerts=AlertsConfig(temp_celsius=85, offline_minutes=0, sedentary_minutes=0, memory_percent=0),
+            )
+        )
+        hub.pc_snapshot = lambda: {
+            "online": True,
+            "cpu": {"temp_celsius": 50, "percent": 10},
+            "memory": {"percent": 99, "used_gb": 31, "total_gb": 32},
+        }
+        hub._evaluate_alerts()
+        self.assertEqual(said, [])
+        self.assertEqual(hub._alert_state._first.get("mem"), None)
 
     def test_offline_mijia_only(self) -> None:
         hub, said = self._hub()

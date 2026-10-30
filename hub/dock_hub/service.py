@@ -191,6 +191,18 @@ class DockHub:
                 if said.spoke:
                     self._alert_state.clear("temp")  # 说过了，降温前不再提
                 print(f"[proactive] 温度提醒：{said.text or said.reason}")
+        if alerts.memory_percent > 0:
+            memory = (self.pc_snapshot() or {}).get("memory")
+            percent = memory.get("percent") if isinstance(memory, dict) else None
+            if percent is not None and self._alert_state.check(
+                "mem", float(percent) >= alerts.memory_percent, now, 180.0
+            ):
+                said = self.proactive.alert(
+                    "mem", f"内存用到 {float(percent):.0f}% 了，后台该收一收。", now
+                )
+                if said.spoke:
+                    self._alert_state.clear("mem")  # 说过了，降下来之前不再提
+                print(f"[proactive] 内存提醒：{said.text or said.reason}")
         if alerts.sedentary_minutes > 0 and self.proactive.config.enabled:
             if self._sedentary.tick(self._idle_seconds(), now, alerts.sedentary_minutes):
                 said = self.proactive.alert("sedentary", "坐了一阵了，起来走走。", now)
