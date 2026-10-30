@@ -166,6 +166,9 @@ _POWER_CANCEL_RE = re.compile(r"算了|不用|取消|别弄|不弄|先不|不关
 
 class _TurnCancelled(Exception):
     """这一轮已经被下一轮顶掉。别再写字幕、别再进记忆。"""
+# LLM / TTS 探活结果的有效期。过期后由后台线程刷新，读的人永远只拿缓存，
+# 免得 3s 一次的 /v1/snapshot 被一个卡住的探活拖住。
+PROBE_SEC = 5.0
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _ACTION_RE = re.compile(r"^\s*ACTION:\s*\S+\s*$", re.MULTILINE)
@@ -230,6 +233,8 @@ class Companion:
         self._voice = False
         self._ready_at = 0.0
         self._voice_at = 0.0
+        self._probe_at = 0.0
+        self._probing = False
         self._speaking = False
         self._seq = 0
         self._lock = threading.Lock()
@@ -266,10 +271,13 @@ class Companion:
         self._voice = False
         self._ready_at = 0.0
         self._voice_at = 0.0
+        self._probe_at = 0.0
         with self._lock:
             self._speaking = False
             self._seq += 1
             self._clips.clear()
+            # 换配置后要重新探活：冷启动那条同步路径会再走一次
+            self._probing = False
         self._cancel_timer()
         self._recent.clear()
 
@@ -323,14 +331,44 @@ class Companion:
         }
         return body
 
+    def _probe_once(self) -> None:
+        try:
+            ready = self._ping_llm()
+            voice = self._ping_tts() if self.config.tts_base_url else False
+        finally:
+            with self._lock:
+                self._probing = False
+        self._ready = ready
+        self._voice = voice
+        self._ready_at = time.monotonic()
+        self._voice_at = self._ready_at
+        self._probe_at = self._ready_at
+
+    def _refresh_probes(self) -> None:
+        """把「探活」从读路径上摘出去。
+
+        `/v1/snapshot` 是 3s 一次的轮询，而 ready()/voice() 原来会在过期时
+        同步 ping 一次 LLM（openai 模式超时 2s）和 TTS。大脑卡住的时候，主屏
+        每个轮询都要陪着等；这里改成：冷启动同步探一次（要如实报状态），
+        之后过期就丢给后台线程，读的人只拿上一次的结果。
+        """
+        if not self.config.enabled:
+            return
+        if time.monotonic() - self._probe_at < PROBE_SEC:
+            return
+        with self._lock:
+            if self._probing:
+                return
+            self._probing = True
+        if self._probe_at <= 0:
+            self._probe_once()
+            return
+        threading.Thread(target=self._probe_once, name="companion-probe", daemon=True).start()
+
     def ready(self) -> bool:
         if not self.config.enabled:
             return False
-        now = time.monotonic()
-        if now - self._ready_at < 5:
-            return self._ready
-        self._ready = self._ping_llm()
-        self._ready_at = now
+        self._refresh_probes()
         return self._ready
 
     def _begin_turn(self) -> tuple[int, threading.Event]:
@@ -792,11 +830,7 @@ class Companion:
     def voice(self) -> bool:
         if not self.config.enabled or not self.tts.configured:
             return False
-        now = time.monotonic()
-        if now - self._voice_at < 5:
-            return self._voice
-        self._voice = self.tts.ping()
-        self._voice_at = now
+        self._refresh_probes()
         return self._voice
 
     def _remember_skill(self, user_text: str) -> str | None:

@@ -1463,6 +1463,38 @@ class CompanionProtocolTest(unittest.TestCase):
         self.assertEqual(first["body"]["text"], "")
         self.assertEqual(spoken, ["好。"])
 
+    def test_snapshot_does_not_wait_for_a_hung_probe(self) -> None:
+        """探活过期后改后台刷新：LLM / TTS 卡住不该把 3s 一次的轮询拖住。"""
+        def slow(req: Request, timeout: object = None):
+            time.sleep(1.0)  # 假装大脑和 TTS 都不应门
+            return _FakeResp({"ok": True, "ready": True, "models": []})
+
+        self.hub.companion.configure(
+            parse_config(
+                {
+                    "name": "study",
+                    "token": "secret-token-value",
+                    "companion": {
+                        "enabled": True,
+                        "llm": {"base_url": "http://127.0.0.1:9", "model": "qwen3.5:4b"},
+                        "tts": {"base_url": "http://127.0.0.1:9"},
+                    },
+                    "devices": [],
+                }
+            ).companion
+        )
+        with patch("dock_hub.companion.urllib.request.urlopen", slow):
+            # 冷启动那次同步探活（要如实报状态），慢就慢
+            self._request("GET", "/v1/snapshot")
+            # 假装有效期已过：这一次只读缓存，刷新丢给后台
+            self.hub.companion._probe_at -= 10
+            started = time.monotonic()
+            status, body = self._request("GET", "/v1/snapshot")
+            elapsed = time.monotonic() - started
+        self.assertEqual(status, 200)
+        self.assertTrue(body["companion"]["ready"])  # 用的是上一次的结果
+        self.assertLess(elapsed, 0.6)
+
     def test_stream_cues_each_sentence(self) -> None:
         spoken: list[str] = []
 
