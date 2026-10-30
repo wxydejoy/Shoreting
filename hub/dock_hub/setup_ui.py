@@ -171,6 +171,15 @@ def fetch_mijia_props(hub: DockHub, name: str) -> tuple[list[dict[str, Any]], st
         return [], f"拉取属性失败：{exc}"
 
 
+def mask_secret(value: str, keep: int = 4) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= keep * 2:
+        return "••••"
+    return f"••••{text[-keep:]}"
+
+
 def build_state(hub: DockHub) -> dict[str, Any]:
     from dock_hub.server import lan_ips
 
@@ -179,8 +188,13 @@ def build_state(hub: DockHub) -> dict[str, Any]:
     if devices_error and status != "ok":
         message = message or devices_error
 
+    # Token 是安卓那边的口令，原文不进浏览器：页面只显示末 4 位，
+    # 用户点「复制」时才走 /setup/api/token/reveal 取一次。
+    config_raw = hub_config_to_raw(hub.config, mask_secrets=True)
+    config_raw["token"] = ""
     return {
-        "config": hub_config_to_raw(hub.config, mask_secrets=True),
+        "config": config_raw,
+        "token_masked": mask_secret(hub.config.token),
         "lan_ips": lan_ips(),
         "mijia": status,
         "mijia_message": message,
@@ -573,6 +587,10 @@ def handle_setup_post(hub: DockHub, path: str, body: dict[str, Any], handler: An
         return True
     if path == "/setup/api/token":
         handler._json(200, {"token": secrets.token_urlsafe(32)})  # noqa: SLF001
+        return True
+    if path == "/setup/api/token/reveal":
+        # 用户点「复制」时才取一次原文；调用方已过 ensure_local + CSRF 检查
+        handler._json(200, {"token": hub.config.token})  # noqa: SLF001
         return True
     if path == "/setup/api/llm-models":
         base_url, _, api_key = _resolve_llm(hub, body)

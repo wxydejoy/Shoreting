@@ -195,6 +195,18 @@ class SetupWizardTest(unittest.TestCase):
         self.assertNotIn("api_key", llm)
         self.assertTrue(llm["api_key_set"])
         self.assertNotIn("sk-test-placeholder", raw)
+        # Hub Token 不进浏览器：只给末 4 位，原文哪都别出现
+        self.assertEqual(body["config"]["token"], "")
+        self.assertEqual(body["token_masked"], "••••alue")
+        self.assertNotIn("secret-token-value", raw)
+        conn.close()
+
+        # 点「复制」时才取一次原文
+        conn = HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("POST", "/setup/api/token/reveal", body="{}", headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(json.loads(resp.read().decode("utf-8"))["token"], "secret-token-value")
         conn.close()
 
 
