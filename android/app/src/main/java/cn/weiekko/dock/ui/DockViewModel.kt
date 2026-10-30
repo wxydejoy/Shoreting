@@ -1157,6 +1157,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private fun interruptCompanion() {
         companionJob?.cancel()
         companionJob = null
+        // 协程取消停不下阻塞中的 execute()，把这条 HTTP 也掐掉
+        client.cancelActiveChat()
         companionVoice.stop()
         subtitleJob?.cancel()
         cueHubStop()

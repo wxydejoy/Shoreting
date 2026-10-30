@@ -3,6 +3,10 @@ package cn.weiekko.dock.data
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -293,6 +297,46 @@ class HubClientTest {
         // 仓库是公开的：APK 里带 Hub / Mini 的默认口令等于把灯和开机键送出去
         assertEquals("", HubConnection.DEFAULT_TOKEN)
         assertEquals("", MiniConnection.DEFAULT_TOKEN)
+    }
+
+    @Test
+    fun cancelActiveChatReturnsTheThreadRightAway() {
+        // 阻塞的 execute() 不会因为协程 cancel 而停：打断时必须直接 cancel 这条 call，
+        // 否则那一轮要挂到 COMPANION_TIMEOUT_MS（90s）才还线程。
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val done = CountDownLatch(1)
+        var error: Throwable? = null
+        val worker = thread {
+            try {
+                client.companionChat(connection, "你好")
+            } catch (e: Throwable) {
+                error = e
+            } finally {
+                done.countDown()
+            }
+        }
+        server.takeRequest() // 等请求真的发出去
+        val started = System.currentTimeMillis()
+        client.cancelActiveChat()
+        assertTrue("cancel 之后应当立刻返回", done.await(3, TimeUnit.SECONDS))
+        assertTrue(System.currentTimeMillis() - started < 3_000)
+        assertTrue("取消应当抛网络异常，实际：$error", error is HubNetworkException)
+        worker.join(1_000)
+    }
+
+    @Test
+    fun newChatSupersedesThePreviousOne() {
+        // 两次 chat 撞在一起：旧的那条要被掐掉，只留最后一条在飞
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        server.enqueue(MockResponse().setBody("{\"ok\":true,\"text\":\"好\",\"turn_id\":\"t\"}"))
+        val first = thread {
+            runCatching { client.companionChat(connection, "第一句") }
+        }
+        server.takeRequest()
+        val reply = client.companionChat(connection, "第二句")
+        assertEquals("好", reply.text)
+        first.join(3_000)
+        assertEquals(false, first.isAlive)
     }
 
     @Test

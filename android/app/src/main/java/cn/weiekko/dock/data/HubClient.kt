@@ -9,17 +9,23 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class HubClient(
     private val http: OkHttpClient = defaultClient(),
     private val json: Json = defaultJson(),
 ) {
+    private val clients = ConcurrentHashMap<Long, OkHttpClient>()
+    private val activeChat = AtomicReference<Call?>(null)
+
     fun health(connection: HubConnection): Health {
         // 注意：Hub 完全可以就跑在 Mini 上（此时 Hub 的 host 与 Mini 的 host 相同）。
         // 以前这里用 IP 判断「填成 Mini 了」，结果在这种部署下必然抛异常，
@@ -134,11 +140,26 @@ class HubClient(
         val request = authorized(connection, "/v1/companion/chat")
             .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))
             .build()
-        val body = execute(request, readTimeoutMs = COMPANION_TIMEOUT_MS)
-        return decode(body)
+        val call = clientFor(COMPANION_TIMEOUT_MS).newCall(request)
+        // 单飞：新一轮先把上一轮没回来的那条掐掉，别让两份 LLM 流同时回来抢字幕
+        activeChat.getAndSet(call)?.cancel()
+        try {
+            return decode(readText(call))
+        } finally {
+            activeChat.compareAndSet(call, null)
+        }
+    }
+
+    /**
+     * 打断时调用：`execute()` 是阻塞的，只 cancel 协程停不下这条 HTTP，
+     * 要等 90s 超时才还线程。这里直接 cancel 掉 call，线程立刻回来。
+     */
+    fun cancelActiveChat() {
+        activeChat.getAndSet(null)?.cancel()
     }
 
     fun companionStop(connection: HubConnection) {
+        cancelActiveChat()
         val request = authorized(connection, "/v1/companion/stop")
             .post("{}".toRequestBody(JSON))
             .build()
@@ -263,17 +284,30 @@ class HubClient(
         return builder
     }
 
+    /** 每种超时复用同一个 client：newBuilder().build() 每次都会多一份连接池配置拷贝。 */
+    private fun clientFor(readTimeoutMs: Long): OkHttpClient =
+        clients.getOrPut(readTimeoutMs) {
+            http.newBuilder()
+                .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
+                .callTimeout(readTimeoutMs + 1_000, TimeUnit.MILLISECONDS)
+                .build()
+        }
+
     private fun execute(
         request: Request,
         readTimeoutMs: Long,
         expectAuthError: Boolean = true,
-    ): String {
-        val callClient = http.newBuilder()
-            .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
-            .callTimeout(readTimeoutMs + 1_000, TimeUnit.MILLISECONDS)
-            .build()
+    ): String = readText(clientFor(readTimeoutMs).newCall(request), expectAuthError)
+
+    private fun executeBytes(
+        request: Request,
+        readTimeoutMs: Long,
+        expectAuthError: Boolean = true,
+    ): ByteArray = readBytes(clientFor(readTimeoutMs).newCall(request), expectAuthError)
+
+    private fun readText(call: Call, expectAuthError: Boolean = true): String {
         val response = try {
-            callClient.newCall(request).execute()
+            call.execute()
         } catch (e: IOException) {
             throw HubNetworkException("连不上 Hub：${e.message ?: "网络错误"}", e)
         }
@@ -284,17 +318,9 @@ class HubClient(
         }
     }
 
-    private fun executeBytes(
-        request: Request,
-        readTimeoutMs: Long,
-        expectAuthError: Boolean = true,
-    ): ByteArray {
-        val callClient = http.newBuilder()
-            .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
-            .callTimeout(readTimeoutMs + 1_000, TimeUnit.MILLISECONDS)
-            .build()
+    private fun readBytes(call: Call, expectAuthError: Boolean = true): ByteArray {
         val response = try {
-            callClient.newCall(request).execute()
+            call.execute()
         } catch (e: IOException) {
             throw HubNetworkException("连不上 Hub：${e.message ?: "网络错误"}", e)
         }
