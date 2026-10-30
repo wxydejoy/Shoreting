@@ -4,6 +4,7 @@ import hmac
 import json
 import math
 import os
+import re
 import socket
 import time
 from contextlib import nullcontext
@@ -20,6 +21,7 @@ from dock_hub.setup_ui import is_local_client
 
 MAX_BODY = 64 * 1024
 MAX_WAIT = 30.0
+_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")  # F30 时间线：chats 的 day 参数
 _STATIC = {
     "litera.min.css": "text/css; charset=utf-8",
     "shell.css": "text/css; charset=utf-8",
@@ -188,7 +190,14 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     except ValueError:
                         limit = 200
                     q = unquote((query.get("q") or [""])[0])
-                    self._json(200, hub.companion_chats(limit=limit, query=q))
+                    day = unquote((query.get("day") or [""])[0]).strip()
+                    if day and not _DAY_RE.fullmatch(day):
+                        raise HubError("bad_request", "day 要是 YYYY-MM-DD")
+                    with_days = (query.get("with_days") or [""])[0] not in ("", "0", "false")
+                    self._json(
+                        200,
+                        hub.companion_chats(limit=limit, query=q, day=day, with_days=with_days),
+                    )
                     return
                 if path == "/v1/companion/memory":
                     # F28：她记得的事。设置页读它，和 chats 一样走聊天鉴权

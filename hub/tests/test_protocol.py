@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+from datetime import datetime
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -172,6 +173,22 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn("text/html", resp.getheader("Content-Type") or "")
         self.assertIn("守岸人", html)
         conn.close()
+
+    def test_companion_chats_day_and_days(self) -> None:
+        # F30 时间线：day 翻某一天，with_days 带回记过话的日子
+        self.hub.chat_log.append(turn="t1", user="几点", reply="深夜。")
+        today = datetime.now().astimezone().date().isoformat()
+        status, body = self._request("GET", f"/v1/companion/chats?day={today}")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["items"]), 1)
+        status, body = self._request("GET", "/v1/companion/chats?day=1999-01-01")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["items"], [])
+        status, body = self._request("GET", "/v1/companion/chats?day=garbage")
+        self.assertEqual(status, 400)
+        status, body = self._request("GET", "/v1/companion/chats?with_days=true")
+        self.assertEqual(status, 200)
+        self.assertIn(today, body["days"])
 
     def test_companion_memory_endpoints(self) -> None:
         # F28：她记得的事——可见、可删。本机直通（同 /chats），跨机要 Bearer

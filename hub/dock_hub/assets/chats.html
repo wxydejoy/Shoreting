@@ -22,6 +22,9 @@
   <header class="container">
     <p class="sub">只从今晚起记下原文。更早的对话只留了字数。</p>
     <div class="bar" id="searchBar">
+      <button class="secondary" id="prevDay" type="button" title="前一天">‹</button>
+      <select id="dayPick" aria-label="挑一天"></select>
+      <button class="secondary" id="nextDay" type="button" title="后一天">›</button>
       <input type="search" id="q" placeholder="搜索她或你说过的话" autocomplete="off" />
     </div>
   </header>
@@ -40,7 +43,13 @@
     const gate = document.getElementById("gate");
     const q = document.getElementById("q");
     const tokenBox = document.getElementById("token");
+    const dayPick = document.getElementById("dayPick");
+    const prevDay = document.getElementById("prevDay");
+    const nextDay = document.getElementById("nextDay");
     let timer = null;
+    // F30 时间线："" = 今晚（实时滚动到底），否则是正在翻的 YYYY-MM-DD
+    let viewDay = "";
+    let allDays = [];
 
     function authHeaders() {
       const t = sessionStorage.getItem("helm_chats_token") || "";
@@ -106,7 +115,9 @@
       if (!items.length) {
         const empty = document.createElement("div");
         empty.className = "empty";
-        empty.textContent = "还没有记下原文。对脸说一句之后会出现在这里。";
+        empty.textContent = viewDay
+          ? "这天没说话。"
+          : "还没有记下原文。对脸说一句之后会出现在这里。";
         feed.appendChild(empty);
         return;
       }
@@ -123,7 +134,46 @@
         feed.appendChild(bubble("you", "你", rec.user, rec));
         feed.appendChild(bubble("her", "守岸人", rec.reply, rec));
       });
-      feed.scrollTop = feed.scrollHeight;
+      // 今晚跟着新话走；翻旧账就从这天最早的一句看起
+      feed.scrollTop = viewDay ? 0 : feed.scrollHeight;
+    }
+
+    function dayChoice(d) {
+      // 正午当锚点，免得 UTC 解析把日子挪前挪后一天
+      return dayLabel(d + "T12:00:00");
+    }
+
+    function rebuildDayPick() {
+      dayPick.innerHTML = "";
+      const live = document.createElement("option");
+      live.value = "";
+      live.textContent = "今晚";
+      dayPick.appendChild(live);
+      allDays.forEach((d) => {
+        const opt = document.createElement("option");
+        opt.value = d;
+        opt.textContent = dayChoice(d);
+        dayPick.appendChild(opt);
+      });
+      syncDayUi();
+    }
+
+    function syncDayUi() {
+      dayPick.value = viewDay;
+      if (dayPick.value !== viewDay) viewDay = ""; // 挑的那天可能已被裁掉
+      dayPick.value = viewDay;
+      prevDay.disabled = viewDay !== "" && viewDay === allDays[0];
+      nextDay.disabled = viewDay === "";
+    }
+
+    function stepDay(delta) {
+      if (!allDays.length) return;
+      let idx = allDays.indexOf(viewDay);
+      if (idx < 0) idx = delta < 0 ? allDays.length : -1;
+      idx += delta;
+      viewDay = idx >= 0 && idx < allDays.length ? allDays[idx] : "";
+      syncDayUi();
+      load(false);
     }
 
     function nextPath() {
@@ -140,12 +190,20 @@
         location.replace(next);
         return;
       }
-      load();
+      load(true);
     }
 
-    async function load() {
-      const query = encodeURIComponent(q.value.trim());
-      const resp = await fetch("/v1/companion/chats?limit=400&q=" + query, {
+    async function load(withMeta) {
+      const params = new URLSearchParams();
+      params.set("limit", "400");
+      if (q.value.trim()) {
+        // 搜索翻的是全部历史，不挑日子
+      } else if (viewDay) {
+        params.set("day", viewDay);
+      }
+      if (withMeta) params.set("with_days", "1");
+      params.set("q", q.value.trim());
+      const resp = await fetch("/v1/companion/chats?" + params.toString(), {
         headers: { Accept: "application/json", ...authHeaders() },
         credentials: "include",
       });
@@ -163,6 +221,8 @@
       gate.classList.add("hide");
       document.getElementById("searchBar").classList.remove("hide");
       const body = await resp.json();
+      if (body.days) allDays = body.days;
+      rebuildDayPick();
       render(body.items || []);
     }
 
@@ -184,9 +244,16 @@
       tokenBox.value = "";
       goNextOrLoad();
     };
+    prevDay.onclick = () => stepDay(-1);
+    nextDay.onclick = () => stepDay(1);
+    dayPick.onchange = () => {
+      viewDay = dayPick.value;
+      syncDayUi();
+      load(false);
+    };
     q.addEventListener("input", () => {
       clearTimeout(timer);
-      timer = setTimeout(load, 200);
+      timer = setTimeout(() => load(false), 200);
     });
     if (nextPath() === "/setup") {
       const h = document.querySelector(".gate h2");
@@ -194,8 +261,11 @@
       if (h) h.textContent = "打开配置向导";
       if (p) p.textContent = "填手机设置里同一枚 Hub Token，登录后跳到配置页。";
     }
-    load();
-    setInterval(() => { if (document.visibilityState === "visible") load(); }, 4000);
+    load(true);
+    // 只有「今晚」在实时动；翻旧账和搜索都是静止的过去，不刷
+    setInterval(() => {
+      if (document.visibilityState === "visible" && !viewDay && !q.value.trim()) load(false);
+    }, 4000);
   </script>
 </body>
 </html>
