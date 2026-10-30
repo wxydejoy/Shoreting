@@ -152,6 +152,21 @@ class HubClient(
         execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
     }
 
+    /**
+     * 在桌上报（F24）：away_sec 是这次离座了多少秒（present=false 时省略），
+     * 语义见 lan-protocol §6.13。失败静默——下次边沿再报。
+     */
+    fun reportDesk(connection: HubConnection, present: Boolean, awaySec: Int? = null) {
+        val payload = buildJsonObject {
+            put("present", JsonPrimitive(present))
+            if (awaySec != null) put("away_sec", JsonPrimitive(awaySec))
+        }
+        val request = authorized(connection, "/v1/at-desk")
+            .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))
+            .build()
+        execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS, expectAuthError = false)
+    }
+
     fun companionAudio(connection: HubConnection, audioId: String): ByteArray {
         val id = audioId.trim()
         if (!AUDIO_ID.matches(id)) {

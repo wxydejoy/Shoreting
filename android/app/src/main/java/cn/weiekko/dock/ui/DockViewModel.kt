@@ -47,6 +47,7 @@ import cn.weiekko.dock.data.nudge
 import cn.weiekko.dock.data.snap
 import cn.weiekko.dock.data.toWinApp
 import cn.weiekko.dock.media.PhoneMedia
+import cn.weiekko.dock.power.PresenceWatch
 import cn.weiekko.dock.power.ScreenCommand
 import cn.weiekko.dock.voice.ConversationBus
 import cn.weiekko.dock.voice.ConversationWindow
@@ -102,6 +103,8 @@ data class DockUiState(
     val hubSleepDelaySec: Int = HubPreferences.DEFAULT_HUB_SLEEP_DELAY_SEC,
     val hubReconnectSec: Int = HubPreferences.DEFAULT_HUB_RECONNECT_SEC,
     val hubSleeping: Boolean = false,
+    val deskPresenceEnabled: Boolean = false,
+    val deskSleeping: Boolean = false,
     val wakeWordEnabled: Boolean = true,
     val voiceListening: Boolean = false,
     val conversationOpen: Boolean = false,
@@ -194,6 +197,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private var conversationJob: Job? = null
     private var voiceTurnAt = 0L
     private var subtitleAt = 0L
+    private var deskWatch: PresenceWatch? = null
 
     init {
         _ui.update {
@@ -241,6 +245,13 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             prefs.wakeWordEnabled.collect { enabled ->
                 _ui.update { it.copy(wakeWordEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.deskPresenceEnabled.collect { enabled ->
+                _ui.update { it.copy(deskPresenceEnabled = enabled) }
+                if (!enabled) stopDeskWatch()
+                else startDeskWatch()
             }
         }
         viewModelScope.launch {
@@ -412,7 +423,66 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 在场检测（F24）总开关：默认关，开了 MainActivity 才去要摄像头权限。 */
+    fun setDeskPresence(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.saveDeskPresenceEnabled(enabled)
+        }
+    }
+
+    /** 摄像头每一帧的「有人 / 没人」从这里进来（相机分析线程）。 */
+    fun onDeskFrame(person: Boolean) {
+        deskWatch?.onFrame(person, SystemClock.elapsedRealtime())
+    }
+
+    /** 人自己解锁 / 说话了：算在场，但不发问候边沿（她多半正在说话）。 */
+    fun noteUserInteraction() {
+        deskWatch?.noteActivity(SystemClock.elapsedRealtime())
+        if (_ui.value.deskSleeping) {
+            _ui.update { it.copy(deskSleeping = false) }
+        }
+    }
+
+    private fun startDeskWatch() {
+        if (deskWatch != null) return
+        deskWatch = PresenceWatch(
+            onPresent = { awayMs -> viewModelScope.launch { onDeskReturned(awayMs) } },
+            onAway = { viewModelScope.launch { onDeskLeft() } },
+        )
+    }
+
+    private fun stopDeskWatch() {
+        deskWatch = null
+        if (_ui.value.deskSleeping) {
+            _ui.update { it.copy(deskSleeping = false) }
+        }
+    }
+
+    private fun onDeskReturned(awayMs: Long) {
+        if (!_ui.value.deskPresenceEnabled) return
+        _ui.update { it.copy(deskSleeping = false) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val connection = prefs.connection.first()
+            if (!currentLink().pollsHub || !connection.isConfigured) return@launch
+            runCatching {
+                client.reportDesk(connection, present = true, awaySec = (awayMs / 1000L).toInt())
+            }
+        }
+    }
+
+    private fun onDeskLeft() {
+        if (!_ui.value.deskPresenceEnabled) return
+        closeConversation()
+        _ui.update { it.copy(deskSleeping = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val connection = prefs.connection.first()
+            if (!currentLink().pollsHub || !connection.isConfigured) return@launch
+            runCatching { client.reportDesk(connection, present = false) }
+        }
+    }
+
     fun onWakeWord(keyword: String = "小岸", turnId: String = "") {
+        noteUserInteraction()
         val interrupting = _ui.value.companionBusy ||
             !_ui.value.companionReply.isNullOrBlank() ||
             !_ui.value.companionHeard.isNullOrBlank()
