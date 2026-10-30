@@ -271,6 +271,24 @@ class FocusConfig:
 
 
 @dataclass
+class DuskConfig:
+    """日落联动（F16）：天黑灯自己亮。
+
+    日落后 ``offset_min`` 分钟开始，``ramp_min`` 分钟内把 ``device`` 的亮度
+    从 0 平滑推到 ``brightness``；过了 ``until`` 就不再推，睡前场景接着降。
+    ``device`` 不写 = 整条关着。``city`` 不写就用手机最近查天气的那座。
+    """
+
+    enabled: bool = False
+    device: str = ""
+    city: str = ""
+    offset_min: int = 30
+    until: str = "22:00"
+    brightness: int = 40
+    ramp_min: int = 45
+
+
+@dataclass
 class SceneConfig:
     """一组「一起动」的设备，可以带一句话和一个语音口令。"""
 
@@ -312,6 +330,7 @@ class HubConfig:
     tokens: list[TokenConfig] = field(default_factory=list)
     scenes: list[SceneConfig] = field(default_factory=list)
     focus: FocusConfig = field(default_factory=FocusConfig)
+    dusk: DuskConfig = field(default_factory=DuskConfig)
     path: Path | None = None
 
     def auth_values(self) -> tuple[str, ...]:
@@ -419,6 +438,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
 
     scenes = _parse_scenes(raw.get("scenes"), devices)
     focus = _parse_focus(raw.get("focus"), scenes)
+    dusk = _parse_dusk(raw.get("dusk"), devices)
 
     return HubConfig(
         name=name,
@@ -438,6 +458,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         tokens=tokens,
         scenes=scenes,
         focus=focus,
+        dusk=dusk,
         path=path,
     )
 
@@ -1148,6 +1169,48 @@ def _parse_focus(raw: Any, scenes: list[SceneConfig]) -> FocusConfig:
     )
 
 
+def _parse_dusk(raw: Any, devices: list[DeviceConfig]) -> DuskConfig:
+    if raw is None or raw is False:
+        return DuskConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("dusk 必须是对象，或用 dusk: false 关掉")
+    device = str(raw.get("device") or "").strip()
+    if not device:
+        return DuskConfig()
+    known = {item.id for item in devices}
+    if device not in known:
+        raise ValueError(f"dusk.device 指向的设备 {device!r} 不存在")
+    until = parse_clock(raw.get("until") or "22:00", "dusk.until")
+    return DuskConfig(
+        enabled=True,
+        device=device,
+        city=str(raw.get("city") or "").strip(),
+        offset_min=_dusk_int(raw, "offset_min", 30, 0, 240),
+        until=until,
+        brightness=_dusk_int(raw, "brightness", 40, 1, 100),
+        ramp_min=_dusk_int(raw, "ramp_min", 45, 1, 240),
+    )
+
+
+def _dusk_int(raw: dict, key: str, default: int, low: int, high: int) -> int:
+    """dusk 的三个整数。`0` 是合法值（offset_min: 0 = 日落即动手），别用 or 吞掉。"""
+    label = f"dusk.{key}"
+    value = raw.get(key)
+    if value is None:
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} 必须是整数") from exc
+    return _between(number, low, high, label)
+
+
+def _between(value: int, low: int, high: int, label: str) -> int:
+    if not low <= value <= high:
+        raise ValueError(f"{label} 要在 {low}–{high} 之间，收到 {value}")
+    return value
+
+
 def scene_to_raw(scene: SceneConfig) -> dict[str, Any]:
     raw: dict[str, Any] = {"id": scene.id, "name": scene.name}
     if scene.on:
@@ -1266,6 +1329,15 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
         if config.focus.off:
             focus_raw["off"] = config.focus.off
         raw["focus"] = focus_raw
+    if config.dusk.enabled:
+        raw["dusk"] = {
+            "device": config.dusk.device,
+            "offset_min": config.dusk.offset_min,
+            "until": config.dusk.until,
+            "brightness": config.dusk.brightness,
+            "ramp_min": config.dusk.ramp_min,
+            **({"city": config.dusk.city} if config.dusk.city else {}),
+        }
     if config.temperature:
         raw["temperature"] = temperature_to_raw(config.temperature)
     if config.pc is not None:

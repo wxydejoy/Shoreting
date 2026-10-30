@@ -80,6 +80,10 @@ _COORD_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)\s*$"
 
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _hourly_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_sun_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+# 日落查询失败的记仇时间：别每分钟都去敲 Open-Meteo
+_SUN_RETRY_SEC = 900.0
+_sun_fail_at: dict[str, float] = {}
 _last_city: str | None = None
 
 
@@ -176,6 +180,56 @@ def fetch_weather(city: str) -> dict[str, Any]:
 def last_city() -> str | None:
     """手机最近一次查过天气的城市；主动播报（天气突变）用同一个地方。"""
     return _last_city
+
+
+SUN_CACHE_TTL_SEC = 6 * 3600.0
+"""日出日落一天只挪一两分钟，缓存六个小时绰绰有余。"""
+
+
+def _hhmm(iso: str) -> str:
+    """`2026-10-31T17:42` → `17:42`（Open-Meteo timezone=auto 的当地时间）。"""
+    match = re.match(r"^\d{4}-\d{2}-\d{2}[T ](\d{1,2}):(\d{2})", iso or "")
+    if not match:
+        return ""
+    return f"{int(match.group(1)):02d}:{match.group(2)}"
+
+
+def fetch_sun(city: str) -> dict[str, Any]:
+    """日出日落（F16 日落联动用）。返回 {"city", "sunrise", "sunset"}，HH:MM。
+
+    失败有 15 分钟记仇期：灯的联动每分钟看一眼，不能把天气源敲穿。
+    """
+    key = (city or "").strip()
+    if not key:
+        raise ValueError("城市为空")
+    now = time.monotonic()
+    cached = _sun_cache.get(key)
+    if cached is not None and now - cached[0] < SUN_CACHE_TTL_SEC:
+        return cached[1]
+    failed = _sun_fail_at.get(key)
+    if failed is not None and now - failed < _SUN_RETRY_SEC:
+        raise ValueError("日落时间刚才没拿到，先等等")
+    name, lat, lon = _resolve(key)
+    query = urllib.parse.urlencode(
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "daily": "sunrise,sunset",
+            "forecast_days": 1,
+            "timezone": "auto",
+        }
+    )
+    body = _get_json(FORECAST_URL + "?" + query)
+    daily = (body or {}).get("daily") or {}
+    sunset = _hhmm(str((daily.get("sunset") or [""])[0]))
+    sunrise = _hhmm(str((daily.get("sunrise") or [""])[0]))
+    if not sunset:
+        _sun_fail_at[key] = now
+        raise ValueError("天气源没有返回日落时间")
+    data = {"city": name, "sunrise": sunrise, "sunset": sunset}
+    _sun_cache[key] = (now, data)
+    _sun_fail_at.pop(key, None)
+    return data
 
 
 def fetch_hourly(city: str) -> dict[str, Any]:

@@ -78,3 +78,56 @@ class TestLastCity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFetchSun(unittest.TestCase):
+    """日出日落（F16）：解析到 HH:MM，失败有记仇期。"""
+
+    def setUp(self) -> None:
+        weather._sun_cache.clear()
+        weather._sun_fail_at.clear()
+        self._orig = weather._get_json
+        self.addCleanup(self._restore)
+
+    def _restore(self) -> None:
+        weather._get_json = self._orig
+        weather._sun_cache.clear()
+        weather._sun_fail_at.clear()
+
+    def test_parses_to_hhmm(self) -> None:
+        weather._get_json = lambda url: {
+            "daily": {"sunrise": ["2026-10-31T06:12"], "sunset": ["2026-10-31T17:42"]}
+        }
+        data = weather.fetch_sun("杭州")
+        self.assertEqual(data["sunset"], "17:42")
+        self.assertEqual(data["sunrise"], "06:12")
+
+    def test_uses_cache(self) -> None:
+        calls: list[str] = []
+        body = {"daily": {"sunrise": ["2026-10-31T06:12"], "sunset": ["2026-10-31T17:42"]}}
+        weather._get_json = lambda url: (calls.append(url), body)[1]
+        weather.fetch_sun("杭州")
+        weather.fetch_sun("杭州")
+        self.assertEqual(len(calls), 1)
+
+    def test_failure_has_grace_period(self) -> None:
+        def boom(url: str) -> dict:
+            raise ValueError("天气源没有返回日落时间")
+
+        weather._get_json = boom
+        with self.assertRaises(ValueError):
+            weather.fetch_sun("杭州")
+        with self.assertRaises(ValueError):
+            weather.fetch_sun("杭州")
+        # 记仇期过后再试一次
+        weather._sun_fail_at.clear()
+        weather._get_json = lambda url: {
+            "daily": {"sunrise": ["2026-10-31T06:12"], "sunset": ["2026-10-31T17:42"]}
+        }
+        self.assertEqual(weather.fetch_sun("杭州")["sunset"], "17:42")
+
+    def test_hhmm_helper(self) -> None:
+        self.assertEqual(weather._hhmm("2026-10-31T09:05"), "09:05")
+        self.assertEqual(weather._hhmm("2026-10-31 9:05"), "09:05")
+        self.assertEqual(weather._hhmm("garbage"), "")
+        self.assertEqual(weather._hhmm(""), "")

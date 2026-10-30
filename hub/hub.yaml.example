@@ -216,3 +216,14 @@ devices:
 # focus:
 #   on: 开黑
 #   off: 退了
+#
+# 日落联动（F16）：天黑灯自己亮，比任何语音都更像有人住。
+# 日落后 offset_min 分钟开始，ramp_min 分钟内把亮度从 0 推到 brightness，
+# 过了 until 就不再推（睡前场景接着降）。device 不写 = 整条关着；
+# city 不写就用手机最近查天气的那座城。全程她不说话，也不占播报配额。
+# dusk:
+#   device: desk-led
+#   offset_min: 30
+#   until: "22:00"
+#   brightness: 40
+#   ramp_min: 45
