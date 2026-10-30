@@ -4,6 +4,8 @@ import cn.weiekko.dock.data.logConnection
 import android.app.Application
 import android.content.ContentResolver
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.provider.OpenableColumns
 import cn.weiekko.dock.DockApp
@@ -29,6 +31,7 @@ import cn.weiekko.dock.data.MediaInfo
 import cn.weiekko.dock.data.MiniConnection
 import cn.weiekko.dock.data.ModuleRect
 import cn.weiekko.dock.data.PcStatus
+import cn.weiekko.dock.data.PresenceReporter
 import cn.weiekko.dock.data.Snapshot
 import cn.weiekko.dock.data.WeatherClient
 import cn.weiekko.dock.data.WeatherInfo
@@ -123,6 +126,45 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private val weatherClient = WeatherClient()
     private val phoneMedia = PhoneMedia(application)
     private val companionVoice = CompanionVoice(application)
+    private val presenceReporter = PresenceReporter(send = { state ->
+        val connection = prefs.connection.first()
+        if (!currentLink().pollsHub || !connection.isConfigured) return@PresenceReporter false
+        withContext(Dispatchers.IO) {
+            runCatching { client.reportPresence(connection, state) }.isSuccess
+        }
+    })
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** 默认网络的 Wi-Fi 状态变化直接喂给在场上报，不吃轮询节奏（Doze 也兜得住）。 */
+    private fun registerNetworkWatch() {
+        if (networkCallback != null) return
+        val manager = getApplication<Application>()
+            .getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(
+                network: android.net.Network,
+                capabilities: NetworkCapabilities,
+            ) {
+                presenceReporter.onWifiChanged(
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                    SystemClock.elapsedRealtime(),
+                )
+            }
+
+            override fun onLost(network: android.net.Network) {
+                presenceReporter.onWifiChanged(false, SystemClock.elapsedRealtime())
+            }
+        }
+        runCatching { manager.registerDefaultNetworkCallback(callback) }
+            .onSuccess { networkCallback = callback }
+    }
+
+    private fun unregisterNetworkWatch() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        getApplication<Application>().getSystemService(ConnectivityManager::class.java)
+            ?.unregisterNetworkCallback(callback)
+    }
 
     private val _ui = MutableStateFlow(DockUiState())
     val ui: StateFlow<DockUiState> = _ui.asStateFlow()
@@ -157,6 +199,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         _ui.update {
             it.copy(backgroundPageUrl = (getApplication() as? DockApp)?.backgrounds?.pageUrl)
         }
+        registerNetworkWatch()
         viewModelScope.launch {
             while (isActive) {
                 val local = phoneMedia.snapshot()
@@ -990,6 +1033,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         closeConversation()
         companionVoice.release()
+        unregisterNetworkWatch()
         super.onCleared()
     }
 
@@ -1185,6 +1229,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                     .map { it.toWinApp() }
                 noteHubUp()
                 noteDeskPc(snapshot.pc?.online)
+                presenceReporter.onPoll(onWifi = onWifi(), reachable = true, nowMs = SystemClock.elapsedRealtime())
                 _ui.update {
                     it.copy(
                         snapshot = snapshot,
@@ -1197,6 +1242,11 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             },
             onFailure = { error ->
                 handleFailure(error)
+                presenceReporter.onPoll(
+                    onWifi = onWifi(),
+                    reachable = error !is HubNetworkException,
+                    nowMs = SystemClock.elapsedRealtime(),
+                )
                 _ui.update { it.copy(loading = false, stale = it.snapshot != null) }
             },
         )
@@ -1252,6 +1302,15 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         hubSleepJob?.cancel()
         hubSleepJob = null
         // 唤醒交给 noteDeskPc：只有 Windows 又开机了才该醒。
+    }
+
+    /** 当前默认网络走不走 Wi-Fi；没有活动网络（纯蜂窝断开）也算不在家。 */
+    private fun onWifi(): Boolean {
+        val manager = getApplication<Application>()
+            .getSystemService(ConnectivityManager::class.java) ?: return false
+        val network = manager.activeNetwork ?: return false
+        val caps = manager.getNetworkCapabilities(network) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
     // ---------------- 工作判定：只看 Windows 探针的 pc.online ----------------
