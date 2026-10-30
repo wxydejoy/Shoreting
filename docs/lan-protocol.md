@@ -5,7 +5,7 @@
 - **安卓**：只实现本文档的客户端。不直连米家，不理解 `did` / `siid` / `piid`，也不知道电脑上要跑哪条命令；电脑性能数字只读 snapshot 里的 `pc`。Mac Mini 监控是另一端口上的 `helm-mini`，不要和 Hub 填反。
 - **Hub**（另一名 agent 编写）：在 Mac / Windows 上跑一个简单 Python 脚本，对内调 [mijia-api](https://github.com/Do1e/mijia-api)、采集本机性能、按白名单启动本机程序，可选转本地 LLM；对外只暴露本文档的 HTTP 接口。
 
-本文档是唯一协议来源。机器可读副本见 [openapi.yaml](./openapi.yaml)。守岸人拓扑与启动顺序见 [companion.md](./companion.md)。
+本文档讲**为什么、时序、坑**；每个接口的字段定义以 [openapi.yaml](./openapi.yaml) 为准，那是唯一的机器可读契约（当前 20 条 path / 21 个方法）。两边会不会漂不靠记性：`python3 scripts/check_protocol.py` 会拿 `server.py` 的 `do_GET` / `do_POST` 逐条比对，代码里有、文档里没有就非零退出，`hub/tests/test_protocol_doc.py` 也盯着这条。守岸人拓扑与启动顺序见 [companion.md](./companion.md)。
 
 ---
 
@@ -106,24 +106,30 @@ Hub 可选注册 mDNS，方便以后自动发现：
 
 ## 4. 接口一览
 
-一共 13 个（companion 可关）：
+字段看 [openapi.yaml](./openapi.yaml)，这里只列「有哪些、谁该打、要不要鉴权」。companion 可关，关掉后这一类全 404。
 
 | 方法 | 路径 | 鉴权 | 用途 |
 |---|---|---|---|
 | `GET` | `/health` | 否 | 探活、确认是 Hub |
 | `GET` | `/v1/snapshot` | 是 | 主屏全部状态（一次拿完） |
 | `POST` | `/v1/devices/{id}/command` | 是 | 控制一个设备，或触发一个 logo 动作 |
+| `GET` | `/v1/weather` | 是 | Hub 代取天气（手机可能只有局域网） |
+| `POST` | `/v1/telemetry` | 是 | Windows 探针上报 CPU / GPU / 进程名 |
+| `POST` | `/v1/login-ticket` | 是 | 托盘换一张 60 秒有效的一次性票据，把浏览器送进 `/chats` |
 | `POST` | `/v1/companion/chat` | 是 | 桌面伴侣一轮对话（配置关闭则 404） |
 | `POST` | `/v1/companion/stop` | 是（本机可免） | 打断当前说话，立刻停 Mini 喇叭 |
 | `POST` | `/v1/companion/announce` | 是 | 让守岸人说一句（微信侧路；安卓不用打） |
 | `POST` | `/v1/companion/read` | 是（本机可免） | 朗读：播放或排队生成 wav。浏览器页是 `GET /read` |
-| `POST` | `/v1/companion/read/jobs/{id}/cancel` | 是（本机可免） | 取消朗读任务。**安卓不要打** |
-| `POST` | `/v1/companion/read/jobs/{id}/replay` | 是（本机可免） | 用该任务的稿再播。**安卓不要打** |
-| `POST` | `/v1/companion/read/jobs/{id}/delete` | 是（本机可免） | 删任务及 wav。**安卓不要打** |
+| `GET` | `/v1/companion/read/jobs` | 是（本机可免） | 朗读任务列表。**安卓不要打** |
+| `POST` | `/v1/companion/read/jobs/{id}/{action}` | 是（本机可免） | `cancel` / `delete` / `replay` 一个朗读任务。**安卓不要打** |
 | `GET` | `/v1/companion/audio/{id}` | 是（本机可免） | 伴侣 wav（`audio_id` 为空或关闭则不要打） |
 | `GET` | `/v1/companion/chats` | 是（本机可免） | 对话原文列表。浏览器页是 `GET /chats` |
-| `GET`/`POST` | `/v1/companion/books` | 是（本机可免） | 睡前朗读书架。**安卓不要打** |
+| `GET`/`POST` | `/v1/companion/books` | 是（本机可免） | 睡前朗读书架 / 上传一本 txt。**安卓不要打** |
+| `GET` | `/v1/companion/books/{id}` | 是（本机可免） | 打开一本书：章节索引 + 书签位置。**安卓不要打** |
+| `GET` | `/v1/companion/books/{id}/chapter/{index}` | 是（本机可免） | 一章的正文。**安卓不要打** |
+| `POST` | `/v1/companion/books/{id}/{action}` | 是（本机可免） | `play` / `pause` / `bookmark`。**安卓不要打** |
 | `GET` | `/v1/companion/story` | 是（本机可免） | 睡前朗读进度与定时。**安卓不要打** |
+| `POST` | `/v1/companion/story/timer` | 是（本机可免） | 睡前定时 0 / 15 / 30 / 45 / 60 分钟。**安卓不要打** |
 
 没有单独的「读温度」「读电脑性能」「跑脚本」「读正在播放」接口。米家温度、logo、电脑监控、正在播放、伴侣是否就绪都在 snapshot 里；点击 logo 和播放键走同一个 command；说话走 companion/chat，再喊唤醒词打断走 companion/stop，声音走 companion/audio。
 
@@ -1049,3 +1055,5 @@ curl -s http://MINI:17891/v1/desk \
 破坏性改动（删字段、改语义、改 URL）必须升到 `/v2`，并保留 `/v1` 直到安卓升级。
 
 兼容改动（新增可选字段、新增 `type`、新增 snapshot 顶层可选对象如 `pc`）可留在 v1。安卓忽略未知字段、未知 `type`（未知类型在主屏显示为只读名称 + 在线状态）。
+
+**加一条接口的固定顺序**：先改 [openapi.yaml](./openapi.yaml)，再改本文第 4 节表格和对应时序，最后写代码，收尾跑一遍 `python3 scripts/check_protocol.py`。反过来做的话，文档里那条记录通常就永远补不上了。
