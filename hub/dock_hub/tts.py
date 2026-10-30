@@ -31,6 +31,8 @@ READ_TIMEOUT_SEC = 90.0
 STOP_TIMEOUT_SEC = 0.8
 # 白噪音开关：跟叫停一个量级，卡了就当没放成
 NOISE_TIMEOUT_SEC = 3.0
+# 本地电台开关：同上
+MUSIC_TIMEOUT_SEC = 3.0
 
 Log = Callable[..., None]
 
@@ -183,6 +185,35 @@ class Tts:
         )
         try:
             with urllib.request.urlopen(req, timeout=NOISE_TIMEOUT_SEC) as resp:
+                raw = resp.read()
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return None
+        try:
+            state = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return state if isinstance(state, dict) else None
+
+    def music(self, action: str = "on", minutes: int | None = None) -> dict[str, Any] | None:
+        """F32 本地电台：把开关转给 TTS 服务，action=off 是停。
+
+        目录里没有歌时 TTS 回 200 + ok=False——这不是请求的错，是她那边
+        没货，状态原样递上去让守岸人照实说。连不上/回的不是 JSON 才是 None。
+        """
+        if not self.configured:
+            return None
+        body: dict[str, Any] = {"action": action}
+        if minutes is not None:
+            body["minutes"] = minutes
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            join_url(self.base_url, "/v1/music"),
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=MUSIC_TIMEOUT_SEC) as resp:
                 raw = resp.read()
         except (urllib.error.URLError, TimeoutError, OSError):
             return None

@@ -44,6 +44,14 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 | `GET` | `/health` | `ok` / `ready` / `play` / `clone` / `voice` / `error` |
 | `POST` | `/v1/speak` | `text`（必填）、`voice`、`language`、`turn_id`。`play_only: true` 时立刻 **202**，合成在后台线程里播。`play: false` 时只合成 wav、不走喇叭（Hub 生成文件用） |
 | `POST` | `/v1/stop` | 立刻停播、丢掉这一轮还没播完的缓冲；正在合成的那轮会中断 |
+| `GET`/`POST` | `/v1/noise` | F31 白噪音：`{"name":"rain","minutes":30}`，`name:"off"` 停；到点自动淡出 |
+| `GET`/`POST` | `/v1/music` | F32 本地电台：`{"minutes":60}` 放、`{"action":"off"}` 停；目录没歌回 `ok:false, error:"empty"` |
+
+## 本地电台（F32）
+
+往 `companion/tts/music/`（或 `--music-dir` 指的目录）里丢 mp3/flac/ogg，
+对她说「放点音乐」就随机洗牌播放，一轮放完再洗一轮；默认一小时后自动淡出。
+音乐和白噪音共用喇叭，谁后到谁说了算；她说话时音乐只是底，音量压在 0.32。
 
 `play_only: false`（或不带）时同步合成，**200** `audio/wav`。Hub 默认 `tts.deliver: false`，走 `play_only`，不把 wav 交给手机。
 

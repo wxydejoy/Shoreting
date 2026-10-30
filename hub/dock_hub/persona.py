@@ -224,6 +224,32 @@ def _pc_num(value: Any) -> float | None:
         return None
 
 
+_SCHEDULE_DAYS = ("今天", "明天", "后天", "大后天")
+_SCHEDULE_MAX = 3
+"""口头上报三件就够了，再多的她记一句「还有几件」。"""
+
+
+def speak_schedule(payload: Any, day_offset: int = 0) -> str:
+    """日程（F13）的口头回答。None = 没配日历，照实认；[] = 那天没安排。"""
+    day = _SCHEDULE_DAYS[day_offset] if 0 <= day_offset < len(_SCHEDULE_DAYS) else "那天"
+    if payload is None:
+        return f"我还不知道你的日程，配好日历就能答{day}的事了。"
+    if not isinstance(payload, list):
+        return "日程我还没读到。"
+    items = [item for item in payload if isinstance(item, dict) and str(item.get("title") or "").strip()]
+    if not items:
+        return f"{day}没安排。"
+    parts: list[str] = []
+    for item in items[:_SCHEDULE_MAX]:
+        title = str(item.get("title")).strip()
+        clock = str(item.get("start") or "").strip()
+        parts.append(f"{clock} {title}" if clock else title)
+    spoken = f"{day}{len(items)}件事：" + "、".join(parts) + "。"
+    if len(items) > _SCHEDULE_MAX:
+        spoken += f"还有{len(items) - _SCHEDULE_MAX}件。"
+    return spoken
+
+
 def speak_memory(payload: dict[str, Any]) -> str:
     memory = payload.get("memory") if isinstance(payload.get("memory"), dict) else {}
     pct = _pc_num(memory.get("percent"))

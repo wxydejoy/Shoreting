@@ -18,6 +18,7 @@ from dock_hub.intents import (
     fold_game_asr,
     infer_brightness,
     infer_control,
+    infer_music,
     infer_noise,
     infer_temp,
     normalize_phrase,
@@ -30,6 +31,7 @@ from dock_hub.intents import (
     parse_volume_action,
     query_kind,
     resolve_skill,
+    schedule_day,
     skill_prompt,
 )
 
@@ -140,6 +142,20 @@ class SkillTest(unittest.TestCase):
         self.assertEqual(query_kind("台灯开着吗"), "light")
         self.assertEqual(query_kind("在播什么歌"), "media")
         self.assertIsNone(query_kind("晚安"))
+
+    def test_query_kind_routes_schedule(self) -> None:
+        """F13：问日程的问题要接住；「帮我安排一下」不是在问日历。"""
+        self.assertEqual(query_kind("今天有什么事"), "schedule")
+        self.assertEqual(query_kind("明天有什么安排"), "schedule")
+        self.assertEqual(query_kind("看一下日程"), "schedule")
+        self.assertIsNone(query_kind("帮我安排一下"))
+
+    def test_schedule_day_picks_the_day(self) -> None:
+        self.assertEqual(schedule_day("今天有什么事"), 0)
+        self.assertEqual(schedule_day("明天有什么事"), 1)
+        self.assertEqual(schedule_day("后天呢"), 2)
+        self.assertEqual(schedule_day("大后天呢"), 3)
+        self.assertEqual(schedule_day("日程"), 0)  # 没提日子就是今天
 
 
 class TeachTest(unittest.TestCase):
@@ -268,6 +284,39 @@ class IndependenceTest(unittest.TestCase):
 
         self.assertIs(companion.infer_control, infer_control)
         self.assertIs(companion.parse_teach, parse_teach)
+
+
+
+
+class InferMusicTest(unittest.TestCase):
+    """F32 本地电台：放/停/多久，点名电脑播放器的不接。"""
+
+    def test_on_variants(self) -> None:
+        self.assertEqual(infer_music("放点音乐"), {"action": "on", "minutes": None})
+        self.assertEqual(infer_music("来首歌吧"), {"action": "on", "minutes": None})
+        self.assertEqual(infer_music("听电台"), {"action": "on", "minutes": None})
+
+    def test_named_artist_stays_none(self) -> None:
+        # 点了歌手/歌名的，本地电台满足不了，让她自己想办法
+        self.assertIsNone(infer_music("放首周杰伦的歌"))
+
+    def test_minutes(self) -> None:
+        self.assertEqual(infer_music("放点音乐 45 分钟"), {"action": "on", "minutes": 45})
+
+    def test_off_variants(self) -> None:
+        self.assertEqual(infer_music("把音乐停了"), {"action": "off"})
+        self.assertEqual(infer_music("别放歌了"), {"action": "off"})
+        self.assertEqual(infer_music("音乐关掉"), {"action": "off"})
+
+    def test_player_hints_stay_none(self) -> None:
+        # 电脑侧播放器归 media 键管，本地电台不抢
+        self.assertIsNone(infer_music("在电脑上放点音乐"))
+        self.assertIsNone(infer_music("帮我开网易云音乐"))
+
+    def test_plain_talk_stays_none(self) -> None:
+        self.assertIsNone(infer_music("今天想听什么歌呢"))
+        self.assertIsNone(infer_music(""))
+        self.assertIsNone(infer_music("这首歌叫什么名字"))
 
 
 if __name__ == "__main__":

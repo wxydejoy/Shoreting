@@ -4,7 +4,7 @@ import json
 import secrets
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import urllib.error
 import urllib.request
@@ -472,7 +472,10 @@ class DockHub:
         return out
 
     def _morning_text(self, now: datetime) -> str:
-        """早间播报正文：问好 + 室温。拿不到的那一样就跳过，不硬凑。"""
+        """早间播报正文（F8）：问好 + 室温 + 外面天气 + 今天第一件事（F13）。
+
+        拿不到的那一样就跳过，不硬凑；一分钟内说完，不追问。
+        """
         parts: list[str] = []
         if now.hour < 11:
             parts.append("早上好。")
@@ -485,8 +488,60 @@ class DockHub:
         spoken = speak_temp(temp, "")
         if "还没有" not in spoken:
             parts.append(spoken)
+        outside = self._outside_line()
+        if outside:
+            parts.append(outside)
+        first = self._first_event_line(now)
+        if first:
+            parts.append(first)
+            return "".join(parts)
         parts.append("今天也慢慢来。")
         return "".join(parts)
+
+    def _outside_line(self) -> str:
+        """外面天气那半句（F8）。城市没着落或源挂了就空着。"""
+        try:
+            from dock_hub.weather import fetch_weather, last_city
+
+            city = last_city()
+            if not city:
+                return ""
+            data = fetch_weather(city)
+            celsius = float(data.get("celsius"))
+            condition = str(data.get("condition") or "").strip()
+            return f"外面{celsius:g}度{('，' + condition) if condition else ''}。"
+        except Exception:  # noqa: BLE001 - 天气缺席不能拖累简报
+            return ""
+
+    def _first_event_line(self, now: datetime) -> str:
+        """今天第一件事那半句（F13）。没配日历就空着，配了没安排就说没安排。"""
+        try:
+            events = self._calendar_events(0)
+        except Exception:  # noqa: BLE001
+            return ""
+        if events is None:
+            return ""
+        if not events:
+            return "今天没安排。"
+        first = events[0]
+        title = str(first.get("title") or "").strip()
+        if not title:
+            return ""
+        clock = str(first.get("start") or "").strip()
+        return f"今天第一件事{' ' + clock if clock else ''}，{title}。"
+
+    def _calendar_events(self, day_offset: int = 0) -> list[dict[str, str]] | None:
+        """某天的日程（F13）：0 今天、1 明天。没配日历返回 None。
+
+        拉取在 CalendarFeed 里带缓存，语音和早间同问一天也只拉一回。
+        """
+        cfg = self.config.calendar
+        if cfg is None:
+            return None
+        from dock_hub.calendar import feed_for
+
+        day = datetime.now().astimezone().date() + timedelta(days=day_offset)
+        return feed_for(cfg.url).events(day)
 
     def _start_proactive(self) -> None:
         """每半分钟问一次「有没有到点的话要说」。关着就不起线程。"""
@@ -854,6 +909,8 @@ class DockHub:
                 "notify": self.relay_to_phone,
                 "power": self.power_action,
                 "noise": self.companion_noise,
+                "music": self.companion_music,
+                "calendar": self._calendar_events,
                 "scenes": [
                     {
                         "id": item.id,
@@ -1056,6 +1113,24 @@ class DockHub:
             "ok": True,
             "name": state.get("name"),
             "minutes": state.get("minutes") or 30,
+            "seconds_left": state.get("seconds_left"),
+        }
+
+    def companion_music(self, act: dict[str, Any]) -> dict[str, Any]:
+        """F32 本地电台：转给 Mini 的 TTS 服务（`:18100 /v1/music`）。
+
+        目录里没歌时 TTS 回 ok=False——那不是链路坏了，是她那边没货，
+        照实递上去让守岸人说「还没有能放的音乐」，别装。
+        """
+        action = "off" if act.get("action") == "off" else "on"
+        state = self.companion.tts.music(action, act.get("minutes"))
+        if state is None:
+            raise HubError("tts_unavailable", "音乐没放成")
+        if not state.get("ok"):
+            return {"ok": False, "error": state.get("error") or "empty"}
+        return {
+            "ok": True,
+            "minutes": state.get("minutes") or 60,
             "seconds_left": state.get("seconds_left"),
         }
 
