@@ -304,6 +304,7 @@ class WakeWordService : Service() {
         var gate = UtteranceGate()
         var vadMs = 0L
         var bargeMs = 0L
+        var partial = StablePartial()
 
         while (running) {
             if (micGap) {
@@ -363,6 +364,7 @@ class WakeWordService : Service() {
                     asrAt = 0L
                     loggedPartial = false
                     gate = UtteranceGate()
+                    partial = StablePartial()
                 }
                 if (skipMs > 0L) {
                     skipMs -= dtMs
@@ -378,18 +380,22 @@ class WakeWordService : Service() {
                     recognizer.decode(stream)
                 }
                 val text = AsrModels.display(recognizer.getResult(stream).text)
-                if (text.isNotBlank() && text != lastEmitted) {
-                    lastEmitted = text
+                if (text.isNotBlank()) {
                     gate.noteHeard()
-                    if (!loggedPartial) {
-                        loggedPartial = true
-                        HelmLatency.log(
-                            currentTurn,
-                            "asr_partial",
-                            "ms=${now - asrAt} chars=${text.length}",
-                        )
+                    lastEmitted = text
+                    // 只往后长 + 节流：字幕别抖，也别一句话重组十几次主屏
+                    val fresh = partial.offer(text, now)
+                    if (fresh != null) {
+                        if (!loggedPartial) {
+                            loggedPartial = true
+                            HelmLatency.log(
+                                currentTurn,
+                                "asr_partial",
+                                "ms=${now - asrAt} chars=${fresh.length}",
+                            )
+                        }
+                        emitTranscript(fresh, settled = false)
                     }
-                    emitTranscript(text, settled = false)
                 }
                 gate.onAudio(audioRms(samples), dtMs)
                 val reason = gate.shouldStop(processedMs)
