@@ -1,0 +1,94 @@
+# 一条流水线，三件事：Python 三个包的测试、协议文档和代码对账、安卓单元测试。
+#
+# 只做「能不能进主干」的判断，不做发布——发布是 scripts/publish-release.ps1 的事，
+# 那一步要有机器、要打 exe、要传 Release，不适合塞进 Actions。
+#
+# 没覆盖的：真机/模拟器的 instrumented 测试（没有设备可用），唤醒词的实际识别效果，
+# 米家云和 LLM 的联调。这几样只能上机验，CI 不假装能验。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python · ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [hub, mini, console]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 装依赖
+        run: |
+          python -m pip install --upgrade pip
+          case "${{ matrix.suite }}" in
+            hub) pip install -e ./hub ;;
+            mini) pip install "psutil>=6.0" ;;
+            console) echo "console 只用标准库" ;;
+          esac
+      - name: 跑测试
+        working-directory: ${{ matrix.suite }}
+        run: |
+          case "${{ matrix.suite }}" in
+            # hub/tests 是包（有 __init__.py），用 -t . 从当前目录起算
+            hub) python -m unittest discover -s tests -t . ;;
+            # mini / console 的 tests 不是包，靠 PYTHONPATH 把被测包挂上去
+            *) PYTHONPATH=. python -m unittest discover -s tests -p 'test_*.py' ;;
+          esac
+
+  protocol:
+    name: 协议文档 ↔ server.py 对账
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # 故意不装依赖：这个脚本只用标准库，装不了东西的地方也能跑
+      - name: 对账
+        run: python3 scripts/check_protocol.py
+      - name: openapi.yaml 得是合法 YAML
+        run: |
+          pip install "PyYAML>=6.0"
+          python -c "import yaml, pathlib; yaml.safe_load(pathlib.Path('docs/openapi.yaml').read_text(encoding='utf-8'))"
+
+  android:
+    name: 安卓单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      # sherpa-onnx 的 aar 不入库（154MB），本地靠 fetch-wake-word.sh 取。
+      # 单元测试只需要 aar 里的类，不需要那几个 onnx 模型，所以这里只取 aar。
+      - uses: actions/cache@v4
+        id: aar
+        with:
+          path: android/app/libs/sherpa-onnx-1.13.6.aar
+          key: sherpa-onnx-aar-1.13.6
+      - name: 取 sherpa-onnx aar
+        if: steps.aar.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p android/app/libs
+          curl -L --fail -o android/app/libs/sherpa-onnx-1.13.6.aar \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.6/sherpa-onnx-1.13.6.aar
+      - name: testDebugUnitTest
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest
