@@ -630,13 +630,13 @@ class Companion:
         run = self._world.get("scene")
         if not scenes or not callable(run):
             return None
-        needle = _normalize_phrase(text)
+        needle = normalize_phrase(text)
         if not needle:
             return None
         hits: list[tuple[int, dict[str, Any]]] = []
         for item in scenes:
             for phrase in item.get("phrases") or []:
-                key = _normalize_phrase(str(phrase))
+                key = normalize_phrase(str(phrase))
                 if key and key in needle:
                     hits.append((len(key), item))
                     break

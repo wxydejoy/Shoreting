@@ -38,6 +38,7 @@ VAR_PREFIX = re.compile(r"path\.startswith\(\s*(\w+)\s*\)")
 # 左边 (方法, 模板)，右边这几段字面量必须同时出现在同一个 do_XXX 里。
 COMPOSED = [
     ("POST", "/v1/devices/{id}/command", ('"/v1/devices/"', '"/command"')),
+    ("POST", "/v1/scenes/{id}", ('"/v1/scenes/"',)),
 ]
 
 DOCUMENTED_KINDS = ("/v1", "/health")

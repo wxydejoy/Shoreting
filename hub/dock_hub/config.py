@@ -68,6 +68,9 @@ class TokenConfig:
     id: str
     value: str
     name: str | None = None
+
+
+@dataclass
 class MorningConfig:
     """早间播报：到点说一句，一天一次。"""
 
@@ -1110,6 +1113,9 @@ def schedule_to_raw(sched: ScheduleConfig) -> dict[str, Any]:
         raw["off"] = list(sched.off)
     if sched.say:
         raw["say"] = sched.say
+    return raw
+
+
 def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
     raw: dict[str, Any] = {
         "enabled": True,
