@@ -74,6 +74,9 @@ mini:
 #   presence:
 #     home_text: "回来了。"   # 手机连上家里 WiFi
 #     desk_text: "回来了。"   # 摄像头看到人回座（离座满 5 分钟才算）
+#   # F27 桌面周报：周日晚 20:00 她把这一周念一句（在桌/朗读/最晚/说话/开机）。
+#   # 数据在 companion-stats.jsonl，网页 http://<hub>:17890/week。写空串 = 不念
+#   # weekly_at: "20:00"
 
 # 桌面伴侣（本地 LLM + Mini TTS）。整段删掉或 enabled: false → snapshot.companion = null
 # Hub 在 Mini 上填 127.0.0.1

@@ -107,3 +107,8 @@ def chats_page_html() -> bytes:
 
 def read_page_html() -> bytes:
     return asset_page_html("app.html")
+
+
+def week_page_html() -> bytes:
+    """F27 桌面周报页（独立小页，不走 app.html 那套三栏）。"""
+    return asset_page_html("week.html")

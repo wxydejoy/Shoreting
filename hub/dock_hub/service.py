@@ -30,6 +30,7 @@ from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
+from dock_hub.weekly import DailyLedger, weekly_line
 from dock_hub.lanes import Lanes
 from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
@@ -111,6 +112,11 @@ class DockHub:
             (config.path or default_config_path()).with_name("companion-memory.yaml")
         )
         self.companion.set_memory(self.memory)
+        # F27 桌面周报：对话/朗读/在桌/开关机的边沿按天记账，周日晚她自己总结
+        self.ledger = DailyLedger(
+            (config.path or default_config_path()).with_name("companion-stats.jsonl")
+        )
+        self.companion.on_read_done = self.ledger.note_read
         self._attach_books()
         self._desk_lock = threading.Lock()
         self._desk_temp: dict[str, Any] | None = None
@@ -124,6 +130,7 @@ class DockHub:
             config.proactive,
             speak=self.companion.speak_up,
             compose_morning=self._morning_text,
+            compose_weekly=self._weekly_text,
         )
         self._alert_state = Sustained()
         self._sedentary = SedentaryWatch()
@@ -378,6 +385,10 @@ class DockHub:
         def loop() -> None:
             while not stop.wait(30.0):
                 try:
+                    self.ledger.tick(datetime.now().astimezone())
+                except Exception as exc:  # noqa: BLE001 - 台账坏了不该连累播报
+                    logs.swallowed("周报台账tick", exc)
+                try:
                     said = self.proactive.tick(datetime.now().astimezone())
                     if said.spoke:
                         print(f"[proactive] {said.text}")
@@ -542,6 +553,12 @@ class DockHub:
         if self._desk_pc_online is on:
             return
         self._desk_pc_online = on
+        if on:
+            # F27：False→True 这条边沿就是「开了一次机」
+            try:
+                self.ledger.note_boot()
+            except Exception as exc:  # noqa: BLE001 - 台账坏了不该连累灯控
+                logs.swallowed("周报开机记账", exc)
         self.follow_pc(on)
         self.note_change()
 
@@ -830,8 +847,17 @@ class DockHub:
         # F28：她早就记住的事随对话注入，自然用上
         facts = self.memory.facts()
         out = self.companion.chat(body or {}, facts)
+        self.ledger.note_chat()
         self.note_change()
         return out
+
+    def companion_week(self) -> dict[str, Any]:
+        """F27 周报：/week 页的数据。"""
+        summary = self.ledger.summary()
+        return {"summary": summary, "line": weekly_line(summary)}
+
+    def _weekly_text(self) -> str:
+        return weekly_line(self.ledger.summary())
 
     def companion_memory(self) -> dict[str, Any]:
         """设置页「她记得的事」：列表 + 上限，前端渲染成可删的条目。"""
@@ -1004,6 +1030,11 @@ class DockHub:
             previous = self._at_desk
             self._at_desk = "present" if present else "away"
             self._at_desk_at = now.isoformat(timespec="seconds")
+        # F27：在桌时长按边沿积分，tick 里带上限防卡死
+        try:
+            self.ledger.note_desk(present, now)
+        except Exception as exc:  # noqa: BLE001 - 台账坏了不该连累问候
+            logs.swallowed("周报在桌记账", exc)
         said: Said | None = None
         if previous == "away" and present:
             gap = away_sec if away_sec is not None else 0

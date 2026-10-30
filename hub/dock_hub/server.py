@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from dock_hub.accesslog import AccessLog
 from dock_hub.books import MAX_BOOK_BYTES
-from dock_hub.chat_log import asset_page_html, chats_page_html, read_page_html
+from dock_hub.chat_log import asset_page_html, chats_page_html, read_page_html, week_page_html
 from dock_hub.errors import HubError
 from dock_hub.service import DockHub
 from dock_hub.setup_ui import is_local_client
@@ -155,6 +155,16 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     return
                 if path == "/read":
                     self._html(200, read_page_html(), "text/html; charset=utf-8")
+                    return
+                if path == "/week":
+                    # F27 桌面周报：这一周你在桌前多久、读了多少。页面本身不设防，
+                    # 数据接口（/v1/companion/week）和 /chats 一样鉴权
+                    self._html(200, week_page_html(), "text/html; charset=utf-8")
+                    return
+                if path == "/v1/companion/week":
+                    if not self._chats_ok():
+                        raise HubError("unauthorized", "Token 不正确")
+                    self._json(200, hub.companion_week())
                     return
                 if path == "/v1/companion/read/jobs":
                     if not self._chats_ok():

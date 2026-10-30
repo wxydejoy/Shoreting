@@ -116,6 +116,78 @@ class TestMorning(unittest.TestCase):
         self.assertTrue(bot.tick(next_day).spoke)
 
 
+class TestWeekly(unittest.TestCase):
+    """F27：周日晚把这一周念一遍。"""
+
+    def _proactive(self, speaker=None, line="这周你坐了六个小时。"):
+        from dock_hub.config import ProactiveConfig
+
+        return Proactive(
+            ProactiveConfig(enabled=True, weekly_at="20:00"),
+            speak=speaker or FakeSpeaker(),
+            compose_weekly=lambda: line,
+        )
+
+    @staticmethod
+    def _weekday(wanted: int, hour: int, minute: int = 0) -> datetime:
+        """造一个「下一个周 wanted」的时刻。tick 全程用传入的 now，不碰真实时钟。"""
+        today = datetime.now().astimezone().date()
+        day = today + timedelta(days=(wanted - today.isoweekday()) % 7)
+        return datetime(day.year, day.month, day.day, hour, minute)
+
+    def _sunday(self, hour: int, minute: int = 0) -> datetime:
+        return self._weekday(7, hour, minute)
+
+    def test_sunday_evening_says_once(self) -> None:
+        speaker = FakeSpeaker()
+        bot = self._proactive(speaker)
+        said = bot.tick(self._sunday(20, 0))
+        self.assertTrue(said.spoke)
+        self.assertEqual(bot.tick(self._sunday(20, 5)).reason, "idle")
+        self.assertEqual(len(speaker.said), 1)
+
+    def test_not_sunday_stays_silent(self) -> None:
+        bot = self._proactive()
+        self.assertEqual(bot.tick(self._weekday(6, 20, 0)).reason, "idle")
+        self.assertEqual(bot.tick(self._weekday(1, 20, 0)).reason, "idle")
+
+    def test_empty_line_marks_day_without_speaking(self) -> None:
+        speaker = FakeSpeaker()
+        bot = self._proactive(speaker, line="")
+        self.assertEqual(bot.tick(self._sunday(20, 0)).reason, "empty")
+        # 台账为空也不值得每半分钟重算：当天直接翻篇
+        self.assertEqual(bot.tick(self._sunday(20, 5)).reason, "idle")
+        self.assertEqual(speaker.said, [])
+
+    def test_window_is_bounded(self) -> None:
+        bot = self._proactive()
+        self.assertEqual(bot.tick(self._sunday(19, 59)).reason, "idle")
+        late = self._sunday(20, 0) + MORNING_WINDOW + timedelta(minutes=5)
+        self.assertEqual(bot.tick(late).reason, "idle")
+
+    def test_blocked_retry_same_window(self) -> None:
+        speaker = FakeSpeaker()
+        speaker.allow = False
+        bot = self._proactive(speaker)
+        self.assertEqual(bot.tick(self._sunday(20, 0)).reason, "blocked")
+        speaker.allow = True
+        self.assertTrue(bot.tick(self._sunday(20, 2)).spoke)
+
+    def test_alert_no_longer_cancels_morning(self) -> None:
+        """回归：以前 _say 会顺手把 _morning_day 标掉，任何一句主动话都顶掉当天早报。"""
+        from dock_hub.config import MorningConfig, ProactiveConfig
+
+        speaker = FakeSpeaker()
+        bot = Proactive(
+            ProactiveConfig(enabled=True, morning=MorningConfig(at="07:30")),
+            speak=speaker,
+            compose_morning=lambda now: "早。",
+        )
+        self.assertTrue(bot.alert("temp", "有点热。", at(7, 0)).spoke)
+        self.assertTrue(bot.tick(at(7, 31)).spoke)
+        self.assertEqual(speaker.said, ["有点热。", "早。"])
+
+
 class TestGates(unittest.TestCase):
     def test_disabled(self) -> None:
         from dock_hub.config import ProactiveConfig

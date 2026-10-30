@@ -194,6 +194,29 @@ class ProtocolTest(unittest.TestCase):
         status, body = self._request("DELETE", "/v1/companion/memory/a/b")
         self.assertEqual(status, 404)
 
+    def test_companion_week_endpoints(self) -> None:
+        # F27：/week 页 + 数据接口。台账空也要给全形状，页面才有的渲染
+        status, body = self._request("GET", "/v1/companion/week")
+        self.assertEqual(status, 200)
+        self.assertIn("line", body)
+        summary = body["summary"]
+        self.assertEqual(len(summary["days"]), 7)
+        self.assertIn("desk_sec", summary["total"])
+        self.assertIn("delta", summary)
+
+        self.hub.ledger.note_chat()
+        status, body = self._request("GET", "/v1/companion/week")
+        self.assertEqual(body["summary"]["total"]["chats"], 1)
+
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/week")
+        resp = conn.getresponse()
+        html = resp.read().decode("utf-8")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("text/html", resp.getheader("Content-Type") or "")
+        self.assertIn("桌面周报", html)
+        conn.close()
+
     def test_companion_read_page(self) -> None:
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request("GET", "/read")

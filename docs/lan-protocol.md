@@ -929,6 +929,36 @@ Authorization: Bearer <token>
 - 超 60 条先挤 `chat` 来源里最旧的，你亲手教的（`taught`）最后动。
 - 本机直连免 Token（同 `/chats`）；跨机要 Bearer。
 
+### 6.16 `GET /v1/companion/week`
+
+桌面周报（F27）。**安卓不打**——这是给人看的页面，`/week`（HTML）配这条数据接口。
+浏览器打开 `/week`，鉴权与 `/chats` 同一套（本机直连免 Token，跨机走 cookie / Bearer）。
+
+数据来自 `companion-stats.jsonl`（hub.yaml 同目录）：对话、朗读、在桌、开关机的
+边沿按天记账，一行一天，留 90 天。
+
+**200**
+
+```json
+{
+  "line": "这周你在桌前坐了 31 个小时，比上周少 4 个小时，我们说了 89 句话。",
+  "summary": {
+    "days": [
+      {"date": "2026-10-31", "weekday": 6, "desk_sec": 21600, "read_sec": 1200,
+       "chats": 34, "boots": 2, "last_at": "23:52"}
+    ],
+    "total": {"desk_sec": 111600, "read_sec": 4800, "chats": 89, "boots": 9},
+    "delta": {"desk_sec": -14400, "read_sec": 1200, "chats": 12, "boots": 2},
+    "latest_at": "23:52"
+  }
+}
+```
+
+- `days` 固定 7 条（含今天，旧→新），缺的日子补零。
+- `delta` 是这 7 天减去再上一个 7 天。
+- `line` 是周日晚 20:00（`proactive.weekly_at`）她会念的那句；台账空时是空串，她不开口。
+- 在桌时长按在场边沿积分，单段上限 2 小时（安卓断连卡状态最多虚记这么多）。
+
 ---
 
 ## 7. 错误格式
