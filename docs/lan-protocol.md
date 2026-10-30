@@ -735,13 +735,15 @@ Content-Type: application/json
   "ok": true,
   "actions": [
     {"id": "lamp", "on": false, "ok": true},
-    {"id": "desk-lamp", "on": true, "brightness": 35, "ok": true}
+    {"id": "desk-lamp", "on": true, "brightness": 35, "ok": true},
+    {"id": "steam", "run": true, "ok": true}
   ],
   "said": true
 }
 ```
 
-- 顺序固定：先 `on` 的设备，再带亮度的，最后 `off` 的；一台一台来，不并发。
+- 顺序固定：先 `on` 的设备，再带亮度的，最后 `off` 的，然后是 `run` 的启动项；一台一台来，不并发。
+- 场景可以带 `run`（一键工作区）：启动项 id 列表，复用 `/v1/devices/{id}/command` 的 `run` 那条路；单个启动失败不影响其余，返回项是 `{"id": "steam", "run": true, "ok": false, "code": "offline", "message": "..."}`。
 - 单个设备失败不影响其余。整体 `ok` 是 `false`，失败那一项带 `code` / `message`，取值同 §7。
 - `said` 只表示「Hub 正在让伴侣念场景里那句话」，说话是异步的，接口不等 TTS。伴侣关着或场景没写 `say` 就是 `false`。
 - 未知 id → `404` `not_found`。米家未登录时米家设备按 §7 报 `login_required`，不影响 `ws2812`。

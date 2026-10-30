@@ -49,6 +49,12 @@ def _raw(**over):
     return base
 
 
+def _with_steam():
+    return _raw()["devices"] + [
+        {"id": "steam", "name": "Steam", "type": "action", "run": {"program": "/bin/echo"}}
+    ]
+
+
 class SceneConfigTest(unittest.TestCase):
     def test_parses_scene_fields(self) -> None:
         cfg = parse_config(_raw())
@@ -89,6 +95,30 @@ class SceneConfigTest(unittest.TestCase):
             parse_config(_raw(devices=devices, scenes=[{"id": "x", "name": "X", "on": ["steam"]}]))
         self.assertIn("启动项", str(ctx.exception))
 
+    def _with_steam(self):
+        return _with_steam()
+
+    def test_run_accepts_action_devices(self) -> None:
+        cfg = parse_config(
+            _raw(
+                devices=_with_steam(),
+                scenes=[{"id": "work", "name": "开工", "run": ["steam"]}],
+            )
+        )
+        self.assertEqual(cfg.scenes[0].run, ["steam"])
+
+    def test_run_rejects_non_action_devices(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            parse_config(
+                _raw(scenes=[{"id": "x", "name": "X", "run": ["lamp"]}])
+            )
+        self.assertIn("不是启动项", str(ctx.exception))
+
+    def test_run_rejects_unknown_device(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            parse_config(_raw(scenes=[{"id": "x", "name": "X", "run": ["ghost"]}]))
+        self.assertIn("ghost", str(ctx.exception))
+
     def test_duplicate_id_is_rejected(self) -> None:
         scene = {"id": "x", "name": "X", "on": ["lamp"]}
         with self.assertRaises(ValueError) as ctx:
@@ -122,6 +152,17 @@ class SceneConfigTest(unittest.TestCase):
     def test_no_scenes_key_means_empty(self) -> None:
         cfg = parse_config({"name": "study", "token": TOKEN, "devices": []})
         self.assertEqual(cfg.scenes, [])
+
+    def test_run_round_trips(self) -> None:
+        cfg = parse_config(
+            _raw(
+                devices=_with_steam(),
+                scenes=[{"id": "work", "name": "开工", "run": ["steam"], "on": ["lamp"]}],
+            )
+        )
+        again = parse_config(hub_config_to_raw(cfg))
+        self.assertEqual(again.scenes[0].run, ["steam"])
+        self.assertEqual(hub_config_to_raw(cfg)["scenes"][0]["run"], ["steam"])
 
 
 class RunSceneTest(unittest.TestCase):
@@ -175,6 +216,53 @@ class RunSceneTest(unittest.TestCase):
         with self.assertRaises(HubError) as ctx:
             self.hub.run_scene("nope")
         self.assertEqual(ctx.exception.status, 404)
+
+    def test_run_steps_come_after_lights(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        hub = DockHub(
+            parse_config(
+                _raw(
+                    devices=_with_steam(),
+                    scenes=[{"id": "work", "name": "开工", "on": ["lamp"], "run": ["steam"]}],
+                ),
+                Path(tmp.name) / "hub.yaml",
+            )
+        )
+        self.addCleanup(hub.reporter.stop)
+        launches: list[str] = []
+        with patch.object(hub, "command"), patch.object(
+            hub, "_command_action", side_effect=lambda cfg, body: launches.append(cfg.id)
+        ):
+            result = hub.run_scene("work", say=False)
+        self.assertEqual(launches, ["steam"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["actions"][-1], {"id": "steam", "run": True, "ok": True})
+
+    def test_run_failure_does_not_stop_lights_report(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        hub = DockHub(
+            parse_config(
+                _raw(
+                    devices=_with_steam(),
+                    scenes=[{"id": "work", "name": "开工", "off": ["lamp"], "run": ["steam"]}],
+                ),
+                Path(tmp.name) / "hub.yaml",
+            )
+        )
+        self.addCleanup(hub.reporter.stop)
+
+        def boom(cfg, body):
+            raise HubError("offline", "电脑未开机")
+
+        with patch.object(hub, "command"), patch.object(hub, "_command_action", side_effect=boom):
+            result = hub.run_scene("work", say=False)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["actions"][0]["ok"], True)  # 灯不背锅
+        run_item = result["actions"][1]
+        self.assertFalse(run_item["ok"])
+        self.assertEqual(run_item["code"], "offline")
 
     def test_voice_is_skipped_when_companion_off(self) -> None:
         with patch.object(self.hub, "command"):
