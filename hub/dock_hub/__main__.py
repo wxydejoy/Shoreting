@@ -6,6 +6,8 @@ import sys
 import threading
 from pathlib import Path
 
+from dock_hub import logs
+
 LOG_PATH = Path.home() / ".config" / "dock-hub" / "hub.log"
 _SHUTDOWN_HANDLERS: list[object] = []
 
@@ -20,8 +22,8 @@ def _install_shutdown_hook(fn) -> None:
         state["done"] = True
         try:
             fn()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - 退出钩子里不能抛
+            logs.swallowed("退出钩子", exc)
 
     import atexit
 
@@ -226,12 +228,12 @@ def _run_with_tray(hub: DockHub, *, login_async: bool = False) -> int:
         print("Hub 已停止", flush=True)
         try:
             hub.follow_pc(False)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - 停服时尽力而为
+            logs.swallowed("停服：取消跟随 PC", exc)
         try:
             hub.pc.stop()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logs.swallowed("停服：停止 PC 采样", exc)
         server.shutdown()
         server.server_close()
 

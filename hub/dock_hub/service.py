@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from dock_hub import PROTOCOL
+from dock_hub import PROTOCOL, logs
 from dock_hub.chat_log import ChatLog, chat_log_path
 from dock_hub.companion import Companion
 
@@ -931,8 +931,8 @@ class DockHub:
         self._refreshing_mijia = True
         try:
             self._pull_mijia_desk()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - 后台刷新失败不能拖垮请求线程
+            logs.swallowed("后台刷新米家设备缓存", exc)
         finally:
             self._refreshing_mijia = False
 

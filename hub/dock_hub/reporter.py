@@ -9,6 +9,7 @@ import urllib.request
 from typing import Any, Callable
 from urllib.parse import urljoin
 
+from dock_hub import logs
 from dock_hub.config import MiniLinkConfig
 
 
@@ -28,8 +29,8 @@ class DeskReporter:
             return
         try:
             self.remember({"windows": self._payload()})
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - 首次上报失败，后台线程会再来
+            logs.swallowed("上报桌面状态（首次）", exc)
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="desk-report", daemon=True)
         self._thread.start()

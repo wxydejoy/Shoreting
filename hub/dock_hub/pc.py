@@ -4,6 +4,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
+from dock_hub import logs
+
 try:
     import psutil
 except ImportError:  # pragma: no cover
@@ -141,8 +143,8 @@ class PcSampler:
             try:
                 temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
                 gpu["temp_celsius"] = _round(float(temp))
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - 部分驱动不给温度，有占用率就够
+                logs.swallowed("读取 GPU 温度", exc)
             if mem.total:
                 gpu["vram_percent"] = _round(mem.used / mem.total * 100)
                 gpu["vram_used_gb"] = _round(mem.used / (1024**3))
@@ -198,8 +200,8 @@ class PcSampler:
                 return average
             if others:
                 return sum(others) / len(others)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - LHM 没装/没开就走 WMI
+            logs.swallowed("读取 CPU 温度（LHM）", exc)
         return _wmi_cpu_temp()
 
 
