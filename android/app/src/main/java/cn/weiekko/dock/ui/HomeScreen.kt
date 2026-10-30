@@ -515,6 +515,26 @@ fun HomeScreen(
                 )
             }
 
+            // 免唤醒连续对话：窗口开着时屏幕边缘一圈很淡的呼吸光——「我在听」
+            if (state.conversationOpen && !state.hubSleeping && !state.editing) {
+                val converse = rememberInfiniteTransition(label = "converse")
+                val glow = converse.animateFloat(
+                    initialValue = 0.08f,
+                    targetValue = 0.26f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1600),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "glow",
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .border(3.dp, MaterialTheme.colorScheme.primary.copy(alpha = glow.value))
+                        .pointerInput(Unit) {},
+                )
+            }
+
             if (state.voiceListening) {
                 WakeListeningChip(
                     text = state.voiceText,

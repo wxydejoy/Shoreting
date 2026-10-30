@@ -45,6 +45,8 @@ import cn.weiekko.dock.data.snap
 import cn.weiekko.dock.data.toWinApp
 import cn.weiekko.dock.media.PhoneMedia
 import cn.weiekko.dock.power.ScreenCommand
+import cn.weiekko.dock.voice.ConversationBus
+import cn.weiekko.dock.voice.ConversationWindow
 import cn.weiekko.dock.voice.CompanionVoice
 import cn.weiekko.dock.voice.HelmLatency
 import kotlinx.coroutines.CancellationException
@@ -99,6 +101,7 @@ data class DockUiState(
     val hubSleeping: Boolean = false,
     val wakeWordEnabled: Boolean = true,
     val voiceListening: Boolean = false,
+    val conversationOpen: Boolean = false,
     val voiceText: String = "",
     val voiceSettled: Boolean = false,
     val layout: DockLayout = DockLayout(),
@@ -145,6 +148,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private var companionJob: Job? = null
     private var subtitleJob: Job? = null
     private var voiceTurnId = ""
+    private val conversationWindow = ConversationWindow()
+    private var conversationJob: Job? = null
     private var voiceTurnAt = 0L
     private var subtitleAt = 0L
 
@@ -355,7 +360,10 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 voiceSettled = if (enabled) it.voiceSettled else false,
             )
         }
-        if (!enabled) listeningJob?.cancel()
+        if (!enabled) {
+            listeningJob?.cancel()
+            closeConversation()
+        }
         viewModelScope.launch {
             prefs.saveWakeWordEnabled(enabled)
         }
@@ -405,10 +413,16 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (!settled) return
         val spoken = text.trim()
+        val now = HelmLatency.now()
         if (spoken.isNotEmpty() && companionReady()) {
+            conversationWindow.onInput(now)
             _ui.update { it.copy(voiceListening = false) }
             hearCompanion(spoken)
             return
+        }
+        if (spoken.isEmpty()) {
+            conversationWindow.onMiss(now)
+            if (!conversationWindow.listening(now)) closeConversation()
         }
         val hold = if (spoken.isEmpty()) VOICE_MISS_MS else VOICE_HOLD_MS
         listeningJob = viewModelScope.launch {
@@ -850,6 +864,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 noteSubtitle(turn, preview.length)
                 holdSubtitle()
+                openConversation(preview)
             }
             return
         }
@@ -876,6 +891,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     noteSubtitle(turn, reply.text.length)
                     holdSubtitle()
+                    openConversation(reply.text)
                 },
                 onFailure = { error ->
                     if (error is CancellationException) throw error
@@ -890,6 +906,31 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 },
             )
         }
+    }
+
+    private fun openConversation(reply: String) {
+        if (!_ui.value.wakeWordEnabled) return
+        val now = HelmLatency.now()
+        val waitMs = conversationWindow.onReply(reply, now)
+        val until = conversationWindow.listeningUntil()
+        ConversationBus.suppressUntil(now + waitMs)
+        ConversationBus.openUntil(until)
+        _ui.update { it.copy(conversationOpen = true) }
+        conversationJob?.cancel()
+        conversationJob = viewModelScope.launch {
+            delay((until - HelmLatency.now()).coerceAtLeast(0L))
+            if (!conversationWindow.listening(HelmLatency.now())) {
+                _ui.update { it.copy(conversationOpen = false) }
+            }
+        }
+    }
+
+    private fun closeConversation() {
+        conversationWindow.close()
+        ConversationBus.close()
+        conversationJob?.cancel()
+        conversationJob = null
+        _ui.update { it.copy(conversationOpen = false) }
     }
 
     private fun interruptCompanion() {
@@ -941,6 +982,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        closeConversation()
         companionVoice.release()
         super.onCleared()
     }
@@ -1237,6 +1279,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             if (deskOfflineAt == null) return@launch
             if (!_ui.value.powerScreen) return@launch
             if (_ui.value.hubSleeping) return@launch
+            closeConversation()
             _ui.update { it.copy(hubSleeping = true) }
             _screenCommands.tryEmit(ScreenCommand.Sleep)
         }
@@ -1254,6 +1297,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             if (remaining > 0) delay(remaining)
             if (disconnectedAt == null) return@launch
             if (!_ui.value.powerScreen) return@launch
+            closeConversation()
             _ui.update { it.copy(hubSleeping = true) }
             _screenCommands.tryEmit(ScreenCommand.Sleep)
         }

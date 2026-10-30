@@ -45,6 +45,8 @@ class WakeWordService : Service() {
     private var audioRecord: AudioRecord? = null
     @Volatile
     private var currentTurn = ""
+    @Volatile
+    private var chimePending = false
     private var turnAt = 0L
     private var asrAt = 0L
     private var loggedPartial = false
@@ -169,12 +171,14 @@ class WakeWordService : Service() {
         var skipUntil = 0L
         var lastEmitted = ""
         var gate = UtteranceGate()
+        var vadMs = 0L
 
         while (running) {
             val n = recorder.read(buffer, 0, buffer.size)
             if (n <= 0) continue
             val samples = FloatArray(n) { buffer[it] / 32768.0f }
             val now = SystemClock.elapsedRealtime()
+            val dtMs = n * 1000L / SAMPLE_RATE
 
             if (capturing) {
                 val recognizer = asr
@@ -187,7 +191,9 @@ class WakeWordService : Service() {
                 if (stream == null) {
                     stream = recognizer.createStream()
                     asrStream = stream
-                    skipUntil = now + CHIME_SKIP_MS
+                    // 喊小岸后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了
+                    skipUntil = now + (if (chimePending) CHIME_SKIP_MS else 0L)
+                    chimePending = false
                     listenAt = skipUntil
                     lastEmitted = ""
                     asrAt = 0L
@@ -235,18 +241,30 @@ class WakeWordService : Service() {
                     spotter.reset(wakeStream)
                 }
             } else {
-                wakeStream.acceptWaveform(samples, SAMPLE_RATE)
-                while (spotter.isReady(wakeStream)) {
-                    spotter.decode(wakeStream)
-                    val keyword = spotter.getResult(wakeStream).keyword
-                    if (keyword.isBlank()) continue
-                    if (now - lastDetectAt < COOLDOWN_MS) {
-                        spotter.reset(wakeStream)
-                        continue
+                // 对话窗口内：不用喊小岸，持续人声够 300ms 就直接进听写
+                if (ConversationBus.bypass(now)) {
+                    if (audioRms(samples) >= VAD_RMS) vadMs += dtMs else vadMs = 0L
+                    if (vadMs >= VAD_TRIGGER_MS) {
+                        vadMs = 0L
+                        onHeardSpeech()
                     }
-                    lastDetectAt = now
-                    spotter.reset(wakeStream)
-                    onDetected(keyword)
+                } else {
+                    vadMs = 0L
+                }
+                if (!capturing) {
+                    wakeStream.acceptWaveform(samples, SAMPLE_RATE)
+                    while (spotter.isReady(wakeStream)) {
+                        spotter.decode(wakeStream)
+                        val keyword = spotter.getResult(wakeStream).keyword
+                        if (keyword.isBlank()) continue
+                        if (now - lastDetectAt < COOLDOWN_MS) {
+                            spotter.reset(wakeStream)
+                            continue
+                        }
+                        lastDetectAt = now
+                        spotter.reset(wakeStream)
+                        onDetected(keyword)
+                    }
                 }
             }
         }
@@ -295,6 +313,7 @@ class WakeWordService : Service() {
         turnAt = SystemClock.elapsedRealtime()
         loggedPartial = false
         asrAt = 0L
+        chimePending = true
         HelmLatency.log(currentTurn, "wake", "keyword=$keyword")
         Log.i(TAG, "wake word: $keyword")
         WakeChime.play()
@@ -302,6 +321,21 @@ class WakeWordService : Service() {
         capturing = asr != null
         if (!capturing) {
             Log.w(TAG, "asr unavailable, wake only")
+            HelmLatency.log(currentTurn, "asr_skip", "reason=unavailable")
+            emitTranscript("", settled = true)
+        }
+    }
+
+    /** 对话窗口内听到了人声：不开提示音、不亮屏，直接进听写。 */
+    private fun onHeardSpeech() {
+        currentTurn = HelmLatency.newTurn()
+        turnAt = SystemClock.elapsedRealtime()
+        loggedPartial = false
+        asrAt = 0L
+        chimePending = false
+        HelmLatency.log(currentTurn, "conversation_listen")
+        capturing = asr != null
+        if (!capturing) {
             HelmLatency.log(currentTurn, "asr_skip", "reason=unavailable")
             emitTranscript("", settled = true)
         }
@@ -377,6 +411,8 @@ class WakeWordService : Service() {
         private const val SAMPLE_RATE = 16_000
         private const val COOLDOWN_MS = 1_000L
         private const val CHIME_SKIP_MS = 500L
+        private const val VAD_TRIGGER_MS = 300L
+        private const val VAD_RMS = 0.030f
 
         const val ACTION_TRANSCRIPT = "cn.weiekko.dock.VOICE_TRANSCRIPT"
         const val EXTRA_TEXT = "text"
