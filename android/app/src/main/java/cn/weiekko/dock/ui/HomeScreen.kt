@@ -6,9 +6,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -174,6 +176,21 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.36f)),
+                )
+            }
+
+            // F39 一句话壁纸：壁纸的一部分，不是数据——淡淡的，贴着底边，
+            // 编辑态收起来，别挡拖拽；hubSleeping 时屏幕本来就很暗，无所谓
+            val wallpaperLine = state.snapshot?.wallpaper?.text
+            if (!editing && !wallpaperLine.isNullOrBlank()) {
+                Text(
+                    text = wallpaperLine,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onBackground.copy(alpha = 0.42f),
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 6.dp),
                 )
             }
 

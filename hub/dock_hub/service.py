@@ -32,6 +32,7 @@ from dock_hub.dusk import DuskRamp
 from dock_hub.alarm import AlarmRamp
 from dock_hub.system_volume import read_output_volume, write_output_volume
 from dock_hub.theme import birthday_text, occasions_for
+from dock_hub.wallpaper import wallpaper_line
 from dock_hub.photos import list_photos, photo_bytes as read_photo
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
@@ -225,23 +226,28 @@ class DockHub:
             self.session = None
         self._login_message = "请在配置向导中扫码登录米家"
 
+    def _wallpaper_payload(self) -> dict[str, str] | None:
+        """一句话壁纸（F39）：今天那句。关着就不带，别让安卓画空气。"""
+        if not self.config.wallpaper.enabled:
+            return None
+        today = datetime.now().astimezone().date()
+        return {"text": wallpaper_line(today), "date": today.isoformat()}
+
     def _theme_payload(self) -> dict[str, list[str]] | None:
         """今天是什么日子（F36）。没配生日和考试周、又不是节日，就不用带。"""
         occasions = occasions_for(datetime.now().astimezone().date(), self.config.theme)
         return {"occasions": occasions} if occasions else None
 
     def _photos_dir(self) -> Path | None:
-        """回忆相框（F37）的图库：hub.yaml 旁边的 photos/，有这个目录才算开。"""
-        if self.config.path is None:
-            return None
-        return self.config.path.parent / "photos"
+        """回忆相框（F37）的图库：config 里解析过的目录，None = 关着。"""
+        return self.config.photos
 
-    def _photo_ids(self) -> list[str]:
+    def photo_ids(self) -> list[str]:
         return list_photos(self._photos_dir())
 
     def _photos_payload(self) -> dict[str, list[str]] | None:
         """相框名单进 snapshot。没 photos/ 目录或里面没图，就不带这个字段。"""
-        ids = self._photo_ids()
+        ids = self.photo_ids()
         return {"ids": ids} if ids else None
 
     def photo_bytes(self, photo_id: str) -> tuple[bytes, str, str]:
@@ -1786,6 +1792,7 @@ class DockHub:
             "alarm": self._alarm.snapshot() if self._alarm else None,
             "theme": self._theme_payload(),
             "photos": self._photos_payload(),
+            "wallpaper": self._wallpaper_payload(),
         }
         self._note_desk_snapshot(body)
         return body

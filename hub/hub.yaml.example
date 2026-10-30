@@ -248,3 +248,7 @@ devices:
 #   birthday: "05-21"
 #   exam_weeks:
 #     - "01-10..01-20"
+#
+# 一句话壁纸（F39）：屏幕底边飘一行她今天想说的话，一天一句、按日期轮换，
+# 淡淡的不抢时钟。默认开着；写句式去改 dock_hub/wallpaper.py 的池子。
+# wallpaper: false   # 关掉

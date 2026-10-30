@@ -318,6 +318,13 @@ class ThemeConfig:
 
 
 @dataclass
+class WallpaperConfig:
+    """一句话壁纸（F39）。默认开着，wallpaper: false 关掉——它是壁纸，不占配额。"""
+
+    enabled: bool = True
+
+
+@dataclass
 class SceneConfig:
     """一组「一起动」的设备，可以带一句话和一个语音口令。"""
 
@@ -362,6 +369,9 @@ class HubConfig:
     dusk: DuskConfig = field(default_factory=DuskConfig)
     alarm: AlarmConfig = field(default_factory=AlarmConfig)
     theme: ThemeConfig = field(default_factory=ThemeConfig)
+    wallpaper: WallpaperConfig = field(default_factory=WallpaperConfig)
+    # 回忆相框（F37）的图库目录；None = 关着
+    photos: Path | None = None
     path: Path | None = None
 
     def auth_values(self) -> tuple[str, ...]:
@@ -472,6 +482,8 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     dusk = _parse_dusk(raw.get("dusk"), devices)
     alarm = _parse_alarm(raw.get("alarm"), devices)
     theme = _parse_theme(raw.get("theme"))
+    wallpaper = _parse_wallpaper(raw.get("wallpaper"))
+    photos = _parse_photos(raw.get("photos"), path)
 
     return HubConfig(
         name=name,
@@ -494,6 +506,8 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         dusk=dusk,
         alarm=alarm,
         theme=theme,
+        wallpaper=wallpaper,
+        photos=photos,
         path=path,
     )
 
@@ -1276,6 +1290,32 @@ def _parse_alarm(raw: Any, devices: list[DeviceConfig]) -> AlarmConfig:
     )
 
 
+def _parse_wallpaper(raw: Any) -> WallpaperConfig:
+    """一句话壁纸（F39）：不写或 true 开，false 关。"""
+    if raw is None or raw is True:
+        return WallpaperConfig()
+    if raw is False:
+        return WallpaperConfig(enabled=False)
+    raise ValueError("wallpaper 要是 true/false，写句式去改 wallpaper.py 的池子")
+
+
+def _parse_photos(raw: Any, path: Path | None) -> Path | None:
+    """回忆相框（F37）的图库：不写就看配置旁的 photos/，false 关，写路径换地方。"""
+    if raw is None or raw is True:
+        if path is None:
+            return None
+        sibling = path.parent / "photos"
+        return sibling if sibling.is_dir() else None
+    if raw is False:
+        return None
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if stripped:
+            return Path(stripped)
+        return None
+    raise ValueError("photos 要是 false 或一个目录路径")
+
+
 def _parse_theme(raw: Any) -> ThemeConfig:
     """主题皮肤（F36）。生日 "MM-DD"，考试周 "MM-DD..MM-DD" 闭区间。"""
     if raw is None or raw is False:
@@ -1460,6 +1500,11 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             **({"birthday": config.theme.birthday} if config.theme.birthday else {}),
             **({"exam_weeks": list(config.theme.exam_weeks)} if config.theme.exam_weeks else {}),
         }
+    if not config.wallpaper.enabled:
+        raw["wallpaper"] = False
+    if config.photos is not None:
+        # 回忆相框（F37）：开着就写回实际目录，关着（None）不占 yaml 一行。
+        raw["photos"] = str(config.photos)
     if config.temperature:
         raw["temperature"] = temperature_to_raw(config.temperature)
     if config.pc is not None:

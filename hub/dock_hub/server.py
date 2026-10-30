@@ -216,6 +216,11 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                         hub.wait_change(since, min(wait, MAX_WAIT))
                     self._json(200, hub.snapshot())
                     return
+                if path == "/v1/photos":
+                    # F37 回忆相框：名单。相册没开是空列表，不算错。
+                    self._require_auth()
+                    self._json(200, {"ids": hub.photo_ids()})
+                    return
                 if path.startswith("/v1/photos/"):
                     # F37 回忆相框：名单走 snapshot.photos，字节走这里。
                     # 照片基本不变，带 ETag 让手机安心缓存；名单鉴权同 snapshot。

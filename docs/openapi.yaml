@@ -1120,6 +1120,13 @@ components:
           description: >
             回忆相框（F37）的照片名单。配置旁有 photos/ 目录且有图才带，
             否则为 null。
+        wallpaper:
+          allOf:
+            - $ref: "#/components/schemas/WallpaperStatus"
+          nullable: true
+          description: >
+            一句话壁纸（F39）：今天那句，安卓淡淡地画在背景上。
+            配置关掉时为 null。
     ThemeStatus:
       type: object
       required: [occasions]
@@ -1552,6 +1559,17 @@ components:
           description: >
             PM2.5（μg/m³，F14）。空气源顺路捎上，拿不到就不出现这个字段；
             安卓按可空处理。
+    WallpaperStatus:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: 一行、二十字以内、陈述句——句式在 wallpaper.py 卡死
+        date:
+          type: string
+          description: 这句属于哪一天（ISO），安卓好判断换没换
+
     PhotoIds:
       type: object
       required: [ids]

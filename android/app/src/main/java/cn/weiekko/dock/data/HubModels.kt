@@ -24,6 +24,14 @@ data class Snapshot(
     val alarm: AlarmStatus? = null,
     val theme: ThemeStatus? = null,
     val photos: PhotoIds? = null,
+    val wallpaper: WallpaperStatus? = null,
+)
+
+/** 一句话壁纸（F39）：今天那句，画在背景上，淡。 */
+@Serializable
+data class WallpaperStatus(
+    val text: String,
+    val date: String = "",
 )
 
 /** 回忆相框（F37）：Hub 的照片名单，配置旁有 photos/ 目录才有。 */
