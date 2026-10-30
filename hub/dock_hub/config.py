@@ -51,6 +51,8 @@ class AlertsConfig:
 
     temp_celsius: int = 85
     offline_minutes: int = 10
+    # 连续用电脑多久提醒起来走走（键鼠空闲 5 分钟就算休息过了）；0 = 不提醒
+    sedentary_minutes: int = 90
 
 
 @dataclass
@@ -470,12 +472,15 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
     if alerts_raw is None or alerts_raw is True:
         alerts = AlertsConfig()
     elif alerts_raw is False:
-        alerts = AlertsConfig(temp_celsius=0, offline_minutes=0)
+        alerts = AlertsConfig(temp_celsius=0, offline_minutes=0, sedentary_minutes=0)
     elif isinstance(alerts_raw, dict):
         alerts = AlertsConfig(
             temp_celsius=_threshold(alerts_raw.get("temp_celsius"), 85, "proactive.alerts.temp_celsius"),
             offline_minutes=_threshold(
                 alerts_raw.get("offline_minutes"), 10, "proactive.alerts.offline_minutes"
+            ),
+            sedentary_minutes=_threshold(
+                alerts_raw.get("sedentary_minutes"), 90, "proactive.alerts.sedentary_minutes"
             ),
         )
     else:
@@ -753,12 +758,17 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
         if config.morning.text:
             morning["text"] = config.morning.text
         raw["morning"] = morning
-    if config.alerts.temp_celsius <= 0 and config.alerts.offline_minutes <= 0:
+    if (
+        config.alerts.temp_celsius <= 0
+        and config.alerts.offline_minutes <= 0
+        and config.alerts.sedentary_minutes <= 0
+    ):
         raw["alerts"] = False
     else:
         raw["alerts"] = {
             "temp_celsius": config.alerts.temp_celsius,
             "offline_minutes": config.alerts.offline_minutes,
+            "sedentary_minutes": config.alerts.sedentary_minutes,
         }
     return raw
 

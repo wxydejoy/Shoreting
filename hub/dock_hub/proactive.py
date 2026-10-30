@@ -65,6 +65,34 @@ class Sustained:
         self._first.pop(key, None)
 
 
+class SedentaryWatch:
+    """连续用电脑多久了。键鼠空闲够 5 分钟就算休息过，计时清零重来。
+
+    `idle` 是键鼠空闲秒数；None 表示探针没报（非 Windows 或拿不到），
+    只能当不知道，不提醒也不清零——不能把「没数据」当「在休息」。
+    """
+
+    BREAK_SEC = 300.0
+
+    def __init__(self) -> None:
+        self._since: datetime | None = None
+
+    def tick(self, idle: float | None, now: datetime, limit_minutes: int) -> bool:
+        """True = 该提醒起身了（提醒后由调用方 `reset()` 重新计时）。"""
+        if limit_minutes <= 0:
+            return False
+        if idle is not None and idle >= self.BREAK_SEC:
+            self._since = None
+            return False
+        if self._since is None:
+            self._since = now
+            return False
+        return (now - self._since).total_seconds() >= limit_minutes * 60
+
+    def reset(self) -> None:
+        self._since = None
+
+
 @dataclass
 class Said:
     """一次决定的结果，方便打日志与写测试。"""
