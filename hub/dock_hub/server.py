@@ -331,6 +331,11 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._read_json()
                     self._json(200, hub.leave_home())
                     return
+                if path == "/v1/presence":
+                    self._require_auth()
+                    body = self._read_json()
+                    self._json(200, hub.report_presence(str(body.get("state") or "")))
+                    return
                 scenes_prefix = "/v1/scenes/"
                 if path.startswith(scenes_prefix):
                     scene_id = unquote(path[len(scenes_prefix) :])
