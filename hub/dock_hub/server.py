@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hmac
 import json
 import math
@@ -23,6 +24,7 @@ from dock_hub.setup_ui import is_local_client
 MAX_BODY = 64 * 1024
 MAX_WAIT = 30.0
 _DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")  # F30 时间线：chats 的 day 参数
+GZIP_MIN = 512
 _STATIC = {
     "litera.min.css": "text/css; charset=utf-8",
     "shell.css": "text/css; charset=utf-8",
@@ -595,6 +597,21 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 raise HubError("bad_request", "JSON 必须是对象")
             return data
 
+        def _maybe_gzip(self, payload: bytes) -> bytes:
+            """文本类响应按需压一发：3 秒一轮的 snapshot 也能省掉大半流量。"""
+
+            if len(payload) < GZIP_MIN:
+                return payload
+            accepted = (self.headers.get("Accept-Encoding") or "").lower()
+            if "gzip" not in accepted:
+                return payload
+            body = gzip.compress(payload, 6)
+            if len(body) >= len(payload):
+                return payload
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+            return body
+
         def _json(
             self,
             status: int,
@@ -604,6 +621,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            data = self._maybe_gzip(data)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             for key, value in (headers or {}).items():
@@ -641,6 +659,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
         def _html(self, status: int, payload: bytes, content_type: str) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
+            payload = self._maybe_gzip(payload)
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

@@ -41,6 +41,7 @@ Hub 用配置文件**白名单**暴露米家设备和可启动的程序。没写
 | 数字 | JSON number；温度保留一位小数即可 |
 | 连接 | keep-alive；空闲 20 秒没请求就断开。Hub 同时最多处理 32 条连接，满了回 `503 busy` |
 | 缓存 | `/v1` 与页面一律 `Cache-Control: no-store`；只有 `/assets/*.css|js` 带 `ETag` 与 `max-age=3600`，可回 `304` |
+| 压缩 | JSON 与 HTML 超过 512 字节时，若请求带 `Accept-Encoding: gzip` 就回 `Content-Encoding: gzip`；安卓用 OkHttp 的话默认已带上，不用自己解 |
 
 Hub 必须在启动时打印本机局域网 IP 和端口，方便在安卓里填写，例如：
 
