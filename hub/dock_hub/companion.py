@@ -25,8 +25,9 @@ from urllib.parse import urlparse
 
 import yaml
 
-from dock_hub.actions import apply_device_skills, launch_apps, set_temperature
+from dock_hub.actions import apply_device_skills, call_skill, launch_apps, set_temperature
 from dock_hub.chat_log import ChatLog
+from dock_hub.clarify import PendingClarify, clarify_for, take_answer
 from dock_hub.config import CompanionConfig, ID_RE
 from dock_hub.errors import HubError
 from dock_hub import logs
@@ -179,6 +180,8 @@ class Companion:
         self._memory: MemoryStore | None = None
         # F27：朗读任务念完的秒数往这儿送（service 接到周报台账）；None = 没接
         self.on_read_done = None
+        # F3 追问澄清：问出去还没被认领的那句
+        self._pending_clarify: PendingClarify | None = None
 
     def configure(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
@@ -270,6 +273,7 @@ class Companion:
             self._seq += 1
             seq = self._seq
         self.tts.stop()
+        pending = self._pop_clarify()
         taught = self._remember_skill(text)
         if taught or is_teach_attempt(text):
             spoken = taught or "这个只能绑已经配好的灯或启动项，不能自己加程序。"
@@ -301,6 +305,16 @@ class Companion:
             )
         control = looks_like_control(text)
         mood_extra = self._prepare_mood(text, control=control)
+        if pending is not None:
+            # F3：上一问有了下文就直接办；换话题了就当没问过，正常往下走
+            answered = self._take_pending_answer(text, pending, turn)
+            if answered is not None:
+                spoken, skills = answered
+                self._commit_reply(spoken)
+                _latency(turn, "clarify", chars=len(spoken))
+                return self._finish_spoken(
+                    spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
+                )
         asked = query_kind(text)
         if asked:
             spoken = self._answer_query(asked, text)
@@ -343,6 +357,19 @@ class Companion:
             )
         # 泰缇斯 / Hermes 已移除：不再做「简单还是复杂」的路由判定，
         # 所有对话直接交给伴侣模型（顺带省掉每次一条分类请求）。
+        # F3：像开关指令却解不出设备的话，先问一句，别把「帮我关了」扔给模型瞎猜。
+        question = (
+            clarify_for(text, self._skills, self._aliases)
+            if self._run_skill is not None and self._skills
+            else None
+        )
+        if question is not None:
+            self._pending_clarify = question
+            self._commit_reply(question.asked)
+            _latency(turn, "clarify_ask", chars=len(question.asked))
+            return self._finish_spoken(
+                question.asked, turn, seq, started, cue_llm=False, user=heard
+            )
         catalog = skill_prompt(self._skills)
         memory = recent_prompt(self._recent)
         desk_facts = desk_facts_prompt(_call_world(self._world.get("desk")))
@@ -458,6 +485,7 @@ class Companion:
             raise HubError("not_found", "未开启桌面伴侣")
         if self._story_books is not None:
             self._story_books.pause()
+        self._pending_clarify = None
         with self._lock:
             self._seq += 1
             self._speaking = False
@@ -820,6 +848,42 @@ class Companion:
             run_skill=self._run_skill,
             note=_latency,
         )
+
+    # ---- F3 追问澄清 ---------------------------------------------------------
+
+    def _pop_clarify(self) -> PendingClarify | None:
+        """取走上一次追问。过期的当没问过。"""
+        pending = self._pending_clarify
+        self._pending_clarify = None
+        if pending is None or pending.expired():
+            return None
+        return pending
+
+    def _take_pending_answer(
+        self, text: str, pending: PendingClarify, turn: str
+    ) -> tuple[str, list[dict[str, Any]]] | None:
+        """上一问有了下文就直接办。None = 换话题了，正常流程接着走。"""
+        answer = take_answer(text, pending, self._skills, self._aliases)
+        if answer is None:
+            return None
+        if answer.kind == "run":
+            events = self._run_clarified(str(answer.ident), pending.on, turn)
+            spoken = "好。" if events[-1].get("ok") else "这次没动成。"
+            return spoken, events
+        if answer.kind == "cancel":
+            return "好。", []
+        return "没听清。", []
+
+    def _run_clarified(self, ident: str, on: bool, turn: str) -> list[dict[str, Any]]:
+        """追问认领后的那一按，事件形状跟 apply_device_skills 一致。"""
+        name = next((item["name"] for item in self._skills if item["id"] == ident), ident)
+        try:
+            call_skill(self._run_skill, ident, on)
+        except HubError as exc:
+            _latency(turn, "skill_error", id=ident, code=exc.code)
+            return [{"id": ident, "name": name, "on": on, "ok": False, "code": exc.code}]
+        _latency(turn, "skill_ok", id=ident, on=int(on))
+        return [{"id": ident, "name": name, "on": on, "ok": True}]
 
     def _run_temp(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         return set_temperature(

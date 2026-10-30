@@ -162,6 +162,22 @@ def looks_like_control(text: str) -> bool:
     return bool(_CONTROL_HINT.search(fold_game_asr(text)))
 
 
+def turn_intent(text: str) -> bool | None:
+    """这句话里的开/关意图：True 开，False 关，None 没有。
+
+    两个词都出现（「别开也别关」这种）算没说清，返回 None——
+    澄清（F3）只认态度明确的话，不替人做决定。
+    """
+    folded = fold_game_asr(text)
+    want_on = bool(_TURN_ON.search(folded))
+    want_off = bool(_TURN_OFF.search(folded))
+    if want_on and not want_off:
+        return True
+    if want_off and not want_on:
+        return False
+    return None
+
+
 def looks_like_query(text: str) -> bool:
     return query_kind(text) is not None
 
