@@ -431,7 +431,7 @@ components:
           format: date-time
     CompanionStatus:
       type: object
-      required: [ready, voice, speaking]
+      required: [ready, voice, speaking, timer]
       properties:
         ready:
           type: boolean
@@ -439,6 +439,28 @@ components:
           type: boolean
         speaking:
           type: boolean
+        timer:
+          nullable: true
+          $ref: "#/components/schemas/TimerStatus"
+    TimerStatus:
+      type: object
+      required: [mode]
+      description: 番茄钟 / 正计时（F9）。倒计时到点 Hub 播报并清空；正计时「停止计时」结束。
+      properties:
+        mode:
+          type: string
+          enum: [timer, stopwatch]
+        label:
+          type: string
+        total_sec:
+          type: integer
+          description: 仅 timer：总秒数
+        seconds_left:
+          type: integer
+          description: 仅 timer：剩余秒数
+        seconds:
+          type: integer
+          description: 仅 stopwatch：已计秒数
     CompanionChatRequest:
       type: object
       required: [text]

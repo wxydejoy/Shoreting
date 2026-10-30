@@ -246,6 +246,12 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `ready` | 是 | 大脑（LLM）现在能否回答。Ollama 守护进程活着则为 `true` |
 | `voice` | 是 | Mini TTS `/health` 探活且 `ready`。没配 `tts.base_url` 或连不上则为 `false` |
 | `speaking` | 是 | Hub 正在向 TTS 提交或拉取音频时为 `true`。`POST /v1/companion/stop` 后应变回 `false` |
+| `timer` | 是 | 番茄钟 / 正计时状态（F9），没有就是 `null`。见下 |
+
+`timer` 两种形态：
+
+- 倒计时：`{"mode": "timer", "label": "计时", "total_sec": 1500, "seconds_left": 1430}`——到点 Hub 开口说「到时间了。」并把它清成 `null`；安卓在右上角画细环
+- 正计时：`{"mode": "stopwatch", "label": "正计时", "seconds": 95}`——「开始正计时」起表，「停止计时」落表，她说「记了 X 分钟」
 
 规则：
 

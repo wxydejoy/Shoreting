@@ -102,7 +102,20 @@ data class CompanionStatus(
     val ready: Boolean,
     val voice: Boolean = false,
     val speaking: Boolean = false,
+    val timer: TimerStatus? = null,
 )
+
+/** 番茄钟 / 正计时（F9）：倒计时带剩余秒，正计时带已计秒。 */
+@Serializable
+data class TimerStatus(
+    val mode: String,
+    val label: String = "计时",
+    val totalSec: Int = 0,
+    val secondsLeft: Int = 0,
+    val seconds: Int = 0,
+) {
+    val isStopwatch: Boolean get() = mode == "stopwatch"
+}
 
 @Serializable
 data class CompanionChatRequest(

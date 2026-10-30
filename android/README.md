@@ -41,3 +41,9 @@ APK：`android/app/build/outputs/apk/debug/app-debug.apk`。装到横屏设备�
 - 字幕等 `POST /v1/companion/chat` 全文；声音由 Mini TTS 出，本机不播守岸人 wav
 - 她正在说时再喊「小岸」：`POST /v1/companion/stop` 后重新听
 - 她问了一句（字幕带问号）：约 2.4 秒后自动再听，不必再喊小岸
+
+## 番茄钟
+
+「二十五分钟」「开始正计时」她接了以后，snapshot 的 `companion.timer` 会带着状态回来，
+主屏右上角画一个细环：倒计时环随剩余时间走短，正计时满环，中间是 `mm:ss`。
+两次快照之间本地每秒续走，不依赖轮询频率。到点她说「到时间了。」环就消失。
