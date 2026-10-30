@@ -172,6 +172,7 @@ class WakeWordService : Service() {
         var lastEmitted = ""
         var gate = UtteranceGate()
         var vadMs = 0L
+        var bargeMs = 0L
 
         while (running) {
             val n = recorder.read(buffer, 0, buffer.size)
@@ -251,6 +252,17 @@ class WakeWordService : Service() {
                 } else {
                     vadMs = 0L
                 }
+                // 插话打断（F2）：她正在说时，明显的人声（更响、持续更久）直接抢过来。
+                // 阈值比窗口内的高：免得她自己的声音从 Mini 喇叭飘过来就把自己打断
+                if (!capturing && ConversationBus.speaking(now)) {
+                    if (audioRms(samples) >= BARGE_RMS) bargeMs += dtMs else bargeMs = 0L
+                    if (bargeMs >= BARGE_TRIGGER_MS) {
+                        bargeMs = 0L
+                        onHeardSpeech(barge = true)
+                    }
+                } else {
+                    bargeMs = 0L
+                }
                 if (!capturing) {
                     wakeStream.acceptWaveform(samples, SAMPLE_RATE)
                     while (spotter.isReady(wakeStream)) {
@@ -327,13 +339,13 @@ class WakeWordService : Service() {
     }
 
     /** 对话窗口内听到了人声：不开提示音、不亮屏，直接进听写。 */
-    private fun onHeardSpeech() {
+    private fun onHeardSpeech(barge: Boolean = false) {
         currentTurn = HelmLatency.newTurn()
         turnAt = SystemClock.elapsedRealtime()
         loggedPartial = false
         asrAt = 0L
         chimePending = false
-        HelmLatency.log(currentTurn, "conversation_listen")
+        HelmLatency.log(currentTurn, if (barge) "barge_listen" else "conversation_listen")
         capturing = asr != null
         if (!capturing) {
             HelmLatency.log(currentTurn, "asr_skip", "reason=unavailable")
@@ -413,6 +425,8 @@ class WakeWordService : Service() {
         private const val CHIME_SKIP_MS = 500L
         private const val VAD_TRIGGER_MS = 300L
         private const val VAD_RMS = 0.030f
+        private const val BARGE_TRIGGER_MS = 800L
+        private const val BARGE_RMS = 0.045f
 
         const val ACTION_TRANSCRIPT = "cn.weiekko.dock.VOICE_TRANSCRIPT"
         const val EXTRA_TEXT = "text"
