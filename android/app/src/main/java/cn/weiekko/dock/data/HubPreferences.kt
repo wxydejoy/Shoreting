@@ -28,7 +28,9 @@ data class HubConnection(
     companion object {
         const val DEFAULT_HOST = "10.83.22.121"
         const val DEFAULT_PORT = 17890
-        const val DEFAULT_TOKEN = "knaksDr1lLdKiPJSokMttA3YbyMdeI9q1w7ULvoc_4g"
+
+        /** 出厂不预置口令：token 只存在于 hub.yaml，装机时从配置向导复制。 */
+        const val DEFAULT_TOKEN = ""
     }
 }
 
@@ -45,7 +47,9 @@ data class MiniConnection(
     companion object {
         const val DEFAULT_HOST = "10.83.22.121"
         const val DEFAULT_PORT = 17891
-        const val DEFAULT_TOKEN = "helm-mini-weiekko"
+
+        /** Mini 监控的口令由 install-launchd.sh 生成，不写进 APK。 */
+        const val DEFAULT_TOKEN = ""
     }
 }
 

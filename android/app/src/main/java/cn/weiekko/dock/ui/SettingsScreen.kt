@@ -117,7 +117,7 @@ fun SettingsScreen(
     var token by rememberSaveable { mutableStateOf(state.connection.token) }
     var miniHost by rememberSaveable { mutableStateOf(state.miniConnection.host.ifBlank { MiniConnection.DEFAULT_HOST }) }
     var miniPort by rememberSaveable { mutableStateOf(state.miniConnection.port.toString()) }
-    var miniToken by rememberSaveable { mutableStateOf(state.miniConnection.token.ifBlank { MiniConnection.DEFAULT_TOKEN }) }
+    var miniToken by rememberSaveable { mutableStateOf(state.miniConnection.token) }
     var weatherCity by rememberSaveable { mutableStateOf(state.weatherCity) }
     val context = LocalContext.current
     val pickVideo = rememberLauncherForActivityResult(

@@ -337,7 +337,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 MiniConnection(
                     host = host.ifBlank { MiniConnection.DEFAULT_HOST },
                     port = MiniConnection.DEFAULT_PORT,
-                    token = MiniConnection.DEFAULT_TOKEN,
+                    // APK 里不再有默认口令：保存 Hub 时沿用手机上已有的 Mini 口令
+                    token = _ui.value.miniConnection.token,
                 ),
             )
         }
@@ -350,7 +351,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 MiniConnection(
                     host = host.ifBlank { MiniConnection.DEFAULT_HOST },
                     port = port,
-                    token = token.ifBlank { MiniConnection.DEFAULT_TOKEN },
+                    token = token.ifBlank { _ui.value.miniConnection.token },
                 ),
             )
         }
@@ -862,7 +863,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun testMiniConnection(host: String, portText: String, token: String) {
         val port = portText.toIntOrNull()
         val resolvedHost = host.ifBlank { MiniConnection.DEFAULT_HOST }
-        val resolvedToken = token.ifBlank { MiniConnection.DEFAULT_TOKEN }
+        val resolvedToken = token.ifBlank { _ui.value.miniConnection.token }
         if (resolvedHost.isBlank()) {
             _ui.update { it.copy(settingsStatus = "请填写 Mini 地址", settingsOk = false) }
             return
