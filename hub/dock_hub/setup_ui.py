@@ -12,6 +12,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -593,6 +594,26 @@ def handle_setup_post(hub: DockHub, path: str, body: dict[str, Any], handler: An
         handler._json(200, result)  # noqa: SLF001
         return True
     return False
+
+
+def guard_write(handler: Any) -> None:
+    """配置写入的 CSRF 防线。
+
+    本机访问是免 Token 的（页面就在 127.0.0.1 上），所以只要用户浏览器打开
+    了恶意页面，一个 text/plain 的简单请求就能改掉 token / llm.base_url。
+    这里要求两点：
+    1. Content-Type 必须是 application/json —— 跨站简单请求做不到，会触发预检；
+    2. 带 Origin 时必须是同源 —— 顺手挡住预检被放行的漏网情况。
+    """
+    ctype = (handler.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if ctype != "application/json":
+        raise HubError("unsupported", "配置写入需要 application/json", status=415)
+    origin = (handler.headers.get("Origin") or "").strip()
+    if not origin:
+        return
+    host = (handler.headers.get("Host") or "").strip().lower()
+    if not host or urlparse(origin).netloc.lower() != host:
+        raise HubError("forbidden", "拒绝跨站写入配置")
 
 
 def ensure_local(handler: Any) -> None:

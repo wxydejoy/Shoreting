@@ -9,9 +9,38 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from dock_hub.config import hub_config_to_raw, parse_config, save_config_raw
+from dock_hub.errors import HubError
 from dock_hub.server import make_handler
 from dock_hub.service import DockHub
-from dock_hub.setup_ui import is_local_client
+from dock_hub.setup_ui import guard_write, is_local_client
+
+
+class CsrfGuardTest(unittest.TestCase):
+    def _handler(self, content_type: str = "application/json", origin: str | None = None):
+        class Fake:
+            headers = {
+                "Content-Type": content_type,
+                "Host": "127.0.0.1:17890",
+            }
+
+        if origin is not None:
+            Fake.headers["Origin"] = origin
+        return Fake()
+
+    def test_rejects_non_json_content_type(self) -> None:
+        # 跨站简单请求只能用 text/plain，必须挡在解析之前
+        with self.assertRaises(HubError) as ctx:
+            guard_write(self._handler(content_type="text/plain"))
+        self.assertEqual(ctx.exception.status, 415)
+
+    def test_rejects_cross_origin(self) -> None:
+        with self.assertRaises(HubError) as ctx:
+            guard_write(self._handler(origin="http://evil.example"))
+        self.assertEqual(ctx.exception.status, 403)
+
+    def test_allows_same_origin_and_curl(self) -> None:
+        guard_write(self._handler(origin="http://127.0.0.1:17890"))
+        guard_write(self._handler())
 
 
 class SetupWizardTest(unittest.TestCase):
