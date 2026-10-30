@@ -291,6 +291,23 @@ class DuskConfig:
 
 
 @dataclass
+class AlarmConfig:
+    """起床闹钟（F11）：她比你先醒。
+
+    ``at`` 到点后 ``ramp_min`` 分钟内把 ``device`` 从 0 推到 ``brightness``，
+    手机屏幕跟着爬亮，爬完轻声说 ``say``。``at`` 空 = 整条关着；
+    ``device`` 不写 = 只亮屏幕不亮灯；``weekdays_only`` 周末不叫。
+    """
+
+    at: str = ""
+    weekdays_only: bool = True
+    device: str = ""
+    brightness: int = 30
+    ramp_min: int = 15
+    say: str = "起床了。"
+
+
+@dataclass
 class SceneConfig:
     """一组「一起动」的设备，可以带一句话和一个语音口令。"""
 
@@ -333,6 +350,7 @@ class HubConfig:
     scenes: list[SceneConfig] = field(default_factory=list)
     focus: FocusConfig = field(default_factory=FocusConfig)
     dusk: DuskConfig = field(default_factory=DuskConfig)
+    alarm: AlarmConfig = field(default_factory=AlarmConfig)
     path: Path | None = None
 
     def auth_values(self) -> tuple[str, ...]:
@@ -441,6 +459,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     scenes = _parse_scenes(raw.get("scenes"), devices)
     focus = _parse_focus(raw.get("focus"), scenes)
     dusk = _parse_dusk(raw.get("dusk"), devices)
+    alarm = _parse_alarm(raw.get("alarm"), devices)
 
     return HubConfig(
         name=name,
@@ -461,6 +480,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         scenes=scenes,
         focus=focus,
         dusk=dusk,
+        alarm=alarm,
         path=path,
     )
 
@@ -1215,6 +1235,33 @@ def _between(value: int, low: int, high: int, label: str) -> int:
     return value
 
 
+def _parse_alarm(raw: Any, devices: list[DeviceConfig]) -> AlarmConfig:
+    """起床闹钟（F11）：at 空就是关着；device 写了就必须存在。"""
+    if raw is None or raw is False:
+        return AlarmConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("alarm 必须是对象，或用 alarm: false 关掉")
+    at = str(raw.get("at") or "").strip()
+    if not at:
+        return AlarmConfig()
+    at = parse_clock(at, "alarm.at")
+    device = str(raw.get("device") or "").strip()
+    if device:
+        known = {item.id for item in devices}
+        if device not in known:
+            raise ValueError(f"alarm.device 指向的设备 {device!r} 不存在")
+    say_val = raw.get("say")
+    say = AlarmConfig().say if say_val is None else str(say_val).strip()
+    return AlarmConfig(
+        at=at,
+        weekdays_only=bool(raw.get("weekdays_only", True)),
+        device=device,
+        brightness=_dusk_int(raw, "brightness", 30, 1, 100),
+        ramp_min=_dusk_int(raw, "ramp_min", 15, 1, 240),
+        say=say,
+    )
+
+
 def scene_to_raw(scene: SceneConfig) -> dict[str, Any]:
     raw: dict[str, Any] = {"id": scene.id, "name": scene.name}
     if scene.on:
@@ -1344,6 +1391,15 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             "brightness": config.dusk.brightness,
             "ramp_min": config.dusk.ramp_min,
             **({"city": config.dusk.city} if config.dusk.city else {}),
+        }
+    if config.alarm.at:
+        raw["alarm"] = {
+            "at": config.alarm.at,
+            "weekdays_only": config.alarm.weekdays_only,
+            "brightness": config.alarm.brightness,
+            "ramp_min": config.alarm.ramp_min,
+            "say": config.alarm.say,
+            **({"device": config.alarm.device} if config.alarm.device else {}),
         }
     if config.temperature:
         raw["temperature"] = temperature_to_raw(config.temperature)

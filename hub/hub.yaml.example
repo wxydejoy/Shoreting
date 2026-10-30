@@ -229,3 +229,13 @@ devices:
 #   until: "22:00"
 #   brightness: 40
 #   ramp_min: 45
+#
+# 起床闹钟（F11）：她比你先醒。at 到点后 ramp_min 分钟内把灯从 0 推到
+# brightness，手机屏幕跟着爬亮，爬完轻声说一句 say（手机不在就不喊）。
+# at 空 = 整条关着；device 不写 = 只亮屏幕不亮灯；weekdays_only 周末不叫。
+# alarm:
+#   at: "07:00"
+#   device: desk-led
+#   brightness: 30
+#   ramp_min: 15
+#   say: "起床了。"

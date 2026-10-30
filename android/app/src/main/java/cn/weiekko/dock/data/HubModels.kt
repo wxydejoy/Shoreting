@@ -1,6 +1,7 @@
 package cn.weiekko.dock.data
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 
 @Serializable
 data class Health(
@@ -20,7 +21,23 @@ data class Snapshot(
     val companion: CompanionStatus? = null,
     val devices: List<HubDevice> = emptyList(),
     val notify: NotifyState? = null,
+    val alarm: AlarmStatus? = null,
 )
+
+/** 起床闹钟（F11）：爬坡进行中的剩余/总秒数，屏幕跟着爬亮；不在爬就没有。 */
+@Serializable
+data class AlarmStatus(
+    @SerialName("seconds_left") val secondsLeft: Double = 0.0,
+    @SerialName("total_sec") val totalSec: Double = 0.0,
+) {
+    /** 0→1 的爬亮进度；数据不对就 null，屏幕不动。 */
+    val progress: Float?
+        get() = if (totalSec > 0.0) {
+            (1.0 - secondsLeft / totalSec).toFloat().coerceIn(0f, 1f)
+        } else {
+            null
+        }
+}
 
 /** 待递到手机的话（F33/F4）：安卓按自增 id 去重，见新的就发本地通知。 */
 @Serializable

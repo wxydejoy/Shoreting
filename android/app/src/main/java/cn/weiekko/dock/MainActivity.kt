@@ -155,6 +155,9 @@ class MainActivity : ComponentActivity() {
                 if (!state.prefsReady) return@LaunchedEffect
                 syncDeskCamera(state.deskPresenceEnabled)
             }
+            LaunchedEffect(state.snapshot) {
+                applyAlarmRamp()
+            }
 
             DockTheme {
                 Scaffold(
@@ -256,6 +259,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyPowerState() {
+        alarmRampActive = false
         val state = viewModel.ui.value
         if (!state.powerScreen) {
             DockPower.keepScreenOn(this, false)
@@ -267,6 +271,22 @@ class MainActivity : ComponentActivity() {
         }
         DockPower.dimForHubSleep(this, false)
         DockPower.keepScreenOn(this, true)
+    }
+
+    // F11 起床闹钟：爬坡进行中屏幕跟着日出爬亮；爬完/没在爬就回到常规电源态
+    private var alarmRampActive = false
+
+    private fun applyAlarmRamp() {
+        val progress = viewModel.ui.value.snapshot?.alarm?.progress
+        if (progress != null) {
+            alarmRampActive = true
+            DockPower.rampForAlarm(this, progress)
+            return
+        }
+        if (alarmRampActive) {
+            alarmRampActive = false
+            applyPowerState()
+        }
     }
 
     private fun enterHubSleep() {

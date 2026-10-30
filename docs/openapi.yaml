@@ -1052,6 +1052,24 @@ components:
           description: >
             待递到手机的话（F33 反向 / F4）。安卓按自增 id 去重，
             见到比本地 last-seen 新的就发一条本地通知。
+        alarm:
+          allOf:
+            - $ref: "#/components/schemas/AlarmRamp"
+          nullable: true
+          description: >
+            起床闹钟（F11）爬坡进度。只在爬坡进行中出现；手机屏幕按
+            1 - seconds_left/total_sec 渐亮。没配闹钟或不在爬坡时为 null。
+    AlarmRamp:
+      type: object
+      required: [seconds_left, total_sec]
+      properties:
+        seconds_left:
+          type: number
+          description: 距离爬坡结束还剩几秒
+        total_sec:
+          type: number
+          description: 这次爬坡的总秒数（ramp_min * 60）
+
     NotifyState:
       type: object
       properties:
