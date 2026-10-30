@@ -141,6 +141,17 @@ class HubClient(
         execute(request, readTimeoutMs = STOP_TIMEOUT_MS, expectAuthError = false)
     }
 
+    /** 在场上报（F25）：state 只有 home / away，语义见 lan-protocol §6.12。 */
+    fun reportPresence(connection: HubConnection, state: String) {
+        val payload = buildJsonObject {
+            put("state", JsonPrimitive(state))
+        }
+        val request = authorized(connection, "/v1/presence")
+            .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))
+            .build()
+        execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
+    }
+
     fun companionAudio(connection: HubConnection, audioId: String): ByteArray {
         val id = audioId.trim()
         if (!AUDIO_ID.matches(id)) {

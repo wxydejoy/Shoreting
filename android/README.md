@@ -63,3 +63,21 @@ K20 常亮，同一画面放久了会留影。`ui/BurnGuard.kt` 三件事，全�
 「二十五分钟」「开始正计时」她接了以后，snapshot 的 `companion.timer` 会带着状态回来，
 主屏右上角画一个细环：倒计时环随剩余时间走短，正计时满环，中间是 `mm:ss`。
 两次快照之间本地每秒续走，不依赖轮询频率。到点她说「到时间了。」环就消失。
+
+## 在场上报（F25）
+
+手机连上家里 Wi-Fi，她说一句「回来了」。`data/PresenceReporter.kt` 两条路喂状态：
+
+- 系统的默认网络回调（`ConnectivityManager.registerDefaultNetworkCallback`）直接记
+  「Wi-Fi 从哪一刻断的」，不吃轮询节奏、Doze 也兜得住；
+- 轮询循环每轮顺手补一次采样，并在 Hub 真的答上话的那一轮发请求。
+
+- **在家**：轮询拿得到 snapshot 且当前网络走 Wi-Fi → 边沿时 `POST /v1/presence {"state":"home"}`；
+  之后每 15 分钟补一次心跳，Hub 重启或哪次上报丢了能自己长回来。
+- **离家**：Wi-Fi 断开（掉了轮蜂窝 / 别家的网）满 10 分钟才算 away。人不在家时 Hub 大概率
+  连不上、这条发不出去，不硬补——回家连上后先补发 `away` 再报 `home`，Hub 那边照样有
+  `away → home` 的边沿，她该问候就问候。
+- **Hub 挂了不算离家**：Wi-Fi 一直在、只是 snapshot 连不上（Hub 重启 / 断电），上一次
+  看到 Wi-Fi 的时间戳一直在刷新，回来只补 `home`，不会凭空问候一句。
+
+去抖与「Hub 连不上 ≠ 离家」的判断都在客户端做，Hub 只认报上来的状态（见 lan-protocol §6.12）。
