@@ -95,4 +95,7 @@ object ConversationBus {
     }
 
     fun bypass(nowMs: Long): Boolean = nowMs < openUntilAt && nowMs >= suppressUntilAt
+
+    /** 她正在说话（TTS 估算的时段）；窗口再开也不听，但可以插话（F2）。 */
+    fun speaking(nowMs: Long): Boolean = nowMs < suppressUntilAt
 }

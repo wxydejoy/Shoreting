@@ -126,4 +126,15 @@ class ConversationBusTest {
         ConversationBus.close()
         assertFalse(ConversationBus.bypass(0))
     }
+
+    @Test
+    fun speakingCoversHerPlaybackOnly() {
+        ConversationBus.close()
+        ConversationBus.suppressUntil(6_000)
+        ConversationBus.openUntil(30_000)
+        assertTrue(ConversationBus.speaking(5_999))
+        assertFalse(ConversationBus.speaking(6_000)) // 说完了，之后是窗口不是插话时段
+        ConversationBus.close()
+        assertFalse(ConversationBus.speaking(1_000)) // 关了就都不算
+    }
 }

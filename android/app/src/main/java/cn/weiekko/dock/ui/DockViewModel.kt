@@ -826,8 +826,14 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun sendCompanion(text: String? = null) {
         val spoken = (text ?: _ui.value.companionDraft).trim()
         if (spoken.isEmpty()) return
+        // 插话打断（F2）：她还在说或字幕还挂着，先把上一轮掐掉再送新的
+        val interrupting = _ui.value.companionBusy || !_ui.value.companionReply.isNullOrBlank()
         companionJob?.cancel()
         companionVoice.stop()
+        if (interrupting) {
+            HelmLatency.log(voiceTurnId.ifBlank { "-" }, "barge_in")
+            cueHubStop()
+        }
         currentLink().companionBlock?.let { blocked ->
             _ui.update {
                 it.copy(

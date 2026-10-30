@@ -44,3 +44,5 @@ APK：`android/app/build/outputs/apk/debug/app-debug.apk`。装到横屏设备�
   陈述句 8 秒（按字数等 TTS 说完才起算）；窗口内不用喊小岸，持续人声 300ms 直接进听写，
   不放提示音也不亮屏；连着两轮没听出人话就关窗，屏幕边缘有一圈淡呼吸光表示在听
 - 她说话的那几秒不开窗（`ConversationBus.suppress`），免得麦克风听到的是她自己
+- 插话打断：她正在说时不用喊小岸，直接说话就抢——阈值比窗口内更响、要持续 800ms，
+  避免她自己的声音从 Mini 喇叭飘过来把自己打断；VM 送新对话前先 `POST /v1/companion/stop`
