@@ -148,12 +148,14 @@ class WakeWordService : Service() {
             stopSelf()
             return
         }
+        // 采集和解码分两条线程：采集只做搬运，内置缓冲给到 400ms，
+        // 解码偶尔慢一拍也不会溢出去丢掉「正在说的那几个字」。
         val recorder = AudioRecord(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
-            minBytes * 2,
+            maxOf(minBytes * 4, SAMPLE_RATE * 2 * MIC_BUFFER_MS / 1000),
         )
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             recorder.release()
@@ -164,10 +166,43 @@ class WakeWordService : Service() {
         audioRecord = recorder
         recorder.startRecording()
 
+        val queue = AudioChunkQueue(QUEUE_CHUNKS)
+        val worker = thread(name = "wake-decode", isDaemon = true) {
+            try {
+                decodeLoop(spotter, wakeStream, queue)
+            } catch (e: Throwable) {
+                Log.e(TAG, "decode loop failed", e)
+                running = false
+            }
+        }
+
         val chunk = (SAMPLE_RATE * 0.05).toInt()
         val buffer = ShortArray(chunk)
+        try {
+            while (running) {
+                val n = recorder.read(buffer, 0, buffer.size)
+                if (n <= 0) continue
+                queue.offer(FloatArray(n) { buffer[it] / 32768.0f })
+            }
+        } finally {
+            queue.close()
+            worker.join(400)
+        }
+    }
+
+    /**
+     * 唤醒词和流式 ASR 都在这里跑，输入是采集线程送来的块。
+     *
+     * 处理进度按「已经喂进去的音频时长」算，而不是墙钟：解码偶尔积压时，
+     * 墙钟会虚报一句已经说了多久，把尾静音判定提前触发、半句话被截断。
+     */
+    private fun decodeLoop(
+        spotter: KeywordSpotter,
+        wakeStream: OnlineStream,
+        queue: AudioChunkQueue,
+    ) {
         var lastDetectAt = 0L
-        var listenAt = 0L
+        var processedMs = 0L
         var skipUntil = 0L
         var lastEmitted = ""
         var gate = UtteranceGate()
@@ -175,9 +210,8 @@ class WakeWordService : Service() {
         var bargeMs = 0L
 
         while (running) {
-            val n = recorder.read(buffer, 0, buffer.size)
-            if (n <= 0) continue
-            val samples = FloatArray(n) { buffer[it] / 32768.0f }
+            val samples = queue.poll(QUEUE_POLL_MS) ?: continue
+            val n = samples.size
             val now = SystemClock.elapsedRealtime()
             val dtMs = n * 1000L / SAMPLE_RATE
 
@@ -195,13 +229,14 @@ class WakeWordService : Service() {
                     // 喊小岸后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了
                     skipUntil = now + (if (chimePending) CHIME_SKIP_MS else 0L)
                     chimePending = false
-                    listenAt = skipUntil
+                    processedMs = 0L
                     lastEmitted = ""
                     asrAt = 0L
                     loggedPartial = false
                     gate = UtteranceGate()
                 }
                 if (now < skipUntil) continue
+                processedMs += dtMs
                 if (asrAt == 0L) {
                     asrAt = now
                     HelmLatency.log(currentTurn, "asr_start", "since_wake_ms=${now - turnAt}")
@@ -224,19 +259,22 @@ class WakeWordService : Service() {
                     }
                     emitTranscript(text, settled = false)
                 }
-                val dtMs = n * 1000L / SAMPLE_RATE
-                val elapsed = (now - listenAt).coerceAtLeast(0L)
                 gate.onAudio(audioRms(samples), dtMs)
-                val reason = gate.shouldStop(elapsed)
+                val reason = gate.shouldStop(processedMs)
                 if (reason != null) {
-                    Log.i(TAG, "asr stop ${reason.name} elapsed=${elapsed}ms heard=${gate.heard}")
+                    Log.i(
+                        TAG,
+                        "asr stop ${reason.name} elapsed=${processedMs}ms heard=${gate.heard} " +
+                            "dropped=${queue.dropped}",
+                    )
                     capturing = false
                     asrStream = null
                     val finalText = finishUtterance(recognizer, stream, lastEmitted)
                     HelmLatency.log(
                         currentTurn,
                         "asr_end",
-                        "ms=$elapsed reason=${reason.name} chars=${finalText.length} heard=${if (gate.heard) 1 else 0}",
+                        "ms=$processedMs reason=${reason.name} chars=${finalText.length} " +
+                            "heard=${if (gate.heard) 1 else 0}",
                     )
                     lastDetectAt = SystemClock.elapsedRealtime()
                     spotter.reset(wakeStream)
@@ -427,6 +465,13 @@ class WakeWordService : Service() {
         private const val VAD_RMS = 0.030f
         private const val BARGE_TRIGGER_MS = 800L
         private const val BARGE_RMS = 0.045f
+
+        /** AudioRecord 内置缓冲：400ms 的 16bit 单声道。 */
+        private const val MIC_BUFFER_MS = 400
+
+        /** 队列最多存 2s 音频；再慢就丢最旧的，别把采集线程堵住。 */
+        private const val QUEUE_CHUNKS = 40
+        private const val QUEUE_POLL_MS = 120L
 
         const val ACTION_TRANSCRIPT = "cn.weiekko.dock.VOICE_TRANSCRIPT"
         const val EXTRA_TEXT = "text"
