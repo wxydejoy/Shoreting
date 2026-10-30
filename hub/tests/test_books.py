@@ -546,7 +546,7 @@ class HttpTest(unittest.TestCase):
         self.assertTrue(self.clock.arrived())
         _status, story = self._request("GET", "/v1/companion/story")
         self.assertTrue(story["playing"])
-        self.assertEqual(list(self.hub.companion._read_jobs), [])
+        self.assertEqual(list(self.hub.companion.reads.jobs), [])
         _status, paused = self._request(
             "POST", "/v1/companion/books/" + quote("雾海.txt") + "/pause", {}
         )
