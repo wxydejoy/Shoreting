@@ -15,6 +15,7 @@ hub/
     companion.py      # 守岸人主流程：chat 一轮、LLM 流式、TTS 队列、朗读线程
     intents.py        # 听懂一句话：中文数字、灯 / 亮度 / 温度、ACTION 行、口误折叠
     persona.py        # 怎么说：播报文案、情绪、mood.yaml 读写
+    speech.py         # 断句、切块、拼 wav（朗读与 TTS 之间那层）
     books.py          # 睡前朗读
     probe.py          # 探针模式（CPU 上报 + 远程开程序）
     pc.py             # CPU / 内存 / GPU / CPU 温度
