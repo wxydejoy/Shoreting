@@ -47,6 +47,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -129,6 +130,7 @@ fun HomeScreen(
     }
     val editing = state.editing
     BackHandler(enabled = editing, onBack = onExitEdit)
+    val burn = rememberBurnShifts(active = !editing)
 
     CompositionLocalProvider(
         LocalTileLook provides state.tileLook,
@@ -191,6 +193,13 @@ fun HomeScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        // 防烧屏：画面静止 30 分钟后整个模块层整体偏移
+                        .offset {
+                            IntOffset(
+                                burn.canvas.x.dp.toPx().roundToInt(),
+                                burn.canvas.y.dp.toPx().roundToInt(),
+                            )
+                        }
                         .then(
                             if (editing) {
                                 Modifier.pointerInput(Unit) {
@@ -223,7 +232,15 @@ fun HomeScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Column(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    // 防烧屏：时钟每 5 分钟在 ±2px 内挪一步
+                                    .offset {
+                                        IntOffset(
+                                            burn.clock.x.dp.toPx().roundToInt(),
+                                            burn.clock.y.dp.toPx().roundToInt(),
+                                        )
+                                    },
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
                                 Text(
@@ -461,6 +478,15 @@ fun HomeScreen(
                 }
             }
 
+            if (burn.dim < 1f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 1f - burn.dim))
+                        .pointerInput(Unit) {},
+                )
+            }
+
             val captionText = when {
                 state.hubSleeping || state.voiceListening -> null
                 state.companionBusy -> "……"
@@ -500,6 +526,36 @@ fun HomeScreen(
                 )
             }
         }
+    }
+}
+
+/** 防烧屏三件套的当前值；编辑态全部归零/恢复，方便对位。 */
+private data class BurnShifts(
+    val clock: PixelShift,
+    val canvas: PixelShift,
+    val dim: Float,
+)
+
+@Composable
+private fun rememberBurnShifts(active: Boolean): BurnShifts {
+    val startedAt = remember { System.currentTimeMillis() }
+    var elapsedMin by remember { mutableLongStateOf(0L) }
+    var dim by remember { mutableFloatStateOf(1f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            elapsedMin = (System.currentTimeMillis() - startedAt) / 60_000
+            dim = BurnGuard.nightDimFactor(LocalDateTime.now())
+            delay(30_000)
+        }
+    }
+    return if (active) {
+        BurnShifts(
+            clock = BurnGuard.driftShift(elapsedMin),
+            canvas = BurnGuard.staticShift(elapsedMin),
+            dim = dim,
+        )
+    } else {
+        BurnShifts(PixelShift(0, 0), PixelShift(0, 0), 1f)
     }
 }
 
