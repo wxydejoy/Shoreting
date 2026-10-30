@@ -40,4 +40,7 @@ APK：`android/app/build/outputs/apk/debug/app-debug.apk`。装到横屏设备�
 - 听完由 `UtteranceGate`：结束静音 1s、最短句 1.5s
 - 字幕等 `POST /v1/companion/chat` 全文；声音由 Mini TTS 出，本机不播守岸人 wav
 - 她正在说时再喊「小岸」：`POST /v1/companion/stop` 后重新听
-- 她问了一句（字幕带问号）：约 2.4 秒后自动再听，不必再喊小岸
+- 免唤醒连续对话（`ConversationWindow`）：她每说完一句开一个窗口——问句 15 秒、
+  陈述句 8 秒（按字数等 TTS 说完才起算）；窗口内不用喊小岸，持续人声 300ms 直接进听写，
+  不放提示音也不亮屏；连着两轮没听出人话就关窗，屏幕边缘有一圈淡呼吸光表示在听
+- 她说话的那几秒不开窗（`ConversationBus.suppress`），免得麦克风听到的是她自己
