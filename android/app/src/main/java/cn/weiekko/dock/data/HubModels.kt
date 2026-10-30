@@ -118,7 +118,25 @@ data class PcStatus(
     val memory: PcMemory? = null,
     val gpu: PcGpu? = null,
     val fps: Double? = null,
-)
+) {
+    // updatedAt 是采样时刻：每次轮询都会前进，但画面可能一模一样（CPU 还是 12%）。
+    // 让它参与相等性判断，DockUiState 就每 2～3 秒「变」一次，Compose 只能整屏重组。
+    override fun equals(other: Any?): Boolean = other is PcStatus &&
+        online == other.online &&
+        cpu == other.cpu &&
+        memory == other.memory &&
+        gpu == other.gpu &&
+        fps == other.fps
+
+    override fun hashCode(): Int {
+        var result = online.hashCode()
+        result = 31 * result + (cpu?.hashCode() ?: 0)
+        result = 31 * result + (memory?.hashCode() ?: 0)
+        result = 31 * result + (gpu?.hashCode() ?: 0)
+        result = 31 * result + (fps?.hashCode() ?: 0)
+        return result
+    }
+}
 
 @Serializable
 data class PcCpu(
@@ -152,6 +170,23 @@ data class MediaInfo(
     val app: String? = null,
     val updatedAt: String,
 ) {
+    // 同 PcStatus：updatedAt 每次采样都前进，内容没变就不该算「新状态」。
+    override fun equals(other: Any?): Boolean = other is MediaInfo &&
+        online == other.online &&
+        playing == other.playing &&
+        title == other.title &&
+        artist == other.artist &&
+        app == other.app
+
+    override fun hashCode(): Int {
+        var result = online.hashCode()
+        result = 31 * result + playing.hashCode()
+        result = 31 * result + (title?.hashCode() ?: 0)
+        result = 31 * result + (artist?.hashCode() ?: 0)
+        result = 31 * result + (app?.hashCode() ?: 0)
+        return result
+    }
+
     companion object {
         fun phoneIdle(): MediaInfo = MediaInfo(
             online = true,
