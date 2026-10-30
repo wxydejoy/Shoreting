@@ -31,6 +31,15 @@ mini:
   pc_ms: 1000          # 电脑约 1 秒一次
   mijia_ms: 15000      # 米家约 15 秒一次
 
+# 主动播报：默认整段关着。morning.at 到点后两小时内说一句，一天一次；
+# 免打扰时段与每日配额兜底，被三道闸拦下不算配额、下个到点还会再试
+# proactive:
+#   daily_limit: 6
+#   quiet: ["23:00", "07:00"]
+#   morning:
+#     at: "07:30"
+#     # text: "早，记得喝水。"   # 不写就现拼：问好 + 室温
+
 # 桌面伴侣（本地 LLM + Mini TTS）。整段删掉或 enabled: false → snapshot.companion = null
 # Hub 在 Mini 上填 127.0.0.1
 # 默认 tts.deliver 为 false：Mini 本机出声；Hub 按句 cue，chat 仍等全文

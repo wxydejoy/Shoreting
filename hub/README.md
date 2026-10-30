@@ -19,6 +19,7 @@ hub/
     llm.py            # 提示词组装、人设正文、两种流式回复的解析
     reads.py          # 朗读任务：排队、工作线程、wav 落盘与任务表
     actions.py        # ACTION 行落成设备动作：逐台执行、单台失败不连坐
+    proactive.py      # 到点才开口：免打扰、每日配额、三道闸（默认关）
     books.py          # 睡前朗读
     probe.py          # 探针模式（CPU 上报 + 远程开程序）
     pc.py             # CPU / 内存 / GPU / CPU 温度
