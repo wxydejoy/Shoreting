@@ -353,6 +353,40 @@ devices:
                 }
             )
 
+    def test_snapshot_reads_cache_instead_of_mijia(self) -> None:
+        """主屏 3s 轮询不能每轮都同步打米家云：只有冷启动那次真拉。"""
+        from unittest.mock import patch
+
+        cfg = parse_config(
+            {
+                "name": "study",
+                "token": "secret-token-value",
+                "devices": [{"id": "lamp", "name": "台灯", "type": "light", "mijia_name": "台灯"}],
+                "mini": False,
+            }
+        )
+        hub = DockHub(cfg)
+        self.addCleanup(hub.pc.stop)
+        self.addCleanup(hub.reporter.stop)
+        calls: list[int] = []
+
+        def counted():
+            calls.append(1)
+            return (
+                "ok",
+                None,
+                None,
+                [{"id": "lamp", "name": "台灯", "type": "light", "on": False, "online": True}],
+            )
+
+        with patch.object(hub, "_mijia_status", return_value=("ok", None)):
+            with patch.object(hub, "_mijia_desk_slice", side_effect=counted):
+                snap = hub.snapshot()
+                hub.snapshot()
+                hub.snapshot()
+        self.assertEqual([item["id"] for item in snap["devices"]], ["lamp"])
+        self.assertEqual(len(calls), 1)
+
     def test_media_disabled_is_null(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg = parse_config(

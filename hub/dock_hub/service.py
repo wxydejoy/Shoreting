@@ -149,6 +149,7 @@ class DockHub:
         self._desk_temp: dict[str, Any] | None = None
         self._desk_devices: list[dict[str, Any]] = []
         self._mijia_at = 0.0
+        self._mijia_tried = 0.0
         self._refreshing_mijia = False
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
@@ -608,6 +609,9 @@ class DockHub:
         self._diary_stop.set()
         self.diary.configure(config.diary.enabled, config.diary.at)
         self._start_diary()
+        # 设备表变了，旧缓存里的 devices 不再对得上，下次取快照重新同步拉一次
+        self._mijia_at = 0.0
+        self._mijia_tried = 0.0
         self.reporter.stop()
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
@@ -744,9 +748,23 @@ class DockHub:
         self.note_change()
 
     def snapshot(self) -> dict[str, Any]:
+        """主屏每 3s 轮询一次，这条路径绝不能同步打米家云。
+
+        热路径只读缓存（后台按 mijia_ms 刷新），只有冷启动第一次同步拉一次，
+        否则安卓开机就是一段空白。米家没登录时本来就不发请求，直接走未绑定兜底。
+        """
         started = time.perf_counter()
-        status, message, temperature, devices = self._mijia_desk_slice()
-        body = self._snapshot_body(status, message, temperature, devices)
+        status, message = self._mijia_status()
+        if status == "login_required":
+            _status, _message, temperature, devices = self._mijia_desk_slice()
+            body = self._snapshot_body(status, message, temperature, devices)
+        else:
+            if self._mijia_tried <= 0:
+                self._refresh_mijia_blocking()
+            else:
+                self._refresh_mijia_async()
+            temperature, devices = self._desk_view()
+            body = self._snapshot_body(status, message, temperature, devices)
         # 手机每 3s 来一次，这是最容易拖慢体验的路径，所以只盯它一个
         METRICS.observe("hub_snapshot_ms", round((time.perf_counter() - started) * 1000.0, 1))
         return body
@@ -2011,35 +2029,52 @@ class DockHub:
         self._note_desk_snapshot(body)
         return body
 
-    def _note_desk_snapshot(self, snap: dict[str, Any]) -> None:
+    def _note_desk_snapshot(self, snap: dict[str, Any], *, from_mijia: bool = False) -> None:
         devices = snap.get("devices")
         temp = snap.get("temperature")
         with self._desk_lock:
             self._desk_temp = temp if isinstance(temp, dict) else None
             self._desk_devices = list(devices) if isinstance(devices, list) else []
-            self._mijia_at = time.monotonic()
+            if from_mijia:
+                self._mijia_at = time.monotonic()
 
-    def _maybe_refresh_mijia(self) -> None:
+    def _mijia_interval(self) -> float:
         cfg = self.config.mini or MiniLinkConfig()
-        interval = max(5.0, cfg.mijia_ms / 1000.0)
-        if self._mijia_at > 0 and time.monotonic() - self._mijia_at < interval:
-            return
-        if self._refreshing_mijia:
+        return max(5.0, cfg.mijia_ms / 1000.0)
+
+    def _should_refresh_mijia(self) -> bool:
+        if self._mijia_tried > 0 and time.monotonic() - self._mijia_tried < self._mijia_interval():
+            return False
+        return not self._refreshing_mijia
+
+    def _refresh_mijia_async(self) -> None:
+        """后台拉米家：主屏轮询和探针上报都不该等云端。"""
+        if not self._should_refresh_mijia():
             return
         self._refreshing_mijia = True
+        threading.Thread(target=self._mijia_worker, name="mijia-refresh", daemon=True).start()
+
+    def _refresh_mijia_blocking(self) -> None:
+        if not self._should_refresh_mijia():
+            return
+        self._refreshing_mijia = True
+        self._mijia_worker()
+
+    def _mijia_worker(self) -> None:
         try:
             self._pull_mijia_desk()
         except Exception as exc:  # noqa: BLE001 - 后台刷新失败不能拖垮请求线程
             logs.swallowed("后台刷新米家设备缓存", exc)
         finally:
+            self._mijia_tried = time.monotonic()
             self._refreshing_mijia = False
 
     def _pull_mijia_desk(self) -> None:
         _status, _message, temperature, devices = self._mijia_desk_slice()
-        self._note_desk_snapshot({"temperature": temperature, "devices": devices})
+        self._note_desk_snapshot({"temperature": temperature, "devices": devices}, from_mijia=True)
 
-    def _windows_payload(self) -> dict[str, Any]:
-        self._maybe_refresh_mijia()
+    def _desk_view(self) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        """缓存里的米家设备 + 现算的开程序状态，合成主屏要的那份 devices。"""
         running = self._running_names()
         with self._desk_lock:
             temperature = self._desk_temp
@@ -2069,6 +2104,11 @@ class DockHub:
         for item in cached:
             if isinstance(item, dict) and item.get("id") and item["id"] not in seen:
                 devices.append(item)
+        return temperature, devices
+
+    def _windows_payload(self) -> dict[str, Any]:
+        self._refresh_mijia_async()
+        temperature, devices = self._desk_view()
         return {
             "pc": self.pc_snapshot(),
             "media": self.media.snapshot(),
