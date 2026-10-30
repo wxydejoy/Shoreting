@@ -29,7 +29,6 @@ from dock_hub.actions import apply_device_skills, launch_apps, set_temperature
 from dock_hub.chat_log import ChatLog
 from dock_hub.config import CompanionConfig, ID_RE
 from dock_hub.errors import HubError
-<<<<<<< HEAD
 from dock_hub.reads import ReadJobs, job_public
 
 # 「听懂话」那一段搬去了 intents.py（纯函数：原话 + 技能表 → 设备动作）。
@@ -118,17 +117,10 @@ from dock_hub.persona import (
 )
 from dock_hub.metrics import METRICS
 
-MAX_CLIPS = 8
-MAX_READ_CHARS = 8000
-READ_TTS_TIMEOUT_SEC = 90.0
-=======
 from dock_hub.tts import Tts
 
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
-MAX_READ_JOBS = 24
-READ_CHARS_PER_SEC = 4.0
->>>>>>> refactor/companion-tts
 
 
 PRESENCE_SEC = 90
@@ -398,13 +390,8 @@ class Companion:
         with self._lock:
             self._seq += 1
             self._speaking = False
-<<<<<<< HEAD
         self.reads.cancel_all()
-        self._stop_tts()
-=======
-        self._cancel_running_reads()
         self.tts.stop()
->>>>>>> refactor/companion-tts
         _latency("-", "stop")
         return {"ok": True}
 
@@ -439,13 +426,13 @@ class Companion:
     # reads.ReadJobs 干活，出声和状态都在这一侧；下面几个方法就是两边之间的缝。
 
     def stop_playback(self) -> None:
-        self._stop_tts()
+        self.tts.stop()
 
     def cue_sentence(self, text: str, ident: str, seq: int) -> bool:
         return self._cue_sentence(text, ident, seq)
 
     def synthesize(self, text: str, ident: str) -> bytes | None:
-        return self._speak(text, ident, play_only=False, play=False)
+        return self.tts.speak(text, ident, play_only=False, play=False)
 
     def next_seq(self) -> int:
         with self._lock:
@@ -530,210 +517,6 @@ class Companion:
             return self._replay_read_job(ident)
         raise HubError("bad_request", "action 只能是 cancel、delete 或 replay")
 
-<<<<<<< HEAD
-=======
-    def _remember_read_job(
-        self,
-        ident: str,
-        *,
-        mode: str,
-        text: str,
-        chars: int,
-        estimate: int,
-        chunks: int,
-        status: str,
-        done: int,
-        pieces: list[str] | None = None,
-    ) -> dict[str, Any]:
-        preview = "".join(text.split())
-        if len(preview) > 36:
-            preview = preview[:35] + "…"
-        job: dict[str, Any] = {
-            "id": ident,
-            "mode": mode,
-            "status": status,
-            "chars": chars,
-            "estimate_sec": estimate,
-            "chunks": chunks,
-            "done": done,
-            "preview": preview,
-            "audio_id": None,
-            "duration_sec": None,
-            "bytes": None,
-            "filename": None,
-            "error": None,
-            "created_at": int(time.time()),
-            "_text": text,
-        }
-        if pieces is not None:
-            job["_chunks"] = list(pieces)
-        with self._read_lock:
-            self._read_jobs[ident] = job
-            while len(self._read_jobs) > MAX_READ_JOBS:
-                self._read_jobs.popitem(last=False)
-        return job
-
-    def _ensure_read_worker(self) -> None:
-        worker = self._read_worker
-        if worker is not None and worker.is_alive():
-            return
-        thread = threading.Thread(target=self._read_loop, name="read-jobs", daemon=True)
-        self._read_worker = thread
-        thread.start()
-
-    def _read_loop(self) -> None:
-        while True:
-            with self._read_cv:
-                while not self._read_queue:
-                    self._read_cv.wait()
-                ident = self._read_queue.popleft()
-            try:
-                self._run_read_job(ident)
-            except Exception as exc:  # noqa: BLE001
-                _latency(ident, "read_job_crash")
-                with self._read_lock:
-                    job = self._read_jobs.get(ident)
-                    if job is not None:
-                        job["status"] = "error"
-                        job["error"] = str(exc)[:120]
-
-    def _run_read_job(self, ident: str) -> None:
-        with self._read_lock:
-            if ident in self._read_cancel:
-                job = self._read_jobs.get(ident)
-                if job is not None and job.get("status") in {"queued", "running"}:
-                    job["status"] = "cancelled"
-                    job.pop("_chunks", None)
-                return
-            job = self._read_jobs.get(ident)
-            if job is None or job.get("status") == "cancelled":
-                return
-            chunks = list(job.get("_chunks") or [])
-            mode = str(job.get("mode") or "file")
-            job["status"] = "running"
-            job["done"] = 0
-        _latency(ident, "read_job_run", mode=mode, chunks=len(chunks))
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
-            self._speaking = True
-        try:
-            if mode == "play":
-                self.tts.stop()
-            parts: list[bytes] = []
-            for i, sent in enumerate(chunks, start=1):
-                self._raise_if_read_stopped(ident, seq)
-                if mode == "play":
-                    if not self._cue_sentence(sent, ident, seq):
-                        raise HubError("companion_unavailable", "被打断了")
-                else:
-                    wav = self.tts.speak(sent, ident, play_only=False, play=False)
-                    if not wav:
-                        raise HubError("companion_unavailable", "合成失败")
-                    parts.append(wav)
-                with self._read_lock:
-                    current = self._read_jobs.get(ident)
-                    if current is not None:
-                        current["done"] = i
-                _latency(ident, "read_chunk", i=i, n=len(chunks), chars=len(sent), mode=mode)
-            if mode == "play":
-                with self._read_lock:
-                    current = self._read_jobs.get(ident)
-                    if current is not None:
-                        current["status"] = "done"
-                        current["done"] = len(chunks)
-                        current.pop("_chunks", None)
-                _latency(ident, "read_job_done", mode="play")
-                return
-            joined = join_wavs(parts)
-            self._store_read(ident, joined)
-            with self._read_lock:
-                current = self._read_jobs.get(ident)
-                if current is not None:
-                    current["status"] = "done"
-                    current["done"] = len(chunks)
-                    current["audio_id"] = ident
-                    current["duration_sec"] = round(wav_duration_sec(joined), 3)
-                    current["bytes"] = len(joined)
-                    current["filename"] = f"shorekeeper-{ident}.wav"
-                    current.pop("_chunks", None)
-                    self._write_read_meta(current)
-            _latency(ident, "read_job_done", bytes=len(joined))
-        except (HubError, ValueError, wave.Error) as exc:
-            interrupted = isinstance(exc, HubError) and exc.message == "被打断了"
-            message = exc.message if isinstance(exc, HubError) else "合成失败"
-            with self._read_lock:
-                current = self._read_jobs.get(ident)
-                if current is not None:
-                    current["status"] = "cancelled" if interrupted else "error"
-                    current["error"] = None if interrupted else message
-                    current.pop("_chunks", None)
-            _latency(ident, "read_job_error" if not interrupted else "read_job_cancel")
-        finally:
-            with self._lock:
-                self._speaking = False
-
-    def _raise_if_read_stopped(self, ident: str, seq: int) -> None:
-        with self._read_lock:
-            cancelled = ident in self._read_cancel
-        with self._lock:
-            barged = seq != self._seq
-        if cancelled or barged:
-            raise HubError("companion_unavailable", "被打断了")
-
-    def _cancel_running_reads(self) -> None:
-        with self._read_lock:
-            for ident, job in self._read_jobs.items():
-                if job.get("status") in {"queued", "running"}:
-                    job["status"] = "cancelled"
-                    job["error"] = None
-                    job.pop("_chunks", None)
-                    self._read_cancel.add(ident)
-            self._read_queue.clear()
-
-    def _cancel_read_job(self, ident: str) -> dict[str, Any]:
-        running = False
-        with self._read_lock:
-            job = self._read_jobs.get(ident)
-            if job is None:
-                raise HubError("not_found", "没有这个任务")
-            if job.get("status") in {"done", "error", "cancelled"}:
-                return _read_job_public(job)
-            job["status"] = "cancelled"
-            job["error"] = None
-            job.pop("_chunks", None)
-            self._read_cancel.add(ident)
-            try:
-                self._read_queue.remove(ident)
-            except ValueError:
-                running = True
-        if running:
-            with self._lock:
-                self._seq += 1
-                self._speaking = False
-            self.tts.stop()
-        with self._read_lock:
-            job = self._read_jobs.get(ident) or job
-        return _read_job_public(job)
-
-    def _delete_read_job(self, ident: str) -> dict[str, Any]:
-        with self._read_lock:
-            job = self._read_jobs.get(ident)
-        if job and job.get("status") in {"queued", "running"}:
-            self._cancel_read_job(ident)
-        with self._read_lock:
-            self._read_jobs.pop(ident, None)
-            self._read_cancel.discard(ident)
-        with self._lock:
-            self._clips.pop(ident, None)
-        if self._reads_dir and ID_RE.match(ident):
-            for suffix in (".wav", ".json"):
-                path = self._reads_dir / f"{ident}{suffix}"
-                if path.is_file():
-                    path.unlink()
-        return {"ok": True, "id": ident}
-
->>>>>>> refactor/companion-tts
     def _replay_read_job(self, ident: str) -> dict[str, Any]:
         text = self.reads.text_of(ident)
         if not text:
