@@ -724,7 +724,9 @@ class DockHub:
             sample = dict(self._remote_pc) if self._remote_pc else None
         if age is None or sample is None or age > stale:
             self._set_desk_pc_online(False)
-            return {"online": False, "updated_at": utc_now()}
+            # 报「最后一份样本的时刻」，不是「你问我的时刻」：主屏每 3s 一轮询，
+            # 打当前时间等于每次都给客户端一份新 payload，白白整屏重组。
+            return {"online": False, "updated_at": (sample or {}).get("updated_at") or ""}
         self._set_desk_pc_online(bool(sample.get("online")))
         return sample
 

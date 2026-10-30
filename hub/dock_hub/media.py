@@ -41,18 +41,21 @@ class MediaSession:
         self.enabled = enabled
         self._lock = threading.Lock()
         self._playing = False
+        # 「播放状态最后一次变化」的时刻，不是「你问我的时刻」：主屏每 3s 轮询
+        # 一次 snapshot，回读时间会让整份 payload 每次都变，客户端每次都得重建
+        # 状态、整屏重组一遍，哪怕画面没有任何变化。
+        self._changed_at = utc_now()
         self._send = send_media_key
 
     def snapshot(self) -> dict[str, Any] | None:
         if not self.enabled:
             return None
         with self._lock:
-            playing = self._playing
-        return {
-            "online": True,
-            "playing": playing,
-            "updated_at": utc_now(),
-        }
+            return {
+                "online": True,
+                "playing": self._playing,
+                "updated_at": self._changed_at,
+            }
 
     def command(self, action: str) -> dict[str, Any]:
         if not self.enabled:
@@ -70,6 +73,7 @@ class MediaSession:
                 self._playing = not self._playing
             else:
                 self._playing = True
+            self._changed_at = utc_now()
         snap = self.snapshot()
         assert snap is not None
         return snap
