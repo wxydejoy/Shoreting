@@ -10,6 +10,7 @@ from dock_hub.proactive import (
     SedentaryWatch,
     Sustained,
     in_quiet_hours,
+    weather_change_text,
 )
 
 
@@ -312,6 +313,21 @@ class TestConfigAlerts(unittest.TestCase):
         cfg = self._parse({"alerts": False})
         self.assertEqual(hub_config_to_raw(cfg)["proactive"]["alerts"], False)
 
+    def test_weather_defaults_on(self) -> None:
+        cfg = self._parse({"morning": {"at": "07:30"}})
+        self.assertTrue(cfg.proactive.alerts.weather)
+
+    def test_weather_can_turn_off(self) -> None:
+        cfg = self._parse({"alerts": {"weather": False}})
+        self.assertFalse(cfg.proactive.alerts.weather)
+        again = parse_config(hub_config_to_raw(cfg))
+        self.assertEqual(again.proactive.alerts, cfg.proactive.alerts)
+
+    def test_alerts_false_turns_weather_off_too(self) -> None:
+        cfg = self._parse({"alerts": False})
+        self.assertFalse(cfg.proactive.alerts.weather)
+        self.assertFalse(cfg.proactive.alerts.temp_celsius)
+
 
 class TestSpeakUp(unittest.TestCase):
     """companion.speak_up：手机不在、在打游戏就说不了，也不留痕。"""
@@ -491,6 +507,170 @@ class TestServiceAlerts(unittest.TestCase):
         with hub._desk_lock:
             hub._desk_devices = [{"id": "lamp", "online": False}]
         hub._evaluate_alerts()  # 才离线几秒
+        self.assertEqual(said, [])
+
+
+def make_hourly(entries: list[tuple[float, int, float]]) -> dict:
+    """构造 fetch_hourly 的返回，entries 从 15:00 起每整点一条。"""
+    times, temps, codes, winds = [], [], [], []
+    day, hour = 30, 15
+    for celsius, code, wind in entries:
+        times.append(f"2026-10-{day}T{hour:02d}:00")
+        temps.append(celsius)
+        codes.append(code)
+        winds.append(wind)
+        hour += 1
+        if hour == 24:
+            hour, day = 0, 31
+    return {
+        "city": "上海",
+        "hourly": {"time": times, "celsius": temps, "code": codes, "wind_kmh": winds},
+    }
+
+
+class TestWeatherChange(unittest.TestCase):
+    """天气突变：只推「变化」，一次最多挑一条。"""
+
+    def test_rain_when_dry(self) -> None:
+        hourly = make_hourly([(20.0, 63, 10.0), (19.0, 63, 10.0)])
+        self.assertEqual(
+            weather_change_text(at(14, 30), 20.0, "晴", hourly),
+            "接下来两小时有雨，出门带伞。",
+        )
+
+    def test_no_repeat_if_already_wet(self) -> None:
+        hourly = make_hourly([(20.0, 63, 10.0)])
+        self.assertIsNone(weather_change_text(at(14, 30), 20.0, "雨", hourly))
+
+    def test_snow(self) -> None:
+        hourly = make_hourly([(20.0, 73, 10.0)])
+        self.assertEqual(
+            weather_change_text(at(14, 30), 20.0, "晴", hourly),
+            "接下来两小时要下雪了，路上慢点。",
+        )
+
+    def test_temp_drop(self) -> None:
+        hourly = make_hourly([(14.0, 1, 5.0), (14.5, 1, 5.0)])
+        self.assertEqual(
+            weather_change_text(at(14, 30), 20.0, "晴", hourly),
+            "过两个钟头要降 6 度，多穿点。",
+        )
+
+    def test_wind(self) -> None:
+        hourly = make_hourly([(20.0, 1, 42.0)])
+        self.assertEqual(
+            weather_change_text(at(14, 30), 20.0, "晴", hourly),
+            "等会儿风要大了，窗户关严实点。",
+        )
+
+    def test_boring_weather_stays_silent(self) -> None:
+        hourly = make_hourly([(20.0, 1, 10.0), (20.5, 2, 12.0)])
+        self.assertIsNone(weather_change_text(at(14, 30), 20.0, "晴", hourly))
+
+    def test_outside_window_ignored(self) -> None:
+        # 20:00 的雨距 now（14:30）超出两小时窗口，不算数
+        hourly = {"hourly": {"time": ["2026-10-30T20:00"], "celsius": [20.0], "code": [63], "wind_kmh": [5.0]}}
+        self.assertIsNone(weather_change_text(at(14, 30), 20.0, "晴", hourly))
+
+    def test_missing_data_is_silent(self) -> None:
+        self.assertIsNone(weather_change_text(at(14, 30), 20.0, "晴", {}))
+        self.assertIsNone(weather_change_text(at(14, 30), 20.0, "晴", {"hourly": {"time": []}}))
+
+    def test_rain_beats_drop(self) -> None:
+        hourly = make_hourly([(14.0, 63, 5.0)])
+        self.assertEqual(
+            weather_change_text(at(14, 30), 20.0, "晴", hourly),
+            "接下来两小时有雨，出门带伞。",
+        )
+
+
+class TestServiceWeatherAlert(unittest.TestCase):
+    """service 一侧：一小时看一次，没城市不打网，夜里不看。"""
+
+    def setUp(self) -> None:
+        from dock_hub import weather as weather_mod
+
+        self.weather = weather_mod
+        weather_mod._last_city = None
+        self._orig = (weather_mod.fetch_hourly, weather_mod.fetch_weather, weather_mod.last_city)
+        self.addCleanup(self._restore)
+
+    def _restore(self) -> None:
+        self.weather.fetch_hourly, self.weather.fetch_weather, self.weather.last_city = self._orig
+        self.weather._last_city = None
+        self.weather._cache.clear()
+        self.weather._hourly_cache.clear()
+
+    def _hub(self):
+        from dock_hub.config import ProactiveConfig
+        from dock_hub.service import DockHub
+
+        cfg = parse_config({"name": "study", "token": "secret-token-value", "devices": []})
+        hub = DockHub(cfg)
+        self.addCleanup(hub.proactive.configure, ProactiveConfig())
+        hub.proactive.configure(ProactiveConfig(enabled=True, daily_limit=5))
+        said: list[str] = []
+        hub.proactive._speak = lambda text: (said.append(text), True)[1]
+        return hub, said
+
+    def test_says_once_and_then_dup(self) -> None:
+        hub, said = self._hub()
+        self.weather.last_city = lambda: "上海"
+        self.weather.fetch_weather = lambda city: {
+            "city": "上海", "celsius": 20.0, "condition": "晴", "query": "上海"
+        }
+        self.weather.fetch_hourly = lambda city: make_hourly([(20.0, 63, 10.0)])
+        hub._evaluate_weather_alert(at(14, 30))
+        self.assertEqual(said, ["接下来两小时有雨，出门带伞。"])
+        hub._weather_check_at = 0.0  # 模拟一小时后
+        hub._evaluate_weather_alert(at(15, 30))
+        self.assertEqual(said, ["接下来两小时有雨，出门带伞。"])  # 一天最多一次
+
+    def test_gate_only_checks_hourly(self) -> None:
+        hub, said = self._hub()
+        calls: list[str] = []
+        self.weather.last_city = lambda: "上海"
+        self.weather.fetch_weather = lambda city: calls.append(city) or {}
+        self.weather.fetch_hourly = lambda city: calls.append(city) or {}
+        hub._evaluate_weather_alert(at(14, 30))
+        self.assertEqual(len(calls), 2)
+        hub._evaluate_weather_alert(at(14, 31))  # 一小时内不再取数据
+        self.assertEqual(len(calls), 2)
+
+    def test_no_city_no_network(self) -> None:
+        hub, said = self._hub()
+        self.weather.last_city = lambda: None
+
+        def boom(city):
+            raise AssertionError("不该打网")
+
+        self.weather.fetch_weather = boom
+        self.weather.fetch_hourly = boom
+        hub._evaluate_weather_alert(at(14, 30))
+        self.assertEqual(said, [])
+
+    def test_night_hours_silent(self) -> None:
+        hub, said = self._hub()
+
+        def boom(city):
+            raise AssertionError("夜里不该打网")
+
+        self.weather.last_city = lambda: "上海"
+        self.weather.fetch_weather = boom
+        self.weather.fetch_hourly = boom
+        hub._evaluate_weather_alert(at(23, 30))
+        self.assertEqual(said, [])
+
+    def test_fetch_failure_is_swallowed(self) -> None:
+        hub, said = self._hub()
+        self.weather.last_city = lambda: "上海"
+
+        def boom(city):
+            raise OSError("断网")
+
+        self.weather.fetch_weather = boom
+        self.weather.fetch_hourly = boom
+        hub._evaluate_weather_alert(at(14, 30))  # 不抛出就算过
         self.assertEqual(said, [])
 
 

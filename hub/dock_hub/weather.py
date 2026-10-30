@@ -22,6 +22,7 @@ FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 USER_AGENT = "Shoreting-Hub/1.0 (+https://github.com/wxydejoy/Shoreting)"
 
 CACHE_TTL_SEC = 600.0
+HOURLY_CACHE_TTL_SEC = 1800.0
 TIMEOUT_SEC = 8.0
 
 # 与安卓端 WeatherPlaces 保持一致的常用城市（无需走地理编码）
@@ -78,6 +79,8 @@ CITIES: dict[str, tuple[float, float]] = {
 _COORD_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)\s*$")
 
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_hourly_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_last_city: str | None = None
 
 
 def wmo_condition(code: int) -> str:
@@ -165,4 +168,57 @@ def fetch_weather(city: str) -> dict[str, Any]:
         "query": key,
     }
     _cache[key] = (now, data)
+    global _last_city
+    _last_city = key
+    return data
+
+
+def last_city() -> str | None:
+    """手机最近一次查过天气的城市；主动播报（天气突变）用同一个地方。"""
+    return _last_city
+
+
+def fetch_hourly(city: str) -> dict[str, Any]:
+    """逐小时预报，给「天气突变」主动提醒用。
+
+    返回 {"city", "hourly": {"time", "celsius", "code", "wind_kmh"}}，
+    time 是城市当地时区（Open-Meteo timezone=auto）的 ISO 字符串。
+    与 fetch_weather 分开缓存：逐小时数据大，且手机的主屏天气不依赖它。
+    """
+    key = (city or "").strip()
+    if not key:
+        raise ValueError("城市为空")
+    now = time.monotonic()
+    cached = _hourly_cache.get(key)
+    if cached is not None and now - cached[0] < HOURLY_CACHE_TTL_SEC:
+        return cached[1]
+
+    name, lat, lon = _resolve(key)
+    query = urllib.parse.urlencode(
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "hourly": "temperature_2m,weather_code,wind_speed_10m",
+            "forecast_days": 2,
+            "timezone": "auto",
+        }
+    )
+    body = _get_json(FORECAST_URL + "?" + query)
+    hourly = (body or {}).get("hourly") or {}
+    times = hourly.get("time") or []
+    temps = hourly.get("temperature_2m") or []
+    codes = hourly.get("weather_code") or []
+    winds = hourly.get("wind_speed_10m") or []
+    if not times or not temps or len(times) != len(temps):
+        raise ValueError("天气源没有返回逐小时预报")
+    data = {
+        "city": name,
+        "hourly": {
+            "time": [str(t) for t in times],
+            "celsius": [float(t) for t in temps],
+            "code": [int(c or 3) for c in codes] if len(codes) == len(times) else [],
+            "wind_kmh": [float(w or 0) for w in winds] if len(winds) == len(times) else [],
+        },
+    }
+    _hourly_cache[key] = (now, data)
     return data

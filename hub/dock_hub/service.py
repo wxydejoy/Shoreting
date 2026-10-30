@@ -111,6 +111,7 @@ class DockHub:
         )
         self._alert_state = Sustained()
         self._sedentary = SedentaryWatch()
+        self._weather_check_at = 0.0
         self._proactive_stop = threading.Event()
         self._start_proactive()
         self.reporter.start()
@@ -194,6 +195,8 @@ class DockHub:
                 if said.spoke:
                     self._sedentary.reset()  # 提过就重新计时，别连环催
                 print(f"[proactive] 久坐提醒：{said.text or said.reason}")
+        if alerts.weather:
+            self._evaluate_weather_alert(now)
         if alerts.offline_minutes > 0:
             for item in self._offline_mijia_devices():
                 key = f"offline:{item['id']}"
@@ -202,6 +205,42 @@ class DockHub:
                     if said.spoke:
                         self._alert_state.clear(key)
                     print(f"[proactive] 离线提醒：{said.text or said.reason}")
+
+    WEATHER_CHECK_SEC = 3600.0
+
+    def _evaluate_weather_alert(self, now: datetime) -> None:
+        """天气突变（F15）：每小时比对一次逐小时预报，只推「变化」。
+
+        城市用手机最近一次查过的那个，没查过就不提醒。07:00–21:00 之外不看，
+        免打扰时段与每天最多一次由 proactive.alert 兑底。
+        """
+        if now.hour < 7 or now.hour >= 21:
+            return
+        if time.monotonic() - self._weather_check_at < self.WEATHER_CHECK_SEC:
+            return
+        self._weather_check_at = time.monotonic()
+        from dock_hub.proactive import weather_change_text
+        from dock_hub.weather import fetch_hourly, fetch_weather, last_city
+
+        city = last_city()
+        if not city:
+            return
+        try:
+            hourly = fetch_hourly(city)
+            current = fetch_weather(city)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[proactive] 天气预报拿不到：{exc}")
+            return
+        text = weather_change_text(
+            now,
+            float(current.get("celsius") or 0.0),
+            str(current.get("condition") or ""),
+            hourly,
+        )
+        if not text:
+            return
+        said = self.proactive.alert("weather", text, now)
+        print(f"[proactive] 天气提醒：{said.text or said.reason}")
 
     def _idle_seconds(self) -> float | None:
         """键鼠空闲秒数。只有探针在报且报得新鲜才有；拿不到就 None。"""

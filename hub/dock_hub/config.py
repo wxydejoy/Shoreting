@@ -53,6 +53,8 @@ class AlertsConfig:
     offline_minutes: int = 10
     # 连续用电脑多久提醒起来走走（键鼠空闲 5 分钟就算休息过了）；0 = 不提醒
     sedentary_minutes: int = 90
+    # 天气突变（未来两小时有雨/骤降/大风）；false = 不提醒
+    weather: bool = True
 
 
 @dataclass
@@ -472,7 +474,7 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
     if alerts_raw is None or alerts_raw is True:
         alerts = AlertsConfig()
     elif alerts_raw is False:
-        alerts = AlertsConfig(temp_celsius=0, offline_minutes=0, sedentary_minutes=0)
+        alerts = AlertsConfig(temp_celsius=0, offline_minutes=0, sedentary_minutes=0, weather=False)
     elif isinstance(alerts_raw, dict):
         alerts = AlertsConfig(
             temp_celsius=_threshold(alerts_raw.get("temp_celsius"), 85, "proactive.alerts.temp_celsius"),
@@ -482,6 +484,7 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
             sedentary_minutes=_threshold(
                 alerts_raw.get("sedentary_minutes"), 90, "proactive.alerts.sedentary_minutes"
             ),
+            weather=bool(alerts_raw.get("weather", True)),
         )
     else:
         raise ValueError("proactive.alerts 必须是对象，或用 alerts: false 全关")
@@ -762,6 +765,7 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
         config.alerts.temp_celsius <= 0
         and config.alerts.offline_minutes <= 0
         and config.alerts.sedentary_minutes <= 0
+        and not config.alerts.weather
     ):
         raw["alerts"] = False
     else:
@@ -769,6 +773,7 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
             "temp_celsius": config.alerts.temp_celsius,
             "offline_minutes": config.alerts.offline_minutes,
             "sedentary_minutes": config.alerts.sedentary_minutes,
+            "weather": config.alerts.weather,
         }
     return raw
 
