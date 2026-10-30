@@ -15,6 +15,7 @@ hub/
     ratelimit.py      # 按来源 IP + 端点的令牌桶（429）
     accesslog.py      # 访问日志（按天滚，留 7 天，不记查询串）
     service.py        # snapshot / command
+<<<<<<< HEAD
     companion.py      # 守岸人主流程：chat 一轮、TTS 队列、打断；朗读任务已交出去
     intents.py        # 听懂一句话：中文数字、灯 / 亮度 / 温度、ACTION 行、口误折叠
     persona.py        # 怎么说：播报文案、情绪、mood.yaml 读写
@@ -22,6 +23,10 @@ hub/
     llm.py            # 提示词组装、人设正文、两种流式回复的解析
     reads.py          # 朗读任务：排队、工作线程、wav 落盘与任务表
     actions.py        # ACTION 行落成设备动作：逐台执行、单台失败不连坐
+=======
+    companion.py      # 守岸人：LLM 调度、口头技能、朗读任务
+    tts.py            # 嘴巴：探活 / 合成 / 叫停
+>>>>>>> refactor/companion-tts
     books.py          # 睡前朗读
     schedule.py       # 定时任务（到点开关设备 / 说一句）
     probe.py          # 探针模式（CPU 上报 + 远程开程序）
