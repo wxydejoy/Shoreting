@@ -422,6 +422,29 @@ class Companion:
             text, turn, seq, started, cue_llm=False, user="（微信）"
         )
 
+    def speak_up(self, text: str) -> bool:
+        """主动开口：到点说一句。被三道闸拦下（手机不在、在打游戏、伴侣没开）
+        就返回 False——不算配额，下个到点的时刻还会再试。"""
+        if not self.config.enabled:
+            return False
+        spoken = clip_announce(str(text or ""))
+        if not spoken:
+            return False
+        turn = _turn_id({"text": spoken})
+        started = time.monotonic()
+        skipped = self._unsolicited_block()
+        if skipped:
+            _latency(turn, "announce_skip", reason=skipped, source="proactive")
+            return False
+        _latency(turn, "announce_recv", chars=len(spoken), source="proactive")
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+        self._stop_tts()
+        self._commit_reply(spoken)
+        self._finish_spoken(spoken, turn, seq, started, cue_llm=False, user="（定时）")
+        return True
+
     # ---- 朗读任务的回调 ------------------------------------------------------
     # reads.ReadJobs 干活，出声和状态都在这一侧；下面几个方法就是两边之间的缝。
 

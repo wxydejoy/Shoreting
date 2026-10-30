@@ -471,6 +471,9 @@ def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
         raw["temperature"] = dumped["temperature"]
     if dumped.get("companion") is not None:
         raw["companion"] = dumped["companion"]
+    # 主动播报的段向导里没有表单，保存时原样带过去，别让一次保存把它删了
+    if dumped.get("proactive") is not None:
+        raw["proactive"] = dumped["proactive"]
     # 大模型覆盖（配置网页）：只覆盖表单里真正填了值的字段，留空 = 保持原值
     base_url_in = str(payload.get("llmBaseUrl") or "").strip()
     model_in = str(payload.get("llmModel") or payload.get("customModel") or "").strip()

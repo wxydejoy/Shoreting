@@ -68,6 +68,27 @@ class SetupWizardTest(unittest.TestCase):
         self.assertEqual(raw["companion"]["tts"]["base_url"], "http://127.0.0.1:18100")
         self.assertEqual(raw["mini"]["base_url"], "http://10.83.22.121:17891")
 
+    def test_wizard_save_keeps_proactive(self) -> None:
+        from dock_hub.setup_ui import _payload_to_raw
+
+        cfg = parse_config(
+            {
+                "name": "study",
+                "token": "secret-token-value",
+                "proactive": {
+                    "daily_limit": 3,
+                    "morning": {"at": "07:30", "text": "早。"},
+                },
+                "devices": [],
+            }
+        )
+        raw = _payload_to_raw(
+            {"name": "study", "token": "secret-token-value", "port": 17890, "devices": []},
+            cfg,
+        )
+        self.assertEqual(raw["proactive"]["daily_limit"], 3)
+        self.assertEqual(raw["proactive"]["morning"]["at"], "07:30")
+
     def test_voice_save_keeps_the_rest_and_clamps(self) -> None:
         from unittest.mock import patch
 

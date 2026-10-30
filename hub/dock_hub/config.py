@@ -55,12 +55,34 @@ class LimitsConfig:
     command_per_min: int = 60
     login_per_min: int = 10
     read_per_min: int = 20
+
+
+@dataclass
 class TokenConfig:
     """一枚给某台设备的 token。删掉这一条就等于吊销它。"""
 
     id: str
     value: str
     name: str | None = None
+class MorningConfig:
+    """早间播报：到点说一句，一天一次。"""
+
+    at: str = ""
+    text: str = ""
+
+
+@dataclass
+class ProactiveConfig:
+    """她不等人喊也可以开口的时刻。
+
+    默认整段关着。主动说话是这套东西里最容易变成噪音的功能，
+    所以规则写成白名单（只有配了的时刻才说），再加每日配额与免打扰时段兜底。
+    """
+
+    enabled: bool = False
+    daily_limit: int = 6
+    quiet: tuple[str, str] = ("23:00", "07:00")
+    morning: MorningConfig = field(default_factory=MorningConfig)
 
 
 @dataclass
@@ -202,6 +224,7 @@ class HubConfig:
     media: MediaConfig | None = None
     devices: list[DeviceConfig] = field(default_factory=list)
     companion: CompanionConfig | None = None
+    proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     mini: MiniLinkConfig | None = None
     probe: ProbeConfig = field(default_factory=ProbeConfig)
     schedules: list[ScheduleConfig] = field(default_factory=list)
@@ -296,6 +319,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     probe = _parse_probe(raw.get("probe"))
     limits = _parse_limits(raw.get("limits"))
     tokens = _parse_tokens(raw.get("tokens"), token)
+    proactive = _parse_proactive(raw.get("proactive"))
 
     devices: list[DeviceConfig] = []
     seen: set[str] = set()
@@ -316,6 +340,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         media=media,
         devices=devices,
         companion=companion,
+        proactive=proactive,
         mini=mini,
         probe=probe,
         schedules=_parse_schedules(raw.get("schedules"), devices),
@@ -546,6 +571,55 @@ def _parse_tokens(raw: Any, owner: str) -> list[TokenConfig]:
         name = str(item.get("name") or "").strip() or None
         parsed.append(TokenConfig(id=ident, value=value, name=name))
     return parsed
+
+
+CLOCK_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+
+
+def parse_clock(value: Any, label: str) -> str:
+    """`7:30` / `07:30` → `07:30`。写错就报错，不要静悄悄当成没配。"""
+    text = str(value or "").strip()
+    match = CLOCK_RE.match(text)
+    if not match:
+        raise ValueError(f"{label} 要写成 07:30 这种，收到 {text!r}")
+    return f"{int(match.group(1)):02d}:{match.group(2)}"
+
+
+def _parse_proactive(raw: Any) -> ProactiveConfig:
+    if raw is None or raw is False:
+        return ProactiveConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("proactive 必须是对象，或用 proactive: false 关掉")
+    if raw.get("enabled") is False:
+        return ProactiveConfig()
+    limit_raw = raw.get("daily_limit", 6)
+    try:
+        limit = int(limit_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("proactive.daily_limit 必须是整数") from exc
+    if limit < 0:
+        raise ValueError("proactive.daily_limit 不能是负数")
+
+    quiet_raw = raw.get("quiet", ["23:00", "07:00"])
+    if isinstance(quiet_raw, str):
+        parts = [part.strip() for part in quiet_raw.split("-") if part.strip()]
+    elif isinstance(quiet_raw, (list, tuple)):
+        parts = [str(part).strip() for part in quiet_raw]
+    else:
+        raise ValueError('proactive.quiet 写成 ["23:00", "07:00"] 或 "23:00-07:00"')
+    if len(parts) != 2:
+        raise ValueError("proactive.quiet 要两个时刻：开始和结束")
+    quiet = (parse_clock(parts[0], "proactive.quiet"), parse_clock(parts[1], "proactive.quiet"))
+
+    morning_raw = raw.get("morning") or {}
+    if not isinstance(morning_raw, dict):
+        raise ValueError("proactive.morning 必须是对象")
+    at = morning_raw.get("at")
+    morning = MorningConfig(
+        at=parse_clock(at, "proactive.morning.at") if at else "",
+        text=str(morning_raw.get("text") or "").strip(),
+    )
+    return ProactiveConfig(enabled=True, daily_limit=limit, quiet=quiet, morning=morning)
 
 
 def _parse_probe(raw: Any) -> ProbeConfig:
@@ -815,6 +889,17 @@ def schedule_to_raw(sched: ScheduleConfig) -> dict[str, Any]:
         raw["off"] = list(sched.off)
     if sched.say:
         raw["say"] = sched.say
+def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
+    raw: dict[str, Any] = {
+        "enabled": True,
+        "daily_limit": config.daily_limit,
+        "quiet": list(config.quiet),
+    }
+    if config.morning.at:
+        morning: dict[str, Any] = {"at": config.morning.at}
+        if config.morning.text:
+            morning["text"] = config.morning.text
+        raw["morning"] = morning
     return raw
 
 
@@ -869,6 +954,8 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             if voice:
                 companion["voice"] = voice
         raw["companion"] = companion
+    if config.proactive.enabled:
+        raw["proactive"] = proactive_to_raw(config.proactive)
     if config.mini is not None:
         mini: dict[str, Any] = {"enabled": config.mini.enabled}
         if config.mini.enabled:

@@ -4,6 +4,7 @@ import json
 import secrets
 import threading
 import time
+from datetime import datetime
 import urllib.error
 import urllib.request
 from typing import Any
@@ -32,6 +33,8 @@ from dock_hub.launch import launch, launch_exists, launch_running, running_image
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
 from dock_hub.pc import PcSampler, utc_now
 from dock_hub.ratelimit import Gate
+from dock_hub.persona import speak_temp
+from dock_hub.proactive import Proactive
 from dock_hub.media import MEDIA_ACTIONS, MediaSession
 from dock_hub.reporter import DeskReporter
 from dock_hub.schedule import Scheduler
@@ -107,6 +110,13 @@ class DockHub:
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
         self._wire_companion()
+        self.proactive = Proactive(
+            config.proactive,
+            speak=self.companion.speak_up,
+            compose_morning=self._morning_text,
+        )
+        self._proactive_stop = threading.Event()
+        self._start_proactive()
         self.reporter.start()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
         self.scheduler.start()
@@ -165,6 +175,42 @@ class DockHub:
             self.session = None
         self._login_message = "请在配置向导中扫码登录米家"
 
+    def _morning_text(self, now: datetime) -> str:
+        """早间播报正文：问好 + 室温。拿不到的那一样就跳过，不硬凑。"""
+        parts: list[str] = []
+        if now.hour < 11:
+            parts.append("早上好。")
+        elif now.hour < 14:
+            parts.append("中午好。")
+        else:
+            parts.append("下午好。")
+        with self._desk_lock:
+            temp = self._desk_temp
+        spoken = speak_temp(temp, "")
+        if "还没有" not in spoken:
+            parts.append(spoken)
+        parts.append("今天也慢慢来。")
+        return "".join(parts)
+
+    def _start_proactive(self) -> None:
+        """每半分钟问一次「有没有到点的话要说」。关着就不起线程。"""
+        if not self.proactive.config.enabled:
+            self._proactive_stop = threading.Event()
+            return
+        self._proactive_stop = threading.Event()
+        stop = self._proactive_stop
+
+        def loop() -> None:
+            while not stop.wait(30.0):
+                try:
+                    said = self.proactive.tick(datetime.now().astimezone())
+                    if said.spoke:
+                        print(f"[proactive] {said.text}")
+                except Exception as exc:  # 播报挂了不能拖垮 Hub
+                    print(f"[proactive] 出错：{exc}")
+
+        threading.Thread(target=loop, name="proactive", daemon=True).start()
+
     def reload_config(self, config: HubConfig) -> None:
         """Apply hub.yaml changes without restarting the HTTP server."""
         self.config = config
@@ -187,6 +233,9 @@ class DockHub:
         media_cfg = config.media or MediaConfig(enabled=True)
         self.media = MediaSession(enabled=media_cfg.enabled)
         self.companion.configure(config.companion)
+        self._proactive_stop.set()
+        self.proactive.configure(config.proactive)
+        self._start_proactive()
         self.reporter.stop()
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
