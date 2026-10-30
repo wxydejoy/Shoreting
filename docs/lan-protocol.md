@@ -145,6 +145,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `POST` | `/v1/companion/books/{id}/{action}` | 是（本机可免） | `play` / `pause` / `bookmark`。**安卓不要打** |
 | `GET` | `/v1/companion/story` | 是（本机可免） | 睡前朗读进度与定时。**安卓不要打** |
 | `POST` | `/v1/companion/story/timer` | 是（本机可免） | 睡前定时 0 / 15 / 30 / 45 / 60 分钟。**安卓不要打** |
+| `POST` | `/v1/scenes/{id}` | 是 | 一次开关一组设备（配置里的场景） |
 
 没有单独的「读温度」「读电脑性能」「跑脚本」「读正在播放」接口。米家温度、logo、电脑监控、正在播放、伴侣是否就绪都在 snapshot 里；点击 logo 和播放键走同一个 command；说话走 companion/chat，再喊唤醒词打断走 companion/stop，声音走 companion/audio。
 
@@ -385,6 +386,10 @@ Hub 可选注册 mDNS，方便以后自动发现：
       "online": true,
       "icon": "steam"
     }
+  ],
+  "scenes": [
+    {"id": "bedtime", "name": "晚安"},
+    {"id": "work", "name": "干活"}
   ]
 }
 ```
@@ -433,6 +438,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `devices[].on` | `switch` / `light`：开关状态。`action`：对应进程是否正在运行（默认看 exe 文件名；可用配置 `process` 覆盖） |
 | `devices[].icon` | 仅 `action`。短名；安卓 Remix Icon 映射见 §5.1。没有或不认识则画名称首字 |
 | `devices[].last_run_at` | 仅 `action`，可选。上次成功拉起的 UTC 时间 |
+| `scenes` | 配置里的场景，`[{id, name}]`，顺序同配置；没配就是空数组 |
 | 未登录时的 `devices` | 去掉所有米家设备，**保留**全部 `action`，以及 `ws2812` 灯带（对安卓仍报 `type: light`） |
 
 Hub 应对白名单设备**批量**读属性，不要一台一台串行请求米家。`pc` 用本机缓存，不要拖慢米家批量读。
@@ -707,6 +713,39 @@ POST /v1/companion/read/jobs/{id}/delete
 `GET /v1/companion/story` 返回是否在读、字偏移、章序号、当前句、`timer_min`、`timer_remaining_sec`、`stopped_by`。`POST /v1/companion/story/timer` 的 `minutes` 只能是 `0`、`15`、`30`、`45`、`60`。`0` 是关。默认 30 分钟。暂停会冻住剩余时间。到点或读完清掉倒计时，下一次播放才重新给满。
 
 页头停止仍是 `POST /v1/companion/stop`。故事正在读时，这次停止同时留下书签。
+
+### 6.10 `POST /v1/scenes/{id}`
+
+一次动一组设备。`{id}` 取自 snapshot 的 `scenes[].id`，场景本身写在 `hub.yaml` 的 `scenes` 里（用户自己配，客户端不要写死）。body 随意，发 `{}` 就行。
+
+```http
+POST /v1/scenes/bedtime
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{}
+```
+
+**200**
+
+```json
+{
+  "id": "bedtime",
+  "name": "晚安",
+  "ok": true,
+  "actions": [
+    {"id": "lamp", "on": false, "ok": true},
+    {"id": "desk-lamp", "on": true, "brightness": 35, "ok": true}
+  ],
+  "said": true
+}
+```
+
+- 顺序固定：先 `on` 的设备，再带亮度的，最后 `off` 的；一台一台来，不并发。
+- 单个设备失败不影响其余。整体 `ok` 是 `false`，失败那一项带 `code` / `message`，取值同 §7。
+- `said` 只表示「Hub 正在让伴侣念场景里那句话」，说话是异步的，接口不等 TTS。伴侣关着或场景没写 `say` 就是 `false`。
+- 未知 id → `404` `not_found`。米家未登录时米家设备按 §7 报 `login_required`，不影响 `ws2812`。
+- 安卓可以在主屏放一排场景按钮，点了就打这个接口，然后照常用响应里的 `actions` 打补丁，或者等下一轮 snapshot。
 
 ---
 

@@ -323,6 +323,15 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     body = self._read_json()
                     self._json(200, hub.ingest_telemetry(body))
                     return
+                scenes_prefix = "/v1/scenes/"
+                if path.startswith(scenes_prefix):
+                    scene_id = unquote(path[len(scenes_prefix) :])
+                    if not scene_id or "/" in scene_id:
+                        raise HubError("not_found", "未知接口")
+                    self._require_auth()
+                    self._read_json()
+                    self._json(200, hub.run_scene(scene_id))
+                    return
                 prefix = "/v1/devices/"
                 suffix = "/command"
                 if not (path.startswith(prefix) and path.endswith(suffix)):

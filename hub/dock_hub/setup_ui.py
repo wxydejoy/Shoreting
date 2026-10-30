@@ -505,6 +505,9 @@ def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
         raw["mini"] = dumped["mini"]
     if dumped.get("probe") is not None:
         raw["probe"] = dumped["probe"]
+    # 场景不在这张表单里，但保存时不能把它抹掉
+    if dumped.get("scenes") is not None:
+        raw["scenes"] = dumped["scenes"]
     return raw
 
 

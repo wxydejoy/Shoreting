@@ -175,3 +175,20 @@ devices:
 #   at: "23:30"
 #   off: [desk-lamp]
 #   say: "灯关了，早点睡。"
+# 场景：一次开关一组设备，可以带一句话和几个语音口令。
+# on / off / brightness 里只能写 devices 里的 id；同一台不能同时在 on 和 off。
+# say 交给伴侣念；phrases 是说起来能直接触发的说法（场景名本身也算）。
+# scenes:
+# - id: bedtime
+#   name: 晚安
+#   off: [desk-lamp, monitor-plug]
+#   brightness:
+#     ceiling: 15
+#   say: "灯关了，早点睡。"
+#   phrases: ["我要睡了", "睡觉了"]
+# - id: work
+#   name: 干活
+#   on: [desk-lamp]
+#   brightness:
+#     desk-lamp: 80
+#   phrases: ["开始干活"]

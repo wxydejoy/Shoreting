@@ -583,6 +583,16 @@ class DockHub:
                 "volume": self.media.volume,
                 "game": self._game_running,
                 "desk": self.reporter.snapshot,
+                "scene": self.run_scene,
+                "scenes": [
+                    {
+                        "id": item.id,
+                        "name": item.name,
+                        "say": item.say,
+                        "phrases": item.triggers(),
+                    }
+                    for item in self.config.scenes
+                ],
             },
         )
 
@@ -746,6 +756,57 @@ class DockHub:
             if cfg.is_ws2812:
                 return self._command_ws2812(cfg, body)
             return self._command_mijia(cfg, body)
+
+    def run_scene(self, scene_id: str, *, say: bool = True) -> dict[str, Any]:
+        """把一组开关一次做完；单个设备失败不影响其余的。"""
+        scene = self.config.scene(scene_id)
+        steps: list[tuple[str, dict[str, Any]]] = []
+        for device_id in scene.on:
+            steps.append((device_id, {"on": True}))
+        for device_id, level in scene.brightness.items():
+            steps.append((device_id, {"on": True, "brightness": level}))
+        for device_id in scene.off:
+            steps.append((device_id, {"on": False}))
+        actions: list[dict[str, Any]] = []
+        for device_id, body in steps:
+            actions.append(self._scene_step(scene_id, device_id, body))
+        spoke = bool(say) and bool(scene.say) and self._scene_say(scene.say or "")
+        return {
+            "id": scene.id,
+            "name": scene.name,
+            "ok": all(item["ok"] for item in actions),
+            "actions": actions,
+            "said": spoke,
+        }
+
+    def _scene_step(
+        self, scene_id: str, device_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        item: dict[str, Any] = {"id": device_id, "on": body.get("on"), "ok": True}
+        if "brightness" in body:
+            item["brightness"] = body["brightness"]
+        try:
+            self.command(device_id, body)
+        except HubError as exc:
+            item["ok"] = False
+            item["code"] = exc.code
+            item["message"] = exc.message
+        return item
+
+    def _scene_say(self, text: str) -> bool:
+        """场景里的那句话交给伴侣去说，别挡着 HTTP 返回。"""
+        companion = self.config.companion
+        if companion is None or not companion.enabled:
+            return False
+
+        def speak() -> None:
+            try:
+                self.companion.announce({"text": text})
+            except HubError:
+                pass
+
+        threading.Thread(target=speak, name="scene-say", daemon=True).start()
+        return True
 
     def _command_media(self, body: dict[str, Any]) -> dict[str, Any]:
         if "on" in body or "run" in body or "brightness" in body:
@@ -1114,6 +1175,9 @@ class DockHub:
             "media": self.media.snapshot(),
             "companion": self.companion.snapshot(),
             "devices": devices,
+            "scenes": [
+                {"id": item.id, "name": item.name} for item in self.config.scenes
+            ],
         }
         self._note_desk_snapshot(body)
         return body

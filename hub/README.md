@@ -26,6 +26,7 @@ hub/
     proactive.py      # 到点才开口：免打扰、每日配额、三道闸（默认关）
     books.py          # 睡前朗读
     schedule.py       # 定时任务（到点开关设备 / 说一句）
+    # 场景在 config.py 里（SceneConfig），执行在 service.run_scene
     probe.py          # 探针模式（CPU 上报 + 远程开程序）
     pc.py             # CPU / 内存 / GPU / CPU 温度
     ledstrip.py       # 书桌 WS2812 灯带（ESP32 HTTP）
@@ -136,6 +137,26 @@ schedules:
 - 只按分钟对齐，进程睡过头或那分钟没跑就跳过，不补发。
 - 写错的 `at`（不是 `HH:MM`）、引用了不存在的设备 id、重复的 `id` 都会让 Hub 启动时报错，不会静默忽略。
 - 定时任务在向导里不可编辑，但向导保存配置时会原样保留。
+## 场景
+
+`hub.yaml` 里写 `scenes`，把「一次要动的几台设备」打包成一个名字：
+
+```yaml
+scenes:
+- id: bedtime
+  name: 晚安
+  off: [desk-lamp, monitor-plug]
+  brightness:
+    ceiling: 15
+  say: "灯关了，早点睡。"
+  phrases: ["我要睡了", "睡觉了"]
+```
+
+- 执行顺序固定：先 `on`，再 `brightness`（会顺带开灯），最后 `off`。
+- `POST /v1/scenes/bedtime`（带 token）一次跑完，返回每台设备的结果；某台失败不影响其余的。
+- 手机说「我要睡了」直接命中，不经过模型；`say` 就是它回你的那句话。
+- 写错的设备 id、写成启动项的 id、同一台同时在 `on` 和 `off`、亮度超出 1–100，都会在加载配置时报错。
+- 向导里不能编辑场景，但保存配置会原样保留。
 
 ## 源码开发
 
