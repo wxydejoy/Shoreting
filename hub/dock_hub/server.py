@@ -4,6 +4,7 @@ import hmac
 import json
 import math
 import os
+import re
 import socket
 import time
 from contextlib import nullcontext
@@ -13,13 +14,14 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from dock_hub.accesslog import AccessLog
 from dock_hub.books import MAX_BOOK_BYTES
-from dock_hub.chat_log import asset_page_html, chats_page_html, read_page_html, week_page_html
+from dock_hub.chat_log import asset_page_html, chats_page_html, diary_page_html, read_page_html, week_page_html
 from dock_hub.errors import HubError
 from dock_hub.service import DockHub
 from dock_hub.setup_ui import is_local_client
 
 MAX_BODY = 64 * 1024
 MAX_WAIT = 30.0
+_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")  # F30 时间线：chats 的 day 参数
 _STATIC = {
     "litera.min.css": "text/css; charset=utf-8",
     "shell.css": "text/css; charset=utf-8",
@@ -161,6 +163,24 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     # 数据接口（/v1/companion/week）和 /chats 一样鉴权
                     self._html(200, week_page_html(), "text/html; charset=utf-8")
                     return
+                if path == "/diary":
+                    # F29 守岸人日记：她傍晚写的那段。页面不设防，数据接口鉴权
+                    self._html(200, diary_page_html(), "text/html; charset=utf-8")
+                    return
+                if path == "/v1/companion/diary":
+                    # F29：日记列表。鉴权口径与 /chats 相同——本机免 token
+                    if not self._chats_ok():
+                        raise HubError("unauthorized", "Token 不正确")
+                    query = parse_qs(parsed.query)
+                    try:
+                        limit = int((query.get("limit") or ["200"])[0] or 200)
+                    except ValueError:
+                        limit = 200
+                    day = unquote((query.get("day") or [""])[0]).strip()
+                    if day and not _DAY_RE.fullmatch(day):
+                        raise HubError("bad_request", "day 要是 YYYY-MM-DD")
+                    self._json(200, hub.companion_diary(limit=limit, day=day))
+                    return
                 if path == "/v1/companion/week":
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
@@ -188,7 +208,14 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     except ValueError:
                         limit = 200
                     q = unquote((query.get("q") or [""])[0])
-                    self._json(200, hub.companion_chats(limit=limit, query=q))
+                    day = unquote((query.get("day") or [""])[0]).strip()
+                    if day and not _DAY_RE.fullmatch(day):
+                        raise HubError("bad_request", "day 要是 YYYY-MM-DD")
+                    with_days = (query.get("with_days") or [""])[0] not in ("", "0", "false")
+                    self._json(
+                        200,
+                        hub.companion_chats(limit=limit, query=q, day=day, with_days=with_days),
+                    )
                     return
                 if path == "/v1/companion/memory":
                     # F28：她记得的事。设置页读它，和 chats 一样走聊天鉴权
@@ -207,19 +234,50 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                         hub.wait_change(since, min(wait, MAX_WAIT))
                     self._json(200, hub.snapshot())
                     return
+                if path == "/v1/photos":
+                    # F37 回忆相框：名单。相册没开是空列表，不算错。
+                    self._require_auth()
+                    self._json(200, {"ids": hub.photo_ids()})
+                    return
+                if path.startswith("/v1/photos/"):
+                    # F37 回忆相框：名单走 snapshot.photos，字节走这里。
+                    # 照片基本不变，带 ETag 让手机安心缓存；名单鉴权同 snapshot。
+                    self._require_auth()
+                    photo_id = unquote(path.removeprefix("/v1/photos/"))
+                    data, ctype, etag = hub.photo_bytes(photo_id)
+                    if self.headers.get("If-None-Match") == etag:
+                        self.send_response(304)
+                        self.send_header("ETag", etag)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("ETag", etag)
+                    self.send_header("Cache-Control", "private, max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if path == "/v1/weather":
                     # 天气由 Hub 代取：手机可能连在只有局域网的 Wi-Fi 上
                     self._require_auth()
-                    from dock_hub.weather import fetch_weather
+                    from dock_hub.weather import fetch_air, fetch_weather
 
                     query = parse_qs(parsed.query)
                     city = (query.get("city") or [""])[0].strip()
                     try:
-                        self._json(200, fetch_weather(city))
+                        data = fetch_weather(city)
                     except ValueError as exc:
                         raise HubError("bad_request", str(exc)) from exc
                     except Exception as exc:  # noqa: BLE001
                         raise HubError("upstream_error", f"天气获取失败：{exc}", status=502) from exc
+                    try:
+                        # PM2.5 顺路捎上（F14）：空气源挂了不能拖累天气本身
+                        data = {**data, "pm25": fetch_air(city)["pm25"]}
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._json(200, data)
                     return
                 if path.startswith("/v1/companion/audio/"):
                     if not self._chats_ok():
@@ -606,6 +664,16 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_memory_delete(key))
                     return
+                diary_prefix = "/v1/companion/diary/"
+                if path.startswith(diary_prefix):
+                    # F29：删一天的日记。她写的东西必须可见可撤销，这是同一条底线
+                    day = unquote(path[len(diary_prefix) :])
+                    if not _DAY_RE.fullmatch(day):
+                        raise HubError("not_found", "未知接口")
+                    if not self._chats_ok():
+                        raise HubError("unauthorized", "Token 不正确")
+                    self._json(200, hub.companion_diary_delete(day))
+                    return
                 raise HubError("not_found", "未知接口")
             except HubError as exc:
                 self._json(exc.status, exc.body(), headers=exc.headers)
@@ -623,6 +691,7 @@ def serve(hub: DockHub, *, blocking: bool = True) -> ThreadingHTTPServer:
     print(f"配置向导     http://127.0.0.1:{hub.config.port}/setup  （本机直接开；局域网要 Token）", flush=True)
     print(f"聊天记录     http://127.0.0.1:{hub.config.port}/chats  （本机直接开；局域网要 Token）", flush=True)
     print(f"朗读         http://127.0.0.1:{hub.config.port}/read   （本机直接开；局域网要 Token）", flush=True)
+    print(f"守岸人日记   http://127.0.0.1:{hub.config.port}/diary  （本机直接开；局域网要 Token）", flush=True)
     if hub.config.path:
         print(f"配置         {hub.config.path}", flush=True)
     access = AccessLog.from_config(hub.config)

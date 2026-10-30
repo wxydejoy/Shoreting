@@ -327,6 +327,33 @@ paths:
           $ref: "#/components/responses/Error"
         "502":
           $ref: "#/components/responses/Error"
+  /v1/photos/{id}:
+    get:
+      summary: One photo (F37)
+      description: >
+        回忆相框（F37）：一张照片的原图。名单走 snapshot.photos。
+        id 只认 basename，带路径一律 404；mime 按扩展名
+        （jpg/png/webp/heic/gif）。响应带 ETag，If-None-Match 命中回 304。
+      operationId: getPhoto
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: 2026-05-21.jpg
+      responses:
+        "200":
+          description: Photo bytes
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /v1/telemetry:
     post:
       summary: Windows probe pushes CPU / GPU telemetry into the snapshot
@@ -399,6 +426,20 @@ paths:
           schema:
             type: string
           description: 在 user 与 reply 里做大小写无关的子串过滤
+        - name: day
+          in: query
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+          description: >
+            F30 时间线：只看这天的对话（按 ts 前 10 位过滤）。q 与 day 同时给时
+            前端只用 q（搜索翻全部历史）；后端两条过滤各自独立生效。
+        - name: with_days
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: 带 true 时响应多一个 days 数组（记过话的日子，旧→新）。
       responses:
         "200":
           description: Oldest first, newest last
@@ -411,6 +452,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/ChatTurn"
+                  days:
+                    type: array
+                    description: 仅 with_days=true 时出现
+                    items:
+                      type: string
+                      pattern: '^\d{4}-\d{2}-\d{2}$'
         "401":
           $ref: "#/components/responses/Error"
   /v1/notify/phone:
@@ -578,6 +625,61 @@ paths:
                 properties:
                   ok: { type: boolean }
                   key: { type: string }
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/companion/diary:
+    get:
+      summary: 守岸人日记列表（F29）。/diary 页的数据源，新→旧。
+      operationId: getCompanionDiary
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 200, minimum: 1, maximum: 200 }
+        - name: day
+          in: query
+          schema: { type: string }
+          description: 只看某天（YYYY-MM-DD）
+      responses:
+        "200":
+          description: "一天一段；hub.yaml 里 diary: false 时 enabled=false，entries 照旧可能非空"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                    description: 日记开关（hub.yaml diary）
+                  at:
+                    type: string
+                    description: 每天写的时刻（HH:MM）
+                  entries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DiaryEntry"
+        "401":
+          $ref: "#/components/responses/Error"
+    delete:
+      summary: 删一天的日记（按日期）。404 表示这天没写过。
+      operationId: deleteCompanionDiary
+      parameters:
+        - name: date
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+      responses:
+        "200":
+          description: 删掉了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
         "401":
           $ref: "#/components/responses/Error"
         "404":
@@ -1052,6 +1154,57 @@ components:
           description: >
             待递到手机的话（F33 反向 / F4）。安卓按自增 id 去重，
             见到比本地 last-seen 新的就发一条本地通知。
+        alarm:
+          allOf:
+            - $ref: "#/components/schemas/AlarmRamp"
+          nullable: true
+          description: >
+            起床闹钟（F11）爬坡进度。只在爬坡进行中出现；手机屏幕按
+            1 - seconds_left/total_sec 渐亮。没配闹钟或不在爬坡时为 null。
+        theme:
+          allOf:
+            - $ref: "#/components/schemas/ThemeStatus"
+          nullable: true
+          description: >
+            今天是什么日子（F36）。日期归 Hub（生日/节日/考试周），
+            天气归手机。没配也不是节日时为 null。
+        photos:
+          allOf:
+            - $ref: "#/components/schemas/PhotoIds"
+          nullable: true
+          description: >
+            回忆相框（F37）的照片名单。配置旁有 photos/ 目录且有图才带，
+            否则为 null。
+        wallpaper:
+          allOf:
+            - $ref: "#/components/schemas/WallpaperStatus"
+          nullable: true
+          description: >
+            一句话壁纸（F39）：今天那句，安卓淡淡地画在背景上。
+            配置关掉时为 null。
+    ThemeStatus:
+      type: object
+      required: [occasions]
+      properties:
+        occasions:
+          type: array
+          description: >
+            优先级从高到低：birthday / spring_festival / new_year /
+            christmas / exam_week。下雨天手机自己加，不从这里来。
+          items:
+            type: string
+
+    AlarmRamp:
+      type: object
+      required: [seconds_left, total_sec]
+      properties:
+        seconds_left:
+          type: number
+          description: 距离爬坡结束还剩几秒
+        total_sec:
+          type: number
+          description: 这次爬坡的总秒数（ramp_min * 60）
+
     NotifyState:
       type: object
       properties:
@@ -1456,6 +1609,51 @@ components:
         query:
           type: string
           description: 原样回填请求参数，方便安卓判断是不是自己要的那一趟
+        pm25:
+          type: number
+          description: >
+            PM2.5（μg/m³，F14）。空气源顺路捎上，拿不到就不出现这个字段；
+            安卓按可空处理。
+    DiaryEntry:
+      type: object
+      description: 守岸人日记（F29）的一天。正文她写的，可删。
+      required: [date, text]
+      properties:
+        date:
+          type: string
+          format: date
+          description: 这一段属于哪一天
+        text:
+          type: string
+          description: 正文。两句话以内、不煽情——句式在 diary.py 的提示词里卡死
+        source:
+          type: string
+          enum: [llm, log]
+          description: llm=她自己写的；log=大脑不在，退到一句事实
+        written_at:
+          type: string
+          description: 实际写下的时刻（ISO）
+
+    WallpaperStatus:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: 一行、二十字以内、陈述句——句式在 wallpaper.py 卡死
+        date:
+          type: string
+          description: 这句属于哪一天（ISO），安卓好判断换没换
+
+    PhotoIds:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          description: 回忆相框（F37）的照片文件名，按名字排序；没有 photos/ 目录就不带这个字段
+          items:
+            type: string
     TelemetryRequest:
       type: object
       properties:

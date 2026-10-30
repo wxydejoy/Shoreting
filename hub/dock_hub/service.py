@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 import urllib.error
 import urllib.request
 from typing import Any
@@ -28,11 +29,23 @@ class _StorySpeaker:
         self._companion.begin_story_audio()
 from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig, PcConfig, PropConfig, TemperatureConfig, default_config_path
 from dock_hub.dusk import DuskRamp
+from dock_hub.alarm import AlarmRamp
+from dock_hub.system_volume import read_output_volume, write_output_volume
+from dock_hub.theme import birthday_text, occasions_for
+from dock_hub.wallpaper import wallpaper_line
+from dock_hub.photos import list_photos, photo_bytes as read_photo, resolve_photos_dir
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
 from dock_hub.notify import NotifyBoard, parse_relay, wechat_say_text
 from dock_hub.weekly import DailyLedger, weekly_line
+from dock_hub.diary import (
+    DayMaterial,
+    DiaryStore,
+    DiaryWriter,
+    build_material,
+    render_material,
+)
 from dock_hub.lanes import Lanes
 from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
@@ -119,6 +132,12 @@ class DockHub:
             (config.path or default_config_path()).with_name("companion-stats.jsonl")
         )
         self.companion.on_read_done = self.ledger.note_read
+        # F29 守岸人日记：每天傍晚拿台账和当天的话写一段，/diary 页可回看可删
+        self.diary_store = DiaryStore(
+            (config.path or default_config_path()).with_name("companion-diary.jsonl")
+        )
+        self.diary = DiaryWriter(self.diary_store, self._diary_material, self._diary_compose)
+        self.diary.configure(config.diary.enabled, config.diary.at)
         # F33/F4/F34：往手机递话的一条通道（对讲反向、语音留言、微信共用）
         self.notify = NotifyBoard()
         self._attach_books()
@@ -139,6 +158,8 @@ class DockHub:
         self._alert_state = Sustained()
         self._sedentary = SedentaryWatch()
         self._weather_check_at = 0.0
+        self._air_check_at = 0.0
+        self._air_bad = False  # PM2.5 现在在坏区间里？只在进区间那一下开口
         self._finished_lock = threading.Lock()
         self._finished_queue: list[dict[str, Any]] = []
         self._presence_lock = threading.Lock()
@@ -149,11 +170,19 @@ class DockHub:
         self._at_desk_at: str | None = None
         self._proactive_stop = threading.Event()
         self._start_proactive()
+        self._diary_stop = threading.Event()
+        self._start_diary()
         self._focus_active: bool | None = None  # None = 还没看过一眼，不触发
         self._focus_stop = threading.Event()
+        # F22：进游戏静音、退出恢复。读写都走实例属性，测试好换假件
+        self._volume_before_game: int | None = None
+        self._read_volume = read_output_volume
+        self._write_volume = write_output_volume
         self._start_focus()
         self._dusk: DuskRamp | None = None
         self._start_dusk()
+        self._alarm: AlarmRamp | None = None
+        self._start_alarm()
         self.reporter.start()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
         self.scheduler.start()
@@ -212,12 +241,52 @@ class DockHub:
             self.session = None
         self._login_message = "请在配置向导中扫码登录米家"
 
+    def _wallpaper_payload(self) -> dict[str, str] | None:
+        """一句话壁纸（F39）：今天那句。关着就不带，别让安卓画空气。"""
+        if not self.config.wallpaper.enabled:
+            return None
+        today = datetime.now().astimezone().date()
+        return {"text": wallpaper_line(today), "date": today.isoformat()}
+
+    def _theme_payload(self) -> dict[str, list[str]] | None:
+        """今天是什么日子（F36）。没配生日和考试周、又不是节日，就不用带。"""
+        occasions = occasions_for(datetime.now().astimezone().date(), self.config.theme)
+        return {"occasions": occasions} if occasions else None
+
+    def _photos_dir(self) -> Path | None:
+        """回忆相框（F37）的图库：显式配置 > 旁目录活检测，false 一票否决。"""
+        return resolve_photos_dir(self.config.photos, self.config.photos_off, self.config.path)
+
+    def _photo_ids(self) -> list[str]:
+        return list_photos(self._photos_dir())
+
+    def _photos_payload(self) -> dict[str, list[str]] | None:
+        """相框名单进 snapshot。没 photos/ 目录或里面没图，就不带这个字段。"""
+        ids = self._photo_ids()
+        return {"ids": ids} if ids else None
+
+    def photo_bytes(self, photo_id: str) -> tuple[bytes, str, str]:
+        """照片字节 + Content-Type + ETag。id 必须在名单里，翻不进上级目录。"""
+        folder = self._photos_dir()
+        try:
+            data, ctype = read_photo(folder, photo_id)
+        except ValueError as exc:
+            raise HubError("not_found", str(exc)) from exc
+        stamp = (folder / Path(photo_id).name).stat()
+        etag = f'W/"{int(stamp.st_mtime)}-{stamp.st_size}"'
+        return data, ctype, etag
+
     def _evaluate_alerts(self) -> None:
         """温度太高、设备失联：坏够久才开口，一天一件事最多一句。"""
         cfg = self.proactive.config
         if not cfg.enabled:
             return
         now = datetime.now().astimezone()
+        if self.config.theme.birthday and occasions_for(
+            now.date(), self.config.theme
+        )[:1] == ["birthday"]:
+            said = self.proactive.alert("birthday", birthday_text(), now)
+            print(f"[proactive] 生日问候：{said.text or said.reason}")
         alerts = cfg.alerts
         if alerts.temp_celsius > 0:
             cpu = (self.pc_snapshot() or {}).get("cpu")
@@ -251,6 +320,8 @@ class DockHub:
                 print(f"[proactive] 久坐提醒：{said.text or said.reason}")
         if alerts.weather:
             self._evaluate_weather_alert(now)
+        if alerts.air_pm25 > 0:
+            self._evaluate_air_alert(now)
         self._evaluate_finished_alerts(now)
         if alerts.offline_minutes > 0:
             for item in self._offline_mijia_devices():
@@ -300,6 +371,8 @@ class DockHub:
 
     WEATHER_CHECK_SEC = 3600.0
     DESK_AWAY_MIN_SEC = 300  # 离座不足这个数不问候（安卓侧会先去抖，这里兜底）
+    AIR_CHECK_SEC = 3600.0
+    AIR_HYSTERESIS_UGM3 = 20.0  # 回落这么多才算翻篇，卡在阈值边上不反复横跳
 
     def _evaluate_weather_alert(self, now: datetime) -> None:
         """天气突变（F15）：每小时比对一次逐小时预报，只推「变化」。
@@ -334,6 +407,41 @@ class DockHub:
             return
         said = self.proactive.alert("weather", text, now)
         print(f"[proactive] 天气提醒：{said.text or said.reason}")
+
+    def _evaluate_air_alert(self, now: datetime) -> None:
+        """空气超标（F14）：每小时看一眼，只在由好变坏那一下说。
+
+        一直坏就一直闭嘴（跟天气突变同一条规矩：推变化不推状态），
+        回落 AIR_HYSTERESIS_UGM3 才重新武装。城市用手机最近查过的那座。
+        07:00–21:00 之外不看；配额、免打扰由 proactive.alert 兜底。
+        """
+        if now.hour < 7 or now.hour >= 21:
+            return
+        if time.monotonic() - self._air_check_at < self.AIR_CHECK_SEC:
+            return
+        self._air_check_at = time.monotonic()
+        from dock_hub.proactive import air_alert_text
+        from dock_hub.weather import fetch_air, last_city
+
+        city = last_city()
+        if not city:
+            return
+        try:
+            air = fetch_air(city)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[proactive] 空气质量拿不到：{exc}")
+            return
+        pm25 = float(air.get("pm25") or 0.0)
+        threshold = float(self.proactive.config.alerts.air_pm25)
+        if self._air_bad:
+            if pm25 < threshold - self.AIR_HYSTERESIS_UGM3:
+                self._air_bad = False  # 翻篇了，下次变坏再说
+            return
+        if pm25 < threshold:
+            return
+        self._air_bad = True
+        said = self.proactive.alert("air", air_alert_text(pm25), now)
+        print(f"[proactive] 空气提醒：{said.text or said.reason}")
 
     def _idle_seconds(self) -> float | None:
         """键鼠空闲秒数。只有探针在报且报得新鲜才有；拿不到就 None。"""
@@ -436,12 +544,16 @@ class DockHub:
         self._proactive_stop.set()
         self.proactive.configure(config.proactive)
         self._start_proactive()
+        self._diary_stop.set()
+        self.diary.configure(config.diary.enabled, config.diary.at)
+        self._start_diary()
         self.reporter.stop()
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
         self._wire_companion()
         self._start_focus()
         self._start_dusk()
+        self._start_alarm()
         self.reporter.start()
         self.scheduler.stop()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
@@ -740,6 +852,7 @@ class DockHub:
                 "scene": self.run_scene,
                 "leave": self.leave_home,
                 "notify": self.relay_to_phone,
+                "power": self.power_action,
                 "noise": self.companion_noise,
                 "scenes": [
                     {
@@ -868,6 +981,61 @@ class DockHub:
     def _weekly_text(self) -> str:
         return weekly_line(self.ledger.summary())
 
+    # ---- F29 守岸人日记 ----------------------------------------------------
+
+    def companion_diary(self, limit: int = 200, day: str = "") -> dict[str, Any]:
+        """/diary 页的数据。新→旧，一天一段。"""
+        return {
+            "entries": self.diary_store.list(limit=limit, day=day),
+            "enabled": self.config.diary.enabled,
+            "at": self.config.diary.at,
+        }
+
+    def companion_diary_delete(self, day: str) -> dict[str, Any]:
+        """删一天的日记。她写的东西必须可见可撤销，这条是底线的另一半。"""
+        if not self.diary_store.delete(day):
+            raise HubError("not_found", f"没有 {day} 的日记")
+        return {"ok": True}
+
+    def _diary_material(self) -> DayMaterial | None:
+        """今天的材料：台账、节日、壁纸那句、他说过的话。全都是现成的。"""
+        now = datetime.now().astimezone()
+        try:
+            chats = self.chat_log.list(limit=200, day=now.date().isoformat())
+        except Exception:  # noqa: BLE001 - 说话记录读不出不该连累日记
+            chats = []
+        return build_material(
+            now=now,
+            ledger_row=self.ledger.day(now.date()),
+            occasions=occasions_for(now.date(), self.config.theme),
+            wallpaper=(self._wallpaper_payload() or {}).get("text"),
+            said=[str(item.get("user") or "") for item in chats if isinstance(item, dict)],
+        )
+
+    def _diary_compose(self, m: DayMaterial) -> str:
+        """她动笔。大脑不在就抛错，Writer 会退到兜底文案。"""
+        if not self.companion.config.enabled:
+            raise HubError("not_found", "未开启桌面伴侣")
+        return self.companion.diary_compose(render_material(m))
+
+    def _start_diary(self) -> None:
+        """每半分钟问一次「今天写了吗」。关着就不起线程。"""
+        self._diary_stop = threading.Event()
+        if not self.config.diary.enabled:
+            return
+        stop = self._diary_stop
+
+        def loop() -> None:
+            while not stop.wait(30.0):
+                try:
+                    written = self.diary.tick(datetime.now().astimezone())
+                    if written:
+                        print(f"[diary] {written}")
+                except Exception as exc:  # noqa: BLE001 - 日记挂了不能拖垮 Hub
+                    logs.swallowed("日记tick", exc)
+
+        threading.Thread(target=loop, name="diary", daemon=True).start()
+
     def relay_to_phone(self, text: str, source: str = "desk") -> dict[str, Any]:
         """往手机递一句话（F33 反向 / F4 留言）。递完叫醒长轮询。"""
         item = self.notify.post(text, source=source)
@@ -930,8 +1098,14 @@ class DockHub:
             raise HubError("not_found", f"没有这条记忆：{key}")
         return {"ok": True, "key": key}
 
-    def companion_chats(self, *, limit: int = 200, query: str = "") -> dict[str, Any]:
-        return {"items": self.chat_log.list(limit=limit, query=query)}
+    def companion_chats(
+        self, *, limit: int = 200, query: str = "", day: str = "", with_days: bool = False
+    ) -> dict[str, Any]:
+        # F30 时间线：day 挑一天翻旧账，with_days 把记过话的日子一并带回
+        body: dict[str, Any] = {"items": self.chat_log.list(limit=limit, query=query, day=day)}
+        if with_days:
+            body["days"] = self.chat_log.days()
+        return body
 
     def companion_audio(self, audio_id: str) -> bytes:
         return self.companion.audio(audio_id)
@@ -1160,6 +1334,9 @@ class DockHub:
         """游戏开起来自动切场景。没配就不起线程；改了配置重建线程。"""
         self._focus_stop.set()
         self._focus_active = None  # 换了场景配置，边沿重新算
+        # 换配置时游戏音量别被留在 0：上一局静音还没恢复就先恢复
+        if not (self.config.focus.enabled and self.config.focus.mute):
+            self._restore_game_volume()
         if not self.config.focus.enabled or not self.config.focus.on:
             self._focus_stop = threading.Event()
             return
@@ -1211,6 +1388,26 @@ class DockHub:
         state = self._companion_device_state(device_id)
         return bool(state is None or state.get("on") is not False)
 
+    def _start_alarm(self) -> None:
+        """起床闹钟（F11）。没配就不起线程；改了配置重建线程。"""
+        if self._alarm is not None:
+            self._alarm.stop()
+        self._alarm = None
+        if not self.config.alarm.at:
+            return
+        self._alarm = AlarmRamp(
+            self.config.alarm,
+            set_brightness=self._dusk_set,
+            speak=self._alarm_speak,
+        )
+        self._alarm.start()
+
+    def _alarm_speak(self) -> None:
+        """爬坡最后一格的那一声。走主动开口的闸，手机不在就不喊，不硬来。"""
+        spoken = str(self.config.alarm.say or "").strip()
+        if spoken:
+            self.companion.speak_up(spoken)
+
     def _evaluate_focus(self) -> None:
         """边沿触发：从「没在玩」变「在玩」切 on 场景，反过来切 off 场景。
 
@@ -1222,6 +1419,10 @@ class DockHub:
         self._focus_active = running
         if previous is None or previous == running:
             return
+        if running:
+            self._mute_for_game()
+        else:
+            self._restore_game_volume()
         scene_id = focus.on if running else focus.off
         if not scene_id:
             return
@@ -1231,6 +1432,34 @@ class DockHub:
             print(f"[focus] 场景 {scene_id} 没跑成：{exc.message}")
             return
         print(f"[focus] {'进' if running else '退'}游戏 → {scene_id}：{out.get('name')}")
+
+    def _mute_for_game(self) -> None:
+        """进游戏把音量收到 0（F22）。读不到当前音量就不动——别瞎恢复。"""
+        if not self.config.focus.mute:
+            return
+        current = self._read_volume()
+        if current is None:
+            return
+        try:
+            self._write_volume(0)
+        except Exception as exc:  # noqa: BLE001 - 静音失败不算事
+            logs.swallowed("游戏静音", exc)
+            return
+        self._volume_before_game = current
+        print(f"[focus] 进游戏，音量先收到 0（原来 {current}）")
+
+    def _restore_game_volume(self) -> None:
+        """退游戏把音量放回原样。没静过音就什么都不做。"""
+        level = self._volume_before_game
+        if level is None:
+            return
+        self._volume_before_game = None
+        try:
+            self._write_volume(level)
+        except Exception as exc:  # noqa: BLE001
+            logs.swallowed("恢复游戏前音量", exc)
+            return
+        print(f"[focus] 退游戏，音量恢复到 {level}")
 
     def _command_media(self, body: dict[str, Any]) -> dict[str, Any]:
         if "on" in body or "run" in body or "brightness" in body:
@@ -1291,6 +1520,34 @@ class DockHub:
             if isinstance(err, dict):
                 message = str(err.get("message") or "")
         raise HubError("action_error", message or f"无法启动 {cfg.name}")
+
+    def power_action(self, action: str) -> None:
+        """F21：关机 / 睡眠 / 锁屏，让探针去按。二次确认在 Companion 侧，
+        这一层只管把话递到。"""
+        if action not in ("shutdown", "sleep", "lock"):
+            raise HubError("bad_request", "power 只认 shutdown / sleep / lock")
+        base = (self.config.probe.url or "").rstrip("/")
+        if not base:
+            raise HubError("offline", "未配置 Windows 探针，动不了电脑电源")
+        token = (self.config.probe.token or self.config.token).strip()
+        raw = json.dumps({"power": action}, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(base + "/v1/power", data=raw, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=8.0) as resp:
+                body = json.loads(resp.read().decode("utf-8") or "{}")
+        except (TimeoutError, urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as exc:
+            raise HubError("offline", "电脑未开机或探针无响应") from exc
+        if isinstance(body, dict) and body.get("ok"):
+            return
+        message = ""
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                message = str(err.get("message") or "")
+        raise HubError("action_error", message or "电源动作没执行成")
 
     def follow_pc(self, on: bool) -> None:
         for cfg in self.config.devices:
@@ -1605,6 +1862,10 @@ class DockHub:
             "presence": self._presence_payload(),
             "at_desk": self._at_desk_payload(),
             "notify": self.notify.snapshot(),
+            "alarm": self._alarm.snapshot() if self._alarm else None,
+            "theme": self._theme_payload(),
+            "photos": self._photos_payload(),
+            "wallpaper": self._wallpaper_payload(),
         }
         self._note_desk_snapshot(body)
         return body

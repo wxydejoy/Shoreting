@@ -198,6 +198,12 @@ class DailyLedger:
 
     # ---- 读 -------------------------------------------------------------
 
+    def day(self, key: date | str) -> dict[str, Any]:
+        """单日台账的只读副本（日记 F29 用）。当前开着的在桌区间不计。"""
+        with self._lock:
+            row = self._rows.get(key.isoformat() if isinstance(key, date) else str(key))
+            return dict(row) if row else {}
+
     def summary(self, today: date | None = None) -> dict[str, Any]:
         """周报聚合。只读：当前开着的在桌区间虚拟计入，不动台账。"""
         today = today or date.today()

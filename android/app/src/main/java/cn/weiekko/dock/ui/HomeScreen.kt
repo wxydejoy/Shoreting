@@ -6,9 +6,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -66,6 +68,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -137,6 +140,21 @@ fun HomeScreen(
     }
     val editing = state.editing
     BackHandler(enabled = editing, onBack = onExitEdit)
+
+    // F37 回忆相框：没有数据可看的时刻，整块屏幕交给一张慢慢换的照片
+    val frameBitmap = state.framePhoto
+    if (frameBitmap != null) {
+        Crossfade(targetState = frameBitmap, label = "frame") { bitmap ->
+            Image(
+                bitmap = bitmap,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                alpha = 0.92f,
+            )
+        }
+        return
+    }
     val burn = rememberBurnShifts(active = !editing)
 
     CompositionLocalProvider(
@@ -158,6 +176,21 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.36f)),
+                )
+            }
+
+            // F39 一句话壁纸：壁纸的一部分，不是数据——淡淡的，贴着底边，
+            // 编辑态收起来，别挡拖拽；hubSleeping 时屏幕本来就很暗，无所谓
+            val wallpaperLine = state.snapshot?.wallpaper?.text
+            if (!editing && !wallpaperLine.isNullOrBlank()) {
+                Text(
+                    text = wallpaperLine,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onBackground.copy(alpha = 0.42f),
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 6.dp),
                 )
             }
 
@@ -1060,7 +1093,8 @@ private fun WeatherChip(
     StatusChip(
         icon = Icons.Outlined.Cloud,
         title = String.format(Locale.US, "%.1f°", weather.celsius),
-        subtitle = "${weather.condition}  ${weather.city}",
+        subtitle = listOfNotNull("${weather.condition}  ${weather.city}", weather.airLine())
+            .joinToString("  "),
         interactive = interactive,
         onLongPress = onLongPress,
     )

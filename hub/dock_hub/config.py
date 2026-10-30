@@ -88,6 +88,8 @@ class AlertsConfig:
     sedentary_minutes: int = 90
     # 天气突变（未来两小时有雨/骤降/大风）；false = 不提醒
     weather: bool = True
+    # PM2.5 超过这个值提醒关窗（μg/m³）；只在由好变坏那一下说；0 = 不提醒
+    air_pm25: int = 75
     # 内存占用超这个百分比，热满 3 分钟才说；0 = 不提醒
     memory_percent: int = 90
     # 任务完成播报：额外关注的进程名；启动项里的进程默认就在名单里
@@ -268,6 +270,66 @@ class FocusConfig:
     enabled: bool = False
     on: str = ""
     off: str = ""
+    # F22：进游戏把 Hub 音量收到 0，退出恢复。false = 不动音量
+    mute: bool = True
+
+
+@dataclass
+class DuskConfig:
+    """日落联动（F16）：天黑灯自己亮。
+
+    日落后 ``offset_min`` 分钟开始，``ramp_min`` 分钟内把 ``device`` 的亮度
+    从 0 平滑推到 ``brightness``；过了 ``until`` 就不再推，睡前场景接着降。
+    ``device`` 不写 = 整条关着。``city`` 不写就用手机最近查天气的那座。
+    """
+
+    enabled: bool = False
+    device: str = ""
+    city: str = ""
+    offset_min: int = 30
+    until: str = "22:00"
+    brightness: int = 40
+    ramp_min: int = 45
+
+
+@dataclass
+class AlarmConfig:
+    """起床闹钟（F11）：她比你先醒。
+
+    ``at`` 到点后 ``ramp_min`` 分钟内把 ``device`` 从 0 推到 ``brightness``，
+    手机屏幕跟着爬亮，爬完轻声说 ``say``。``at`` 空 = 整条关着；
+    ``device`` 不写 = 只亮屏幕不亮灯；``weekdays_only`` 周末不叫。
+    """
+
+    at: str = ""
+    weekdays_only: bool = True
+    device: str = ""
+    brightness: int = 30
+    ramp_min: int = 15
+    say: str = "起床了。"
+
+
+@dataclass
+class ThemeConfig:
+    """主题皮肤（F36）。日期归 Hub：生日、考试周；节日（春节等）内置。"""
+
+    birthday: str = ""  # "MM-DD"；空 = 不提生日
+    exam_weeks: list[str] = field(default_factory=list)  # ["02-20..02-26"]，闭区间
+
+
+@dataclass
+class WallpaperConfig:
+    """一句话壁纸（F39）。默认开着，wallpaper: false 关掉——它是壁纸，不占配额。"""
+
+    enabled: bool = True
+
+
+@dataclass
+class DiaryConfig:
+    """守岸人日记（F29）。默认 21:30 写当天一段；diary: false 关掉。"""
+
+    enabled: bool = True
+    at: str = "21:30"
 
 
 @dataclass
@@ -312,6 +374,14 @@ class HubConfig:
     tokens: list[TokenConfig] = field(default_factory=list)
     scenes: list[SceneConfig] = field(default_factory=list)
     focus: FocusConfig = field(default_factory=FocusConfig)
+    dusk: DuskConfig = field(default_factory=DuskConfig)
+    alarm: AlarmConfig = field(default_factory=AlarmConfig)
+    theme: ThemeConfig = field(default_factory=ThemeConfig)
+    wallpaper: WallpaperConfig = field(default_factory=WallpaperConfig)
+    diary: DiaryConfig = field(default_factory=DiaryConfig)
+    # 回忆相框（F37）的图库目录；None = 没显式配（false 时 photos_off = True）
+    photos: Path | None = None
+    photos_off: bool = False
     path: Path | None = None
 
     def auth_values(self) -> tuple[str, ...]:
@@ -419,6 +489,12 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
 
     scenes = _parse_scenes(raw.get("scenes"), devices)
     focus = _parse_focus(raw.get("focus"), scenes)
+    dusk = _parse_dusk(raw.get("dusk"), devices)
+    alarm = _parse_alarm(raw.get("alarm"), devices)
+    theme = _parse_theme(raw.get("theme"))
+    wallpaper = _parse_wallpaper(raw.get("wallpaper"))
+    diary = _parse_diary(raw.get("diary"))
+    photos, photos_off = _parse_photos(raw.get("photos"), path)
 
     return HubConfig(
         name=name,
@@ -438,6 +514,13 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         tokens=tokens,
         scenes=scenes,
         focus=focus,
+        dusk=dusk,
+        alarm=alarm,
+        theme=theme,
+        wallpaper=wallpaper,
+        diary=diary,
+        photos=photos,
+        photos_off=photos_off,
         path=path,
     )
 
@@ -846,6 +929,7 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
             offline_minutes=0,
             sedentary_minutes=0,
             weather=False,
+            air_pm25=0,
             memory_percent=0,
         )
     elif isinstance(alerts_raw, dict):
@@ -861,6 +945,7 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
                 alerts_raw.get("sedentary_minutes"), 90, "proactive.alerts.sedentary_minutes"
             ),
             weather=bool(alerts_raw.get("weather", True)),
+            air_pm25=_threshold(alerts_raw.get("air_pm25"), 75, "proactive.alerts.air_pm25"),
             memory_percent=_threshold(
                 alerts_raw.get("memory_percent"), 90, "proactive.alerts.memory_percent"
             ),
@@ -1145,7 +1230,152 @@ def _parse_focus(raw: Any, scenes: list[SceneConfig]) -> FocusConfig:
         off=_scene_ref(scenes, str(raw.get("off") or "").strip(), "focus.off")
         if str(raw.get("off") or "").strip()
         else "",
+        mute=bool(raw.get("mute", True)),
     )
+
+
+def _parse_dusk(raw: Any, devices: list[DeviceConfig]) -> DuskConfig:
+    if raw is None or raw is False:
+        return DuskConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("dusk 必须是对象，或用 dusk: false 关掉")
+    device = str(raw.get("device") or "").strip()
+    if not device:
+        return DuskConfig()
+    known = {item.id for item in devices}
+    if device not in known:
+        raise ValueError(f"dusk.device 指向的设备 {device!r} 不存在")
+    until = parse_clock(raw.get("until") or "22:00", "dusk.until")
+    return DuskConfig(
+        enabled=True,
+        device=device,
+        city=str(raw.get("city") or "").strip(),
+        offset_min=_dusk_int(raw, "offset_min", 30, 0, 240),
+        until=until,
+        brightness=_dusk_int(raw, "brightness", 40, 1, 100),
+        ramp_min=_dusk_int(raw, "ramp_min", 45, 1, 240),
+    )
+
+
+def _dusk_int(raw: dict, key: str, default: int, low: int, high: int) -> int:
+    """dusk 的三个整数。`0` 是合法值（offset_min: 0 = 日落即动手），别用 or 吞掉。"""
+    label = f"dusk.{key}"
+    value = raw.get(key)
+    if value is None:
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} 必须是整数") from exc
+    return _between(number, low, high, label)
+
+
+def _between(value: int, low: int, high: int, label: str) -> int:
+    if not low <= value <= high:
+        raise ValueError(f"{label} 要在 {low}–{high} 之间，收到 {value}")
+    return value
+
+
+def _parse_alarm(raw: Any, devices: list[DeviceConfig]) -> AlarmConfig:
+    """起床闹钟（F11）：at 空就是关着；device 写了就必须存在。"""
+    if raw is None or raw is False:
+        return AlarmConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("alarm 必须是对象，或用 alarm: false 关掉")
+    at = str(raw.get("at") or "").strip()
+    if not at:
+        return AlarmConfig()
+    at = parse_clock(at, "alarm.at")
+    device = str(raw.get("device") or "").strip()
+    if device:
+        known = {item.id for item in devices}
+        if device not in known:
+            raise ValueError(f"alarm.device 指向的设备 {device!r} 不存在")
+    say_val = raw.get("say")
+    say = AlarmConfig().say if say_val is None else str(say_val).strip()
+    return AlarmConfig(
+        at=at,
+        weekdays_only=bool(raw.get("weekdays_only", True)),
+        device=device,
+        brightness=_dusk_int(raw, "brightness", 30, 1, 100),
+        ramp_min=_dusk_int(raw, "ramp_min", 15, 1, 240),
+        say=say,
+    )
+
+
+def _parse_wallpaper(raw: Any) -> WallpaperConfig:
+    """一句话壁纸（F39）：不写或 true 开，false 关。"""
+    if raw is None or raw is True:
+        return WallpaperConfig()
+    if raw is False:
+        return WallpaperConfig(enabled=False)
+    raise ValueError("wallpaper 要是 true/false，写句式去改 wallpaper.py 的池子")
+
+
+def _parse_diary(raw: Any) -> DiaryConfig:
+    """守岸人日记（F29）：不写或 true 开（21:30 写），false 关，对象可改 at。"""
+    if raw is None or raw is True:
+        return DiaryConfig()
+    if raw is False:
+        return DiaryConfig(enabled=False)
+    if isinstance(raw, dict):
+        at_val = raw.get("at")
+        if at_val is None:
+            return DiaryConfig()
+        return DiaryConfig(at=parse_clock(at_val, "diary.at"))
+    raise ValueError("diary 要是 false 或 {at: \"21:30\"}")
+
+
+def _parse_photos(raw: Any, path: Path | None) -> tuple[Path | None, bool]:
+    """回忆相框（F37）：false 关、路径换地方；不写就交给 photos.py 活检测旁目录。"""
+    if raw is None or raw is True:
+        return None, False
+    if raw is False:
+        return None, True
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if stripped:
+            return Path(stripped), False
+        return None, False
+    raise ValueError("photos 要是 false 或一个目录路径")
+
+
+def _parse_theme(raw: Any) -> ThemeConfig:
+    """主题皮肤（F36）。生日 "MM-DD"，考试周 "MM-DD..MM-DD" 闭区间。"""
+    if raw is None or raw is False:
+        return ThemeConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("theme 必须是对象，或用 theme: false 关掉")
+    birthday = str(raw.get("birthday") or "").strip()
+    if birthday:
+        if _parse_theme_mmdd(birthday) is None:
+            raise ValueError(f"theme.birthday 要是 \"MM-DD\"，收到 {birthday!r}")
+    weeks_raw = raw.get("exam_weeks") or []
+    if not isinstance(weeks_raw, list):
+        raise ValueError("theme.exam_weeks 必须是列表")
+    weeks: list[str] = []
+    for item in weeks_raw:
+        week = str(item).strip()
+        if not week:
+            continue
+        left, sep, right = week.partition("..")
+        if not sep or _parse_theme_mmdd(left.strip()) is None or _parse_theme_mmdd(right.strip()) is None:
+            raise ValueError(f"theme.exam_weeks 里要写 \"MM-DD..MM-DD\"，收到 {week!r}")
+        weeks.append(week)
+    return ThemeConfig(birthday=birthday, exam_weeks=weeks)
+
+
+def _parse_theme_mmdd(raw: str) -> tuple[int, int] | None:
+    parts = raw.split("-")
+    if len(parts) != 2:
+        return None
+    try:
+        month, day = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    return month, day
 
 
 def scene_to_raw(scene: SceneConfig) -> dict[str, Any]:
@@ -1225,6 +1455,7 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
         and config.alerts.offline_minutes <= 0
         and config.alerts.sedentary_minutes <= 0
         and not config.alerts.weather
+        and config.alerts.air_pm25 <= 0
         and config.alerts.memory_percent <= 0
         and not config.alerts.finished
     ):
@@ -1236,6 +1467,8 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
             "sedentary_minutes": config.alerts.sedentary_minutes,
             "weather": config.alerts.weather,
         }
+        if config.alerts.air_pm25 > 0:
+            raw["alerts"]["air_pm25"] = config.alerts.air_pm25
         if config.alerts.memory_percent > 0:
             raw["alerts"]["memory_percent"] = config.alerts.memory_percent
         if config.alerts.finished:
@@ -1265,7 +1498,43 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
         focus_raw: dict[str, Any] = {"on": config.focus.on}
         if config.focus.off:
             focus_raw["off"] = config.focus.off
+        if not config.focus.mute:
+            focus_raw["mute"] = False
         raw["focus"] = focus_raw
+    if config.dusk.enabled:
+        raw["dusk"] = {
+            "device": config.dusk.device,
+            "offset_min": config.dusk.offset_min,
+            "until": config.dusk.until,
+            "brightness": config.dusk.brightness,
+            "ramp_min": config.dusk.ramp_min,
+            **({"city": config.dusk.city} if config.dusk.city else {}),
+        }
+    if config.alarm.at:
+        raw["alarm"] = {
+            "at": config.alarm.at,
+            "weekdays_only": config.alarm.weekdays_only,
+            "brightness": config.alarm.brightness,
+            "ramp_min": config.alarm.ramp_min,
+            "say": config.alarm.say,
+            **({"device": config.alarm.device} if config.alarm.device else {}),
+        }
+    if config.theme.birthday or config.theme.exam_weeks:
+        raw["theme"] = {
+            **({"birthday": config.theme.birthday} if config.theme.birthday else {}),
+            **({"exam_weeks": list(config.theme.exam_weeks)} if config.theme.exam_weeks else {}),
+        }
+    if not config.wallpaper.enabled:
+        raw["wallpaper"] = False
+    if not config.diary.enabled:
+        raw["diary"] = False
+    elif config.diary.at != DiaryConfig().at:
+        raw["diary"] = {"at": config.diary.at}
+    if config.photos_off:
+        # 回忆相框（F37）：只有配置过才写回，默认（旁目录活检测）不占 yaml 一行。
+        raw["photos"] = False
+    elif config.photos is not None:
+        raw["photos"] = str(config.photos)
     if config.temperature:
         raw["temperature"] = temperature_to_raw(config.temperature)
     if config.pc is not None:

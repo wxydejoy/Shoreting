@@ -99,10 +99,47 @@ private val DockShapes = Shapes(
     large = RoundedCornerShape(28.dp),
 )
 
+/** F36 节日皮肤：只动 accent 和背景的色温，字重字号一律不碰——
+ *  皮肤是「今天长得不一样」，不是「今天换了个 App」。 */
+private fun skinColorScheme(skin: String) = when (skin) {
+    // 春节 / 元旦：宣纸换朱砂
+    "spring_festival", "new_year" -> DockColors.copy(
+        primary = Color(0xFFE8A0A0),
+        primaryContainer = Color(0xFF2A1C1C),
+        background = Color(0xFF120D0D),
+        surface = Color(0xFF1D1717),
+    )
+    // 圣诞：松枝绿配旧金
+    "christmas" -> DockColors.copy(
+        primary = Color(0xFFB8C4A0),
+        primaryContainer = Color(0xFF20261C),
+        background = Color(0xFF0D100D),
+        surface = Color(0xFF161A16),
+    )
+    // 生日：旧金换蜜糖
+    "birthday" -> DockColors.copy(
+        primary = Color(0xFFE8C88C),
+        primaryContainer = Color(0xFF2A2418),
+    )
+    // 考试周：收着点，冷灰蓝，少点火气
+    "exam_week" -> DockColors.copy(
+        primary = Color(0xFFA8B8C4),
+        primaryContainer = Color(0xFF1C2226),
+    )
+    // 下雨天：青灰
+    "rainy" -> DockColors.copy(
+        primary = Color(0xFF9FB4C4),
+        primaryContainer = Color(0xFF1A2228),
+        background = Color(0xFF0C0E10),
+        surface = Color(0xFF141719),
+    )
+    else -> DockColors
+}
+
 @Composable
-fun DockTheme(content: @Composable () -> Unit) {
+fun DockTheme(skin: String = "", content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = DockColors,
+        colorScheme = if (skin.isBlank()) DockColors else skinColorScheme(skin),
         typography = DockTypography,
         shapes = DockShapes,
         content = content,

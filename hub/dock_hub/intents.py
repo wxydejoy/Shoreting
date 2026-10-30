@@ -162,6 +162,22 @@ def looks_like_control(text: str) -> bool:
     return bool(_CONTROL_HINT.search(fold_game_asr(text)))
 
 
+def turn_intent(text: str) -> bool | None:
+    """这句话里的开/关意图：True 开，False 关，None 没有。
+
+    两个词都出现（「别开也别关」这种）算没说清，返回 None——
+    澄清（F3）只认态度明确的话，不替人做决定。
+    """
+    folded = fold_game_asr(text)
+    want_on = bool(_TURN_ON.search(folded))
+    want_off = bool(_TURN_OFF.search(folded))
+    if want_on and not want_off:
+        return True
+    if want_off and not want_on:
+        return False
+    return None
+
+
 def looks_like_query(text: str) -> bool:
     return query_kind(text) is not None
 
@@ -599,6 +615,40 @@ def parse_leaving(text: str) -> bool:
 
 def parse_leave_action(raw: str) -> bool:
     return bool(_ACTION_LEAVE.search(raw or ""))
+
+
+# ---- F21 电脑电源：关机 / 睡眠 / 锁屏 --------------------------------------
+
+_POWER_SHUTDOWN = re.compile(
+    r"(?:电脑|主机|pc).{0,2}?(?:关掉|关了|关上|关机)"  # 电脑关了 / 把电脑关机
+    r"|(?:关掉|关了|关上)(?:电脑|主机|pc)"  # 关掉电脑
+    r"|关电脑"  # 关电脑
+    r"|^(?:帮我)?关机[吧。.!！]?$"  # 裸的「关机」整句才算，别从长句里捞
+)
+_POWER_SLEEP = re.compile(
+    r"(?:让)?(?:电脑|主机|pc)(?:给)?(?:睡(?:一?会?儿?|觉|一觉)|休眠|待机|睡眠)"
+    r"|休眠(?:电脑|主机|pc)"
+)
+_POWER_LOCK = re.compile(r"锁屏|锁个屏|锁定(?:电脑|屏幕)|把(?:电脑|屏幕)锁了|锁电脑")
+
+POWER_ACTIONS = ("shutdown", "sleep", "lock")
+
+
+def infer_power(text: str) -> str | None:
+    """「关电脑 / 让电脑睡会儿 / 锁屏」（F21）→ 动作名，认不出是 None。
+
+    关机、睡眠都必须点名电脑——「睡前」是场景、「关灯」是灯的事，不能抢；
+    裸的「关机」只在整句都是它的时候才算。锁屏没有歧义，不用点名。
+    挂起的确认（Companion 侧）是最后一道闸，认错了也有「确认」挡着。
+    """
+    folded = fold_game_asr(text)
+    if _POWER_LOCK.search(folded):
+        return "lock"
+    if _POWER_SHUTDOWN.search(folded):
+        return "shutdown"
+    if _POWER_SLEEP.search(folded):
+        return "sleep"
+    return None
 
 
 def parse_timer(text: str) -> int | None:

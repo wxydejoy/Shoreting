@@ -53,11 +53,12 @@ class ChatLog:
                 handle.write(line)
             self._trim_unlocked()
 
-    def list(self, *, limit: int = 200, query: str = "") -> list[dict[str, Any]]:
+    def list(self, *, limit: int = 200, query: str = "", day: str = "") -> list[dict[str, Any]]:
         if self.path is None or not self.path.is_file():
             return []
         cap = min(max(1, int(limit)), MAX_RETURN)
         needle = query.strip().lower()
+        day = day.strip()[:10]
         with self._lock:
             raw = self.path.read_text(encoding="utf-8", errors="replace")
         items: list[dict[str, Any]] = []
@@ -71,10 +72,33 @@ class ChatLog:
                 continue
             if not isinstance(obj, dict):
                 continue
+            if day and str(obj.get("ts") or "")[:10] != day:
+                continue
             if needle and needle not in f"{obj.get('user') or ''} {obj.get('reply') or ''}".lower():
                 continue
             items.append(obj)
         return items[-cap:]
+
+    def days(self) -> list[str]:
+        """记过话的日子（YYYY-MM-DD，旧→新）。时间线一天一档，翻旧账用。"""
+        if self.path is None or not self.path.is_file():
+            return []
+        with self._lock:
+            raw = self.path.read_text(encoding="utf-8", errors="replace")
+        seen: set[str] = set()
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                ts = str(obj.get("ts") or "")
+                if len(ts) >= 10:
+                    seen.add(ts[:10])
+        return sorted(seen)
 
     def _trim_unlocked(self) -> None:
         if self.path is None or not self.path.is_file():
@@ -102,7 +126,8 @@ def asset_page_html(name: str) -> bytes:
 
 
 def chats_page_html() -> bytes:
-    return asset_page_html("app.html")
+    """F30 时间线版对话页：独立小页（gate + ‹ › 翻天），不再走 app.html 三栏。"""
+    return asset_page_html("chats.html")
 
 
 def read_page_html() -> bytes:
@@ -112,3 +137,8 @@ def read_page_html() -> bytes:
 def week_page_html() -> bytes:
     """F27 桌面周报页（独立小页，不走 app.html 那套三栏）。"""
     return asset_page_html("week.html")
+
+
+def diary_page_html() -> bytes:
+    """F29 守岸人日记页（独立小页，一天一段，可删）。"""
+    return asset_page_html("diary.html")

@@ -58,6 +58,13 @@ object DockPower {
         activity.window.attributes = params
     }
 
+    /** 起床闹钟（F11）：progress 0→1，背光从近黑爬到正常，模拟日出。 */
+    fun rampForAlarm(activity: Activity, progress: Float) {
+        val params = activity.window.attributes
+        params.screenBrightness = 0.03f + 0.97f * progress.coerceIn(0f, 1f)
+        activity.window.attributes = params
+    }
+
     fun wake(activity: Activity) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             activity.setShowWhenLocked(true)

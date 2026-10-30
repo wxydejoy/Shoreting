@@ -128,8 +128,10 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `GET` | `/v1/snapshot` | 是 | 主屏全部状态（一次拿完） |
 | `GET` | `/metrics` | 本机免、跨机要 | Prometheus 文本：首句延迟、轮询耗时、TTS 失败 |
 | `POST` | `/v1/devices/{id}/command` | 是 | 控制一个设备，或触发一个 logo 动作 |
-| `GET` | `/v1/weather` | 是 | Hub 代取天气（手机可能只有局域网） |
+| `GET` | `/v1/weather` | 是 | Hub 代取天气（手机可能只有局域网）；响应顺带 `pm25`（F14，可缺省） |
+| `GET` | `/v1/photos/{id}` | 是 | 回忆相框（F37）：一张照片的原图。名单走 snapshot.photos，带 ETag/304；id 只认 basename，穿越一律 404 |
 | `POST` | `/v1/telemetry` | 是 | Windows 探针上报 CPU / GPU / 进程名 |
+| `POST` | `/v1/power` | 是 | Hub → 探针：`{"power": "shutdown"\|"sleep"\|"lock"}`（F21）。探针在本机执行：关机 `/t 5`、锁屏、睡眠。危险动作的二次确认在伴侣语音侧，协议层不拦 |
 | `POST` | `/v1/login-ticket` | 是 | 托盘换一张 60 秒有效的一次性票据，把浏览器送进 `/chats` |
 | `POST` | `/v1/companion/chat` | 是 | 桌面伴侣一轮对话（配置关闭则 404） |
 | `POST` | `/v1/companion/stop` | 是（本机可免） | 打断当前说话，立刻停 Mini 喇叭 |

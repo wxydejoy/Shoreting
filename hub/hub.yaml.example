@@ -67,6 +67,8 @@ mini:
 #     sedentary_minutes: 90 # 连续用电脑多久提醒起身（键鼠空 5 分钟算休息过）；0 = 不提
 #     weather: true         # 天气突变提醒：未来两小时有雨/骤降 5 度/大风，一天最多一句；
 #                           # 只在 07:00–21:00 看，城市用手机最近查过的那个；false = 不提
+#     air_pm25: 75          # PM2.5 超标提醒（F14）：由好变坏那一下说「别开窗」，
+#                           # 一直坏就闭嘴，回落 20 才重新武装；0 = 不提
 #     finished:             # 任务完成播报：额外盯的进程名（启动项里的进程默认在名单里）
 #       - Blender.exe
 #   # 问候语（F25 回家 / F24 回座）：都只在那一刻说；presence: false 整个关掉
@@ -216,3 +218,45 @@ devices:
 # focus:
 #   on: 开黑
 #   off: 退了
+#   mute: true   # 进游戏把 Hub 音量收到 0，退出来恢复（F22）；false = 不动音量
+#
+# 日落联动（F16）：天黑灯自己亮，比任何语音都更像有人住。
+# 日落后 offset_min 分钟开始，ramp_min 分钟内把亮度从 0 推到 brightness，
+# 过了 until 就不再推（睡前场景接着降）。device 不写 = 整条关着；
+# city 不写就用手机最近查天气的那座城。全程她不说话，也不占播报配额。
+# dusk:
+#   device: desk-led
+#   offset_min: 30
+#   until: "22:00"
+#   brightness: 40
+#   ramp_min: 45
+#
+# 起床闹钟（F11）：她比你先醒。at 到点后 ramp_min 分钟内把灯从 0 推到
+# brightness，手机屏幕跟着爬亮，爬完轻声说一句 say（手机不在就不喊）。
+# at 空 = 整条关着；device 不写 = 只亮屏幕不亮灯；weekdays_only 周末不叫。
+# alarm:
+#   at: "07:00"
+#   device: desk-led
+#   brightness: 30
+#   ramp_min: 15
+#   say: "起床了。"
+#
+# 主题皮肤（F36）：节日她自带（春节/元旦/圣诞），自己的日子写在这——
+# 生日当天她说一句「生日快乐」，屏幕换蜜糖色；考试周屏幕冷一点。
+# 下雨天不用配，手机自己看天气。
+# theme:
+#   birthday: "05-21"
+#   exam_weeks:
+#     - "01-10..01-20"
+#
+# 回忆相框（F37）：hub.yaml 旁边放个 photos/ 目录就生效（jpg/png/webp/heic/gif），
+# 电脑不在线的白天轮播，夜里还是飘字钟。photos: false 关掉，photos: /path 换地方。
+# photos: false
+#
+# 一句话壁纸（F39）：屏幕底边飘一行她今天想说的话，一天一句、按日期轮换，
+# 淡淡的不抢时钟。默认开着；写句式去改 dock_hub/wallpaper.py 的池子。
+# wallpaper: false   # 关掉
+#
+# 守岸人日记（F29）：她每天 21:30 拿台账和当天的话写一段，/diary 页可回看可删。
+# 默认开着；diary: false 关掉，diary: {at: "23:00"} 换时刻。
+# diary: false

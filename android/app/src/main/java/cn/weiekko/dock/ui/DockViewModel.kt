@@ -35,6 +35,9 @@ import cn.weiekko.dock.relay.RelayNotifier
 import cn.weiekko.dock.data.PcStatus
 import cn.weiekko.dock.data.PresenceReporter
 import cn.weiekko.dock.data.Snapshot
+import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import cn.weiekko.dock.data.WeatherClient
 import cn.weiekko.dock.data.WeatherInfo
 import cn.weiekko.dock.data.WeatherPlaces
@@ -59,6 +62,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -91,6 +95,8 @@ data class DockUiState(
     val loading: Boolean = false,
     val preview: Boolean = true,
     val weather: WeatherInfo? = null,
+    // F37 回忆相框：没数据可看的白天（电脑不在线、不在夜间压黑），轮播 Hub 的照片
+    val framePhoto: ImageBitmap? = null,
     val weatherEnabled: Boolean = true,
     val weatherCity: String = HubPreferences.DEFAULT_WEATHER_CITY,
     val weatherError: String? = null,
@@ -195,6 +201,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private var typeLookJob: Job? = null
     private var layoutJob: Job? = null
     private var weatherCityJob: Job? = null
+    private var frameJob: Job? = null
     private var companionJob: Job? = null
     private var subtitleJob: Job? = null
     private var voiceTurnId = ""
@@ -1421,6 +1428,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                         winApps = winApps.ifEmpty { if (it.preview) DemoSnapshot.winApps else emptyList() },
                     )
                 }
+                syncFrameMode()
             },
             onFailure = { error ->
                 handleFailure(error)
@@ -1512,6 +1520,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             deskSleepJob = null
             if (_ui.value.hubSleeping) {
                 _ui.update { it.copy(hubSleeping = false) }
+            syncFrameMode()
                 if (_ui.value.powerScreen) _screenCommands.tryEmit(ScreenCommand.Wake)
             }
             return
@@ -1528,6 +1537,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             if (_ui.value.hubSleeping) return@launch
             closeConversation()
             _ui.update { it.copy(hubSleeping = true) }
+            syncFrameMode()
             _screenCommands.tryEmit(ScreenCommand.Sleep)
         }
     }
@@ -1546,6 +1556,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             if (!_ui.value.powerScreen) return@launch
             closeConversation()
             _ui.update { it.copy(hubSleeping = true) }
+            syncFrameMode()
             _screenCommands.tryEmit(ScreenCommand.Sleep)
         }
     }
@@ -1565,10 +1576,63 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         if (wake && wasSleeping) _screenCommands.tryEmit(ScreenCommand.Wake)
     }
 
+    // ---- F37 回忆相框 --------------------------------------------------------
+    // 没数据可看的白天（电脑不在线、不在夜间压黑）把屏幕交给照片。
+    // 相册没开（Hub 没有 photos/ 目录）就当没有这个功能，安静退出。
+
+    private fun syncFrameMode() {
+        val state = _ui.value
+        val active = !state.hubSleeping && state.powerScreen &&
+            currentLink().pollsHub && state.connection.isConfigured &&
+            state.snapshot?.pc?.online == false
+        if (active) {
+            if (frameJob?.isActive != true) {
+                frameJob = viewModelScope.launch { runFrameLoop() }
+            }
+            return
+        }
+        if (frameJob == null) return
+        frameJob?.cancel()
+        frameJob = null
+        _ui.update { it.copy(framePhoto = null) }
+    }
+
+    private suspend fun runFrameLoop() {
+        while (currentCoroutineContext().isActive) {
+            // 名单跟着 snapshot 走：新照片放进 photos/ 目录，不用重启相框
+            val ids = _ui.value.snapshot?.photos?.ids.orEmpty()
+            if (ids.isEmpty()) {
+                delay(FRAME_PHOTO_MS)
+                continue
+            }
+            val connection = _ui.value.connection
+            val id = ids.random()
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { client.photo(connection, id) }.getOrNull()
+            }
+            val bitmap = bytes?.let { decodeFramePhoto(it) }
+            if (bitmap != null) {
+                _ui.update { it.copy(framePhoto = bitmap.asImageBitmap()) }
+            }
+            delay(FRAME_PHOTO_MS)
+        }
+    }
+
+    private fun decodeFramePhoto(bytes: ByteArray): android.graphics.Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / sample > 2560 || bounds.outHeight / sample > 2560) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    }
+
     companion object {
         const val POLL_MS = 20_000L
         const val POLL_PC_MS = 3_000L
         const val PHONE_MEDIA_MS = 1_000L
+        const val FRAME_PHOTO_MS = 45_000L
         const val WEATHER_OK_MS = 20 * 60 * 1000L
         const val WEATHER_RETRY_MS = 90 * 1000L
         const val VIDEO_OFF = "off"
