@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from dock_hub.config import DeviceConfig
 from dock_hub.errors import HubError
@@ -75,6 +76,29 @@ def running_image_names() -> set[str]:
     except Exception:
         return names
     return names
+
+
+class FinishedWatch:
+    """盯进程列表：谁不见了就记一笔「跑完了」。
+
+    首扫只记基线——开机时早就退出的东西不该被当成「刚跑完」。
+    `now` 由调用方传（time.monotonic()），纯状态，方便拿假时刻验。
+    """
+
+    def __init__(self) -> None:
+        self._since: dict[str, float] = {}
+
+    def diff(self, current: set[str], now: float) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for name in sorted(self._since):
+            if name in current:
+                continue
+            ran = max(0.0, now - self._since[name])
+            out.append({"process": name, "ran_sec": round(ran, 1)})
+            del self._since[name]
+        for name in current:
+            self._since.setdefault(name, now)
+        return out
 
 
 def launch_running(cfg: DeviceConfig, running: set[str] | None = None) -> bool:

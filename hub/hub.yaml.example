@@ -46,6 +46,8 @@ mini:
 #     sedentary_minutes: 90 # 连续用电脑多久提醒起身（键鼠空 5 分钟算休息过）；0 = 不提
 #     weather: true         # 天气突变提醒：未来两小时有雨/骤降 5 度/大风，一天最多一句；
 #                           # 只在 07:00–21:00 看，城市用手机最近查过的那个；false = 不提
+#     finished:             # 任务完成播报：额外盯的进程名（启动项里的进程默认在名单里）
+#       - Blender.exe
 
 # 桌面伴侣（本地 LLM + Mini TTS）。整段删掉或 enabled: false → snapshot.companion = null
 # Hub 在 Mini 上填 127.0.0.1

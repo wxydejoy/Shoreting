@@ -55,3 +55,36 @@ class ProcessNamesTest(unittest.TestCase):
         with patch("dock_hub.launch._startfile") as mocked:
             launch(cfg)
         mocked.assert_called_once()
+
+
+class FinishedWatchTest(unittest.TestCase):
+    def test_first_scan_is_baseline_only(self) -> None:
+        from dock_hub.launch import FinishedWatch
+
+        watch = FinishedWatch()
+        self.assertEqual(watch.diff({"a.exe", "b.exe"}, 0.0), [])
+
+    def test_disappearance_reports_with_duration(self) -> None:
+        from dock_hub.launch import FinishedWatch
+
+        watch = FinishedWatch()
+        watch.diff({"a.exe", "b.exe"}, 0.0)
+        events = watch.diff({"b.exe"}, 125.0)
+        self.assertEqual(events, [{"process": "a.exe", "ran_sec": 125.0}])
+
+    def test_reappear_resets_the_clock(self) -> None:
+        from dock_hub.launch import FinishedWatch
+
+        watch = FinishedWatch()
+        watch.diff({"a.exe"}, 0.0)
+        watch.diff(set(), 10.0)
+        watch.diff({"a.exe"}, 20.0)
+        self.assertEqual(watch.diff(set(), 30.0), [{"process": "a.exe", "ran_sec": 10.0}])
+
+    def test_still_running_reports_nothing(self) -> None:
+        from dock_hub.launch import FinishedWatch
+
+        watch = FinishedWatch()
+        watch.diff({"a.exe"}, 0.0)
+        watch.diff({"a.exe"}, 500.0)
+        self.assertEqual(watch.diff({"a.exe"}, 1000.0), [])

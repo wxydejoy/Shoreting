@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,7 +16,7 @@ from urllib.parse import urlparse
 
 from dock_hub.config import DEFAULT_PROBE_HUB_URL, HubConfig, PcConfig
 from dock_hub.errors import HubError
-from dock_hub.launch import launch, running_image_names
+from dock_hub.launch import FinishedWatch, launch, running_image_names
 from dock_hub.pc import PcSampler
 from dock_hub.reporter import post_telemetry
 from dock_hub.setup_ui import is_local_client
@@ -189,7 +190,7 @@ def idle_seconds() -> float | None:
         return None
 
 
-def _windows_sample(sampler: PcSampler) -> dict[str, Any]:
+def _windows_sample(sampler: PcSampler, watch: FinishedWatch | None = None) -> dict[str, Any]:
     pc = sampler.snapshot() or {"online": True}
     idle = idle_seconds()
     sample: dict[str, Any] = {
@@ -198,6 +199,10 @@ def _windows_sample(sampler: PcSampler) -> dict[str, Any]:
     }
     if idle is not None:
         sample["idle_sec"] = round(idle, 1)
+    if watch is not None:
+        finished = watch.diff({str(name).lower() for name in sample["running"]}, time.monotonic())
+        if finished:
+            sample["finished"] = finished
     return sample
 
 
@@ -210,9 +215,10 @@ def _report_loop(config: HubConfig, sampler: PcSampler, stop: threading.Event) -
         token=probe_token(config),
         pc_ms=max(400, (config.pc.sample_ms if config.pc else 1000)),
     )
+    watch = FinishedWatch()
     while not stop.wait(max(0.4, mini.pc_ms / 1000.0)):
         try:
-            post_telemetry(mini, _windows_sample(sampler))
+            post_telemetry(mini, _windows_sample(sampler, watch))
         except Exception:
             continue
 

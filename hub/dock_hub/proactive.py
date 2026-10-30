@@ -50,6 +50,16 @@ def in_quiet_hours(clock: tuple[str, str], now: datetime) -> bool:
     return current >= start or current < end
 
 
+def finished_text(process: str, ran_sec: float | None) -> str:
+    """「渲染完了，四分十二秒」那种一句。进程名不带 .exe，好听一点。"""
+    name = process.strip().removesuffix(".exe").strip() or process.strip()
+    if not ran_sec or ran_sec <= 0:
+        return f"{name}跑完了。"
+    if ran_sec < 60:
+        return f"{name}跑完了，用了 {int(ran_sec)} 秒。"
+    return f"{name}跑完了，用了 {round(ran_sec / 60)} 分钟。"
+
+
 def _upcoming_hours(now: datetime, hourly: dict[str, Any]) -> list[tuple[int, float, float]]:
     """未来两小时的 (code, celsius, wind_kmh)；数据残缺的整点直接跳过。
 

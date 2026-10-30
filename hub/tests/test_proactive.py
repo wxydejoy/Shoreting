@@ -674,5 +674,80 @@ class TestServiceWeatherAlert(unittest.TestCase):
         self.assertEqual(said, [])
 
 
+class TestFinished(unittest.TestCase):
+    """任务完成播报：文本、名单、队列。"""
+
+    def test_finished_text(self) -> None:
+        from dock_hub.proactive import finished_text
+
+        self.assertEqual(finished_text("Blender.exe", None), "Blender跑完了。")
+        self.assertEqual(finished_text("blender.exe", 0.0), "blender跑完了。")
+        self.assertEqual(finished_text("a.exe", 42.5), "a跑完了，用了 42 秒。")
+        self.assertEqual(finished_text("render.exe", 252.0), "render跑完了，用了 4 分钟。")
+
+    def test_watch_includes_action_processes_and_config(self) -> None:
+        hub, _ = self._hub_with_processes()
+        watch = hub._finished_watch()
+        self.assertIn("valorant-win64-shipping.exe", watch)
+        self.assertIn("blender.exe", watch)
+
+    def test_ingest_queues_and_alert_speaks(self) -> None:
+        hub, said = self._hub_with_processes()
+        hub.ingest_telemetry(
+            {"pc": {"online": True}, "running": [], "finished": [{"process": "Blender.exe", "ran_sec": 252.0}]}
+        )
+        hub._evaluate_alerts()
+        self.assertEqual(said, ["Blender跑完了，用了 4 分钟。"])
+        hub._evaluate_alerts()  # 队列已倒空，同一天不重复
+        self.assertEqual(said, ["Blender跑完了，用了 4 分钟。"])
+
+    def test_unwatched_process_is_dropped(self) -> None:
+        hub, said = self._hub_with_processes()
+        hub.ingest_telemetry(
+            {"pc": {"online": True}, "running": [], "finished": [{"process": "notepad.exe"}]}
+        )
+        hub._evaluate_alerts()
+        self.assertEqual(said, [])
+
+    def test_bad_finished_payload_is_ignored(self) -> None:
+        hub, said = self._hub_with_processes()
+        hub.ingest_telemetry(
+            {"pc": {"online": True}, "running": [], "finished": ["junk", {"process": ""}, 3]}
+        )
+        hub._evaluate_alerts()
+        self.assertEqual(said, [])
+
+    def _hub_with_processes(self):
+        from dock_hub.config import ProactiveConfig
+        from dock_hub.service import DockHub
+
+        cfg = parse_config(
+            {
+                "name": "study",
+                "token": "secret-token-value",
+                "devices": [
+                    {
+                        "id": "valorant",
+                        "name": "无畏契约",
+                        "type": "action",
+                        "program": "C:\\game.exe",
+                        "process": ["VALORANT-Win64-Shipping.exe"],
+                    }
+                ],
+                "proactive": {
+                    "enabled": True,
+                    "daily_limit": 5,
+                    "alerts": {"finished": ["Blender.exe"]},
+                },
+            }
+        )
+        hub = DockHub(cfg)
+        self.addCleanup(hub.reporter.stop)
+        self.addCleanup(hub.proactive.configure, ProactiveConfig())
+        said: list[str] = []
+        hub.proactive._speak = lambda text: (said.append(text), True)[1]
+        return hub, said
+
+
 if __name__ == "__main__":
     unittest.main()

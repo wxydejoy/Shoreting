@@ -32,7 +32,7 @@ from dock_hub.launch import launch, launch_exists, launch_running, running_image
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
 from dock_hub.pc import PcSampler, utc_now
 from dock_hub.persona import speak_temp
-from dock_hub.proactive import Proactive, SedentaryWatch, Sustained
+from dock_hub.proactive import Proactive, SedentaryWatch, Sustained, finished_text
 from dock_hub.media import MEDIA_ACTIONS, MediaSession
 from dock_hub.reporter import DeskReporter
 from dock_hub.mijia_bridge import (
@@ -112,6 +112,8 @@ class DockHub:
         self._alert_state = Sustained()
         self._sedentary = SedentaryWatch()
         self._weather_check_at = 0.0
+        self._finished_lock = threading.Lock()
+        self._finished_queue: list[dict[str, Any]] = []
         self._proactive_stop = threading.Event()
         self._start_proactive()
         self.reporter.start()
@@ -197,6 +199,7 @@ class DockHub:
                 print(f"[proactive] 久坐提醒：{said.text or said.reason}")
         if alerts.weather:
             self._evaluate_weather_alert(now)
+        self._evaluate_finished_alerts(now)
         if alerts.offline_minutes > 0:
             for item in self._offline_mijia_devices():
                 key = f"offline:{item['id']}"
@@ -205,6 +208,43 @@ class DockHub:
                     if said.spoke:
                         self._alert_state.clear(key)
                     print(f"[proactive] 离线提醒：{said.text or said.reason}")
+
+    def _finished_watch(self) -> set[str]:
+        """关注列表：配置里点的名 + 启动项的进程（她本来就在盯着这些）。"""
+        watch = {
+            name.strip().lower()
+            for name in self.proactive.config.alerts.finished
+            if name.strip()
+        }
+        for device in self.config.devices:
+            if device.is_action:
+                for name in device.process or []:
+                    if str(name).strip():
+                        watch.add(str(name).strip().lower())
+        return watch
+
+    def _evaluate_finished_alerts(self, now: datetime) -> None:
+        """任务完成播报（F20）：探针报谁跑完了，名单里的说一句。
+
+        队列在这里统一倒（proactive 线程），别的线程只入队；
+        免打扰、每日配额、一天一个进程最多一句都由 proactive.alert 兑底。
+        """
+        watch = self._finished_watch()
+        if not watch:
+            with self._finished_lock:
+                self._finished_queue.clear()
+            return
+        with self._finished_lock:
+            pending, self._finished_queue = self._finished_queue, []
+        for event in pending:
+            if event["process"].lower() not in watch:
+                continue
+            said = self.proactive.alert(
+                f"finished:{event['process']}",
+                finished_text(event["process"], event["ran_sec"]),
+                now,
+            )
+            print(f"[proactive] 任务完成：{said.text or said.reason}")
 
     WEATHER_CHECK_SEC = 3600.0
 
@@ -413,6 +453,22 @@ class DockHub:
             self._remote_at = time.monotonic()
             self._remote_idle = idle
         self._set_desk_pc_online(bool(sample.get("online")))
+        finished_raw = body.get("finished") or []
+        if isinstance(finished_raw, list):
+            for item in finished_raw:
+                if not isinstance(item, dict):
+                    continue
+                # 名字原样留着：说的时候是「Blender 跑完了」，不是小写
+                name = str(item.get("process") or "").strip()
+                if not name:
+                    continue
+                raw_ran = item.get("ran_sec")
+                try:
+                    ran_sec = float(raw_ran) if raw_ran is not None else None
+                except (TypeError, ValueError):
+                    ran_sec = None
+                with self._finished_lock:
+                    self._finished_queue.append({"process": name, "ran_sec": ran_sec})
         return {"ok": True}
 
     def pc_snapshot(self) -> dict[str, Any] | None:
