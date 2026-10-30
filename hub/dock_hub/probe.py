@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -115,11 +116,14 @@ def make_probe_handler(config: HubConfig) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path.rstrip("/") or "/"
             try:
-                if path != "/v1/launch":
+                if path not in {"/v1/launch", "/v1/power"}:
                     raise HubError("not_found", "未知接口")
                 self._require_auth()
                 body = self._read_json()
-                self._json(200, handle_launch(config, body))
+                if path == "/v1/launch":
+                    self._json(200, handle_launch(config, body))
+                else:
+                    self._json(200, handle_power(config, body))
             except HubError as exc:
                 self._json(exc.status, exc.body())
 
@@ -178,6 +182,43 @@ def handle_launch(config: HubConfig, body: dict[str, Any]) -> dict[str, Any]:
         raise HubError("unsupported", f"{cfg.name} 不是启动项")
     launch(cfg)
     return {"ok": True, "id": cfg.id}
+
+
+def power_command(action: str) -> list[str]:
+    """F21 的三把钥匙。锁屏、睡眠走 rundll32；关机给 5 秒缓冲——
+    万一是误触，还有一窗时间喊「shutdown /a」救回来。"""
+    if action == "lock":
+        return ["rundll32.exe", "user32.dll,LockWorkStation"]
+    if action == "sleep":
+        # SetSuspendState(休眠=False, 强制=True, 禁唤醒=False)。
+        # 系统开了休眠时 Windows 会转成休眠，这是 rundll32 路线的已知脾气。
+        return ["rundll32.exe", "powrprof.dll,SetSuspendState 0,1,0"]
+    if action == "shutdown":
+        return ["shutdown.exe", "/s", "/t", "5"]
+    raise HubError("bad_request", "power 只认 shutdown / sleep / lock")
+
+
+def execute_power(action: str) -> None:
+    """真的去按电源。只在 Windows 上动手——别的平台当不支持，不装样子。"""
+    command = power_command(action)
+    if sys.platform != "win32":
+        raise HubError("unsupported", "电源动作只在 Windows 上可用")
+    try:
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as exc:
+        raise HubError("action_error", f"电源动作执行失败：{exc}") from exc
+
+
+def handle_power(config: HubConfig, body: dict[str, Any]) -> dict[str, Any]:
+    action = str(body.get("power") or "").strip().lower()
+    execute_power(action)
+    return {"ok": True, "power": action}
 
 
 def idle_seconds() -> float | None:

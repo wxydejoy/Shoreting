@@ -60,6 +60,7 @@ from dock_hub.intents import (
     infer_brightness,
     infer_control,
     infer_noise,
+    infer_power,
     infer_temp,
     is_teach_attempt,
     looks_like_control,
@@ -140,6 +141,24 @@ MAX_READ_CHARS = 8000
 # 白噪音没放成时的统一口径（_handle_desk 里用它判断 ok）
 _NOISE_FAIL_SPOKEN = ("这次没动成。", "这台 Mini 还不能放白噪音。")
 
+# ---- F21 电源动作：问出口的那句、做成的短确认、等多久作废 -------------------
+
+POWER_TTL_SEC = 60.0
+"""确认悬着多久作废。比 F3 的两分钟紧——这是要动真格的动作。"""
+
+_POWER_ASK = {
+    "shutdown": "真的要关电脑吗？确认我就关了。",
+    "sleep": "让电脑睡吗？确认我就动手。",
+    "lock": "锁屏吗？确认就锁。",
+}
+_POWER_ACK = {"shutdown": "好，五秒后关机。", "sleep": "好，睡了。", "lock": "锁了。"}
+_POWER_LABEL = {"shutdown": "关机", "sleep": "睡眠", "lock": "锁屏"}
+_POWER_CONFIRM_RE = re.compile(r"确认|确定|动手吧|就这么办")
+# 「好 / 对 / 嗯」这种一个字的答应，只有整句就是它的时候才算——
+# 「今天好累」里的「好」不能变成「好，动手」。
+_POWER_YES_RE = re.compile(r"^(?:好的?|好呀|行|嗯+|对呀?|是的?|要)[吧呀啊。.!！]?$")
+_POWER_CANCEL_RE = re.compile(r"算了|不用|取消|别弄|不弄|先不|不关|不锁|不睡")
+
 
 PRESENCE_SEC = 90
 
@@ -182,6 +201,8 @@ class Companion:
         self.on_read_done = None
         # F3 追问澄清：问出去还没被认领的那句
         self._pending_clarify: PendingClarify | None = None
+        # F21 电源动作：问过「真的要吗」、等「确认」的那一下（动作, 问的时刻）
+        self._pending_power: tuple[str, float] | None = None
 
     def configure(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
@@ -274,6 +295,7 @@ class Companion:
             seq = self._seq
         self.tts.stop()
         pending = self._pop_clarify()
+        power_pending = self._pop_power()
         taught = self._remember_skill(text)
         if taught or is_teach_attempt(text):
             spoken = taught or "这个只能绑已经配好的灯或启动项，不能自己加程序。"
@@ -357,6 +379,16 @@ class Companion:
             )
         # 泰缇斯 / Hermes 已移除：不再做「简单还是复杂」的路由判定，
         # 所有对话直接交给伴侣模型（顺带省掉每次一条分类请求）。
+        # F21：电源动作走两步确认，必须排在澄清前面——「关电脑」不能被
+        # 反问成「要关哪个？」，也不能落到模型手里。
+        power = self._handle_power(text, turn, power_pending)
+        if power is not None:
+            spoken, events = power
+            self._commit_reply(spoken)
+            _latency(turn, "power", chars=len(spoken))
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+            )
         # F3：像开关指令却解不出设备的话，先问一句，别把「帮我关了」扔给模型瞎猜。
         question = (
             clarify_for(text, self._skills, self._aliases)
@@ -486,6 +518,7 @@ class Companion:
         if self._story_books is not None:
             self._story_books.pause()
         self._pending_clarify = None
+        self._pending_power = None
         with self._lock:
             self._seq += 1
             self._speaking = False
@@ -884,6 +917,63 @@ class Companion:
             return [{"id": ident, "name": name, "on": on, "ok": False, "code": exc.code}]
         _latency(turn, "skill_ok", id=ident, on=int(on))
         return [{"id": ident, "name": name, "on": on, "ok": True}]
+
+    # ---- F21 电源动作：危险，必须两步 ---------------------------------------
+
+    def _pop_power(self) -> str | None:
+        """取走挂着的确认。过期的当没问过——「确认」不能隔一夜还算数。"""
+        pending = self._pending_power
+        self._pending_power = None
+        if pending is None or time.monotonic() - pending[1] > POWER_TTL_SEC:
+            return None
+        return pending[0]
+
+    def _handle_power(
+        self, text: str, turn: str, pending: str | None
+    ) -> tuple[str, list[dict[str, Any]]] | None:
+        """「关电脑 / 锁屏 / 让电脑睡会儿」（F21）：先问后做，听见「确认」才动手。
+
+        两步是死规矩（规格 5.2：危险动作单独说、单独确认）。问出去之后，
+        同一个动作再说一遍也算数（有人就这么答）；换动作就改问新的；
+        说别的去了当没问过，正常流程接着走。
+        """
+        action = infer_power(text)
+        if pending is None:
+            if action is None or not callable(self._world.get("power")):
+                return None
+            self._pending_power = (action, time.monotonic())
+            _latency(turn, "power_ask", action=action)
+            return _POWER_ASK[action], [
+                {"id": "power", "action": action, "confirm": True, "ok": False}
+            ]
+        if action == pending:
+            return self._fire_power(action, turn)
+        if action is not None:
+            self._pending_power = (action, time.monotonic())
+            _latency(turn, "power_ask", action=action)
+            return _POWER_ASK[action], [
+                {"id": "power", "action": action, "confirm": True, "ok": False}
+            ]
+        if _POWER_CANCEL_RE.search(text):
+            return "好，不动了。", [{"id": "power", "action": pending, "ok": False}]
+        if _POWER_CONFIRM_RE.search(text) or _POWER_YES_RE.fullmatch(text.strip()):
+            return self._fire_power(pending, turn)
+        return None
+
+    def _fire_power(self, action: str, turn: str) -> tuple[str, list[dict[str, Any]]]:
+        self._pending_power = None
+        power = self._world.get("power")
+        if not callable(power):
+            return "这边还没接上电脑。", [{"id": "power", "action": action, "ok": False}]
+        try:
+            power(action)
+        except HubError as exc:
+            _latency(turn, "power_error", action=action, code=exc.code)
+            return f"{_POWER_LABEL[action]}没动成。", [
+                {"id": "power", "action": action, "ok": False, "code": exc.code}
+            ]
+        _latency(turn, "power_ok", action=action)
+        return _POWER_ACK[action], [{"id": "power", "action": action, "ok": True}]
 
     def _run_temp(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         return set_temperature(

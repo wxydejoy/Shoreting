@@ -28,6 +28,7 @@ class _StorySpeaker:
         self._companion.begin_story_audio()
 from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig, PcConfig, PropConfig, TemperatureConfig, default_config_path
 from dock_hub.dusk import DuskRamp
+from dock_hub.alarm import AlarmRamp
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
@@ -156,6 +157,8 @@ class DockHub:
         self._start_focus()
         self._dusk: DuskRamp | None = None
         self._start_dusk()
+        self._alarm: AlarmRamp | None = None
+        self._start_alarm()
         self.reporter.start()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
         self.scheduler.start()
@@ -483,6 +486,7 @@ class DockHub:
         self._wire_companion()
         self._start_focus()
         self._start_dusk()
+        self._start_alarm()
         self.reporter.start()
         self.scheduler.stop()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
@@ -781,6 +785,7 @@ class DockHub:
                 "scene": self.run_scene,
                 "leave": self.leave_home,
                 "notify": self.relay_to_phone,
+                "power": self.power_action,
                 "noise": self.companion_noise,
                 "scenes": [
                     {
@@ -1252,6 +1257,26 @@ class DockHub:
         state = self._companion_device_state(device_id)
         return bool(state is None or state.get("on") is not False)
 
+    def _start_alarm(self) -> None:
+        """起床闹钟（F11）。没配就不起线程；改了配置重建线程。"""
+        if self._alarm is not None:
+            self._alarm.stop()
+        self._alarm = None
+        if not self.config.alarm.at:
+            return
+        self._alarm = AlarmRamp(
+            self.config.alarm,
+            set_brightness=self._dusk_set,
+            speak=self._alarm_speak,
+        )
+        self._alarm.start()
+
+    def _alarm_speak(self) -> None:
+        """爬坡最后一格的那一声。走主动开口的闸，手机不在就不喊，不硬来。"""
+        spoken = str(self.config.alarm.say or "").strip()
+        if spoken:
+            self.companion.speak_up(spoken)
+
     def _evaluate_focus(self) -> None:
         """边沿触发：从「没在玩」变「在玩」切 on 场景，反过来切 off 场景。
 
@@ -1332,6 +1357,34 @@ class DockHub:
             if isinstance(err, dict):
                 message = str(err.get("message") or "")
         raise HubError("action_error", message or f"无法启动 {cfg.name}")
+
+    def power_action(self, action: str) -> None:
+        """F21：关机 / 睡眠 / 锁屏，让探针去按。二次确认在 Companion 侧，
+        这一层只管把话递到。"""
+        if action not in ("shutdown", "sleep", "lock"):
+            raise HubError("bad_request", "power 只认 shutdown / sleep / lock")
+        base = (self.config.probe.url or "").rstrip("/")
+        if not base:
+            raise HubError("offline", "未配置 Windows 探针，动不了电脑电源")
+        token = (self.config.probe.token or self.config.token).strip()
+        raw = json.dumps({"power": action}, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(base + "/v1/power", data=raw, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=8.0) as resp:
+                body = json.loads(resp.read().decode("utf-8") or "{}")
+        except (TimeoutError, urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as exc:
+            raise HubError("offline", "电脑未开机或探针无响应") from exc
+        if isinstance(body, dict) and body.get("ok"):
+            return
+        message = ""
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                message = str(err.get("message") or "")
+        raise HubError("action_error", message or "电源动作没执行成")
 
     def follow_pc(self, on: bool) -> None:
         for cfg in self.config.devices:
@@ -1646,6 +1699,7 @@ class DockHub:
             "presence": self._presence_payload(),
             "at_desk": self._at_desk_payload(),
             "notify": self.notify.snapshot(),
+            "alarm": self._alarm.snapshot() if self._alarm else None,
         }
         self._note_desk_snapshot(body)
         return body
