@@ -30,6 +30,7 @@ from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig
 from dock_hub.errors import HubError
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
+from dock_hub.notify import NotifyBoard, parse_relay, wechat_say_text
 from dock_hub.weekly import DailyLedger, weekly_line
 from dock_hub.lanes import Lanes
 from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
@@ -117,6 +118,8 @@ class DockHub:
             (config.path or default_config_path()).with_name("companion-stats.jsonl")
         )
         self.companion.on_read_done = self.ledger.note_read
+        # F33/F4/F34：往手机递话的一条通道（对讲反向、语音留言、微信共用）
+        self.notify = NotifyBoard()
         self._attach_books()
         self._desk_lock = threading.Lock()
         self._desk_temp: dict[str, Any] | None = None
@@ -732,6 +735,7 @@ class DockHub:
                 "desk": self.reporter.snapshot,
                 "scene": self.run_scene,
                 "leave": self.leave_home,
+                "notify": self.relay_to_phone,
                 "scenes": [
                     {
                         "id": item.id,
@@ -858,6 +862,42 @@ class DockHub:
 
     def _weekly_text(self) -> str:
         return weekly_line(self.ledger.summary())
+
+    def relay_to_phone(self, text: str, source: str = "desk") -> dict[str, Any]:
+        """往手机递一句话（F33 反向 / F4 留言）。递完叫醒长轮询。"""
+        item = self.notify.post(text, source=source)
+        self.note_change()
+        return item
+
+    def notify_phone(self, body: dict[str, Any]) -> dict[str, Any]:
+        """`POST /v1/notify/phone`：脚本、电脑、任何拿得到 token 的东西都能递话。"""
+        text = str((body or {}).get("text") or "").strip()
+        if not text:
+            raise HubError("bad_request", "text 不能为空")
+        source = str((body or {}).get("from") or "script").strip()[:20] or "script"
+        return self.relay_to_phone(text, source=source)
+
+    def ingest_wechat(self, body: dict[str, Any]) -> dict[str, Any]:
+        """`POST /v1/wechat`（F34）：微信机器人转发一句过来，她念出来。
+
+        单向播报，不做双向对话（不做清单第 3 条）。念的这句走 announce 通道
+        （不进对话历史、不追问），同时留一份在 notify 队列里给主屏当字幕备查。
+        """
+        data = body or {}
+        text = str(data.get("text") or "").strip()
+        if not text:
+            raise HubError("bad_request", "text 不能为空")
+        sender = str(data.get("from") or "").strip() or None
+        said = wechat_say_text(text, sender)
+        spoken: str | None = None
+        try:
+            spoken = self.companion.announce({"text": said}).get("text")
+        except HubError as exc:
+            if exc.code != "not_found":
+                raise
+            # 伴侣没开：微信就不出声了，但仍留一条到手机
+        item = self.relay_to_phone(said or text, source="wechat")
+        return {"ok": True, "said": spoken, "notify_id": item["id"]}
 
     def companion_memory(self) -> dict[str, Any]:
         """设置页「她记得的事」：列表 + 上限，前端渲染成可删的条目。"""
@@ -1506,6 +1546,7 @@ class DockHub:
             ],
             "presence": self._presence_payload(),
             "at_desk": self._at_desk_payload(),
+            "notify": self.notify.snapshot(),
         }
         self._note_desk_snapshot(body)
         return body
