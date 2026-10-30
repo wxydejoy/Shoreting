@@ -767,8 +767,31 @@ hub_mijia_login_ok 1
 | `action_error` | 502 | 本机程序/脚本拉起失败 |
 | `media_error` | 502 | 系统媒体键发送失败 |
 | `companion_unavailable` | 502 | 本地大脑不可达或超时 |
+| `too_many` | 429 | 这一分钟内调得太勤，见 §7.1 |
 
 `message` 用中文，可直接显示在安卓上。
+
+带 `Retry-After` 头的只有 429，单位秒，安卓可以照它退避。
+
+### 7.1 限流
+
+`chat` / `announce` / `read` / `command` / `login` 五个入口按**来源 IP + 端点**各自
+一个令牌桶，容量等于「每分钟允许几次」，按同一速率匀速回填。超限返回 429
+`too_many`，不排队、不阻塞。
+
+| 端点 | 默认 | 为什么单列 |
+|---|---|---|
+| `POST /v1/companion/chat` | 20/分 | 一次几千 token，刷起来是真金白银 |
+| `POST /v1/companion/announce` | 10/分 | 走 TTS，会占住喇叭 |
+| `POST /v1/companion/read` | 20/分 | 每个任务都要合成音频 |
+| `POST /v1/devices/{id}/command` | 60/分 | 能拉起本机白名单程序，泄露 token 时的提权面 |
+| `POST /chats/login` | 10/分 | 挡 token 暴力猜解 |
+
+按 IP 分桶而不是按 token：token 只有一枚，按 token 限等于全局限，一个人刷爆全家
+都动不了。本机直连也照样限——真烧起额度来时，本机跑的脚本比外面更可能是元凶。
+
+配置在 `hub.yaml` 的 `limits:` 段，缺省即上表；`limits: false` 整段关掉；
+某一档写 `0` 只关那一档。注意限流在 Hub 内存里，重启归零。
 
 ---
 

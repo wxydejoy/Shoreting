@@ -39,6 +39,25 @@ class MediaConfig:
 
 
 @dataclass
+class LimitsConfig:
+    """谁调得太勤就拦一会儿。
+
+    按端点分开算，因为它们的代价差着量级：一次 chat 是几千 token 的大模型调用，
+    一次 command 只是往米家发一条指令。用一个全局数字要么太松（防不住刷 chat），
+    要么太紧（手机正常用都会撞墙）。
+
+    单位统一是「每分钟几次」，`per_minute <= 0` 的那一档等于关闭。
+    """
+
+    enabled: bool = True
+    chat_per_min: int = 20
+    announce_per_min: int = 10
+    command_per_min: int = 60
+    login_per_min: int = 10
+    read_per_min: int = 20
+
+
+@dataclass
 class MiniLinkConfig:
     enabled: bool = True
     base_url: str = "http://10.83.22.121:17891"
@@ -180,6 +199,7 @@ class HubConfig:
     mini: MiniLinkConfig | None = None
     probe: ProbeConfig = field(default_factory=ProbeConfig)
     schedules: list[ScheduleConfig] = field(default_factory=list)
+    limits: LimitsConfig = field(default_factory=LimitsConfig)
     path: Path | None = None
 
     def device(self, device_id: str) -> DeviceConfig:
@@ -260,6 +280,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     companion = _parse_companion(raw.get("companion"))
     mini = _parse_mini(raw.get("mini"))
     probe = _parse_probe(raw.get("probe"))
+    limits = _parse_limits(raw.get("limits"))
 
     devices: list[DeviceConfig] = []
     seen: set[str] = set()
@@ -283,6 +304,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         mini=mini,
         probe=probe,
         schedules=_parse_schedules(raw.get("schedules"), devices),
+        limits=limits,
         path=path,
     )
 
@@ -447,6 +469,38 @@ def _parse_device(raw: dict[str, Any]) -> DeviceConfig:
         brightness_prop=brightness,
         icon=icon,
         props=props,
+    )
+
+
+def _parse_limits(raw: Any) -> LimitsConfig:
+    if raw is None:
+        return LimitsConfig()
+    if raw is False:
+        return LimitsConfig(enabled=False)
+    if not isinstance(raw, dict):
+        raise ValueError("limits 必须是对象，或用 limits: false 整段关掉")
+    if raw.get("enabled") is False:
+        return LimitsConfig(enabled=False)
+
+    def rate(key: str, default: int, label: str) -> int:
+        value = raw.get(key)
+        if value is None:
+            return default
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"limits.{key} 必须是整数（{label}）") from exc
+        if number < 0:
+            raise ValueError(f"limits.{key} 不能是负数（{label}）")
+        return number
+
+    return LimitsConfig(
+        enabled=True,
+        chat_per_min=rate("chat_per_min", 20, "伴侣对话"),
+        announce_per_min=rate("announce_per_min", 10, "主动播报"),
+        command_per_min=rate("command_per_min", 60, "设备控制"),
+        login_per_min=rate("login_per_min", 10, "登录尝试"),
+        read_per_min=rate("read_per_min", 20, "朗读"),
     )
 
 
@@ -781,6 +835,14 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             if config.mini.mijia_ms != 15000:
                 mini["mijia_ms"] = config.mini.mijia_ms
         raw["mini"] = mini
+    if config.limits != LimitsConfig():
+        limits: dict[str, Any] = {"enabled": config.limits.enabled}
+        defaults = LimitsConfig()
+        for key in ("chat_per_min", "announce_per_min", "command_per_min", "login_per_min", "read_per_min"):
+            value = getattr(config.limits, key)
+            if value != getattr(defaults, key):
+                limits[key] = value
+        raw["limits"] = limits
     probe = config.probe
     if probe.url or probe.token or probe.stale_ms != 4000 or probe.hub_url != DEFAULT_PROBE_HUB_URL or probe.listen != DEFAULT_PROBE_LISTEN:
         dumped: dict[str, Any] = {}

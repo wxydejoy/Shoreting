@@ -490,6 +490,10 @@ def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
             llm_raw["model"] = model_in
         if key_in:
             llm_raw["api_key"] = key_in
+    if dumped.get("limits") is not None:
+        # 向导的表单里没有限流那几格，不显式继承的话，用户手写在 yaml 里的
+        # limits 会在点一次「保存」之后无声消失。
+        raw["limits"] = dumped["limits"]
     if dumped.get("mini") is not None:
         raw["mini"] = dumped["mini"]
     if dumped.get("probe") is not None:

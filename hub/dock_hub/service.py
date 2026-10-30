@@ -31,6 +31,7 @@ from dock_hub.metrics import METRICS
 from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
 from dock_hub.pc import PcSampler, utc_now
+from dock_hub.ratelimit import Gate
 from dock_hub.media import MEDIA_ACTIONS, MediaSession
 from dock_hub.reporter import DeskReporter
 from dock_hub.schedule import Scheduler
@@ -89,6 +90,8 @@ class DockHub:
         self._desk_pc_online: bool | None = None
         self._ticket_lock = threading.Lock()
         self._login_tickets: dict[str, tuple[float, str]] = {}
+        # 没开限流时是 None，调用方按「不限」处理，不用到处判断开关
+        self.gate = Gate.from_config(config.limits)
         media_cfg = config.media or MediaConfig(enabled=True)
         self.media = MediaSession(enabled=media_cfg.enabled)
         self.companion = Companion(config.companion)

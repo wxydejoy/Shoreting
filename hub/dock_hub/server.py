@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import os
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -198,7 +199,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     return
                 raise HubError("not_found", "未知接口")
             except HubError as exc:
-                self._json(exc.status, exc.body())
+                self._json(exc.status, exc.body(), headers=exc.headers)
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -214,11 +215,13 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     raise HubError("not_found", "未知接口")
                 if path == "/v1/companion/chat":
                     self._require_auth()
+                    self._limit("chat")
                     hub.note_presence()
                     body = self._read_json()
                     self._json(200, hub.companion_chat(body))
                     return
                 if path == "/chats/login":
+                    self._limit("login")
                     body = self._read_json()
                     token = str(body.get("token") or "").strip()
                     expected = hub.config.token
@@ -246,12 +249,14 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     return
                 if path == "/v1/companion/announce":
                     self._require_auth()
+                    self._limit("announce")
                     body = self._read_json()
                     self._json(200, hub.companion_announce(body))
                     return
                 if path == "/v1/companion/read":
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
+                    self._limit("read")
                     body = self._read_json()
                     self._json(200, hub.companion_read(body))
                     return
@@ -311,10 +316,11 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 if not device_id or "/" in device_id:
                     raise HubError("not_found", "未知接口")
                 self._require_auth()
+                self._limit("command")
                 body = self._read_json()
                 self._json(200, hub.command(device_id, body))
             except HubError as exc:
-                self._json(exc.status, exc.body())
+                self._json(exc.status, exc.body(), headers=exc.headers)
 
         def _cookie(self, name: str) -> str:
             raw = self.headers.get("Cookie") or ""
@@ -338,6 +344,24 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     return True
             cookie = self._cookie("helm_chats")
             return bool(cookie) and hmac.compare_digest(cookie, expected)
+
+        def _limit(self, bucket: str) -> None:
+            """按来源 IP 扣一次额度，超了抛 429。
+
+            本机也不放过：真烧起额度来时，本机跑的脚本比外面更可能是元凶。
+            """
+            gate = getattr(hub, "gate", None)
+            if gate is None:
+                return
+            wait = gate.check(bucket, self.client_address[0])
+            if wait <= 0:
+                return
+            seconds = max(1, math.ceil(wait))
+            raise HubError(
+                "too_many",
+                f"太频繁了，{seconds} 秒后再试",
+                headers={"Retry-After": str(seconds)},
+            )
 
         def _require_auth(self) -> None:
             header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
@@ -409,12 +433,19 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 raise HubError("bad_request", "JSON 必须是对象")
             return data
 
-        def _json(self, status: int, payload: dict[str, Any]) -> None:
+        def _json(
+            self,
+            status: int,
+            payload: dict[str, Any],
+            headers: dict[str, str] | None = None,
+        ) -> None:
             data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
+            for key, value in (headers or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(data)
 

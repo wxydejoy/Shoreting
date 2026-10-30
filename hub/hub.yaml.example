@@ -7,6 +7,16 @@ host: 0.0.0.0
 port: 17890
 token: "replace-with-a-long-random-string"
 
+# 限流：按来源 IP + 端点各一个令牌桶，单位「每分钟几次」。
+# 整段删掉就是下面这组默认值；limits: false 全关；某一档写 0 只关那一档。
+# 一次 chat 是几千 token，这层是刷额度 / token 泄露时唯一还生效的止损点。
+# limits:
+#   chat_per_min: 20       # 伴侣对话
+#   announce_per_min: 10   # 主动播报
+#   read_per_min: 20       # 朗读（每个任务都要合成音频）
+#   command_per_min: 60    # 设备控制，含拉本机程序
+#   login_per_min: 10      # 登录尝试
+
 # 电脑监控。Hub 在 Mini 上时不要本机采样，改走 Windows 探针上报
 pc:
   enabled: false
