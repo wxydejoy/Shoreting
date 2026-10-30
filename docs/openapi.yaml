@@ -74,6 +74,8 @@ paths:
           $ref: "#/components/responses/TooMany"
         "502":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Busy"
   /v1/companion/stop:
     post:
       summary: Stop companion speech on Mini speakers
@@ -159,6 +161,8 @@ paths:
           $ref: "#/components/responses/TooMany"
         "502":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Busy"
   /v1/companion/read/jobs:
     get:
       summary: Hub reading-page job list (progress / download). Android must not call this.
@@ -279,6 +283,20 @@ components:
           schema:
             type: integer
           description: 建议等待秒数（≥1）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    Busy:
+      description: >-
+        慢请求的并发名额满了（code = busy）。chat 与 read 各自只有少数几个位子：
+        在跑的数量到顶就回 503，不排队——排队会让安卓一直转圈。
+        客户端照 Retry-After 等两秒再试即可，不要立刻重试。
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: 建议等待秒数（固定 2 秒）
       content:
         application/json:
           schema:

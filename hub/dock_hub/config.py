@@ -54,6 +54,10 @@ class LimitsConfig:
     command_per_min: int = 60
     login_per_min: int = 10
     read_per_min: int = 20
+    # 慢请求的并发名额（`*_lanes`）：等她说话、等音频合成时各占一个位子。
+    # 满了回 503，不排队——排队只会让安卓一直转圈。0 表示不限。
+    chat_lanes: int = 2
+    read_lanes: int = 2
 
 
 @dataclass
@@ -424,6 +428,8 @@ def _parse_limits(raw: Any) -> LimitsConfig:
         command_per_min=rate("command_per_min", 60, "设备控制"),
         login_per_min=rate("login_per_min", 10, "登录尝试"),
         read_per_min=rate("read_per_min", 20, "朗读"),
+        chat_lanes=rate("chat_lanes", 2, "同时进行的对话"),
+        read_lanes=rate("read_lanes", 2, "同时进行的朗读"),
     )
 
 
@@ -748,7 +754,15 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
     if config.limits != LimitsConfig():
         limits: dict[str, Any] = {"enabled": config.limits.enabled}
         defaults = LimitsConfig()
-        for key in ("chat_per_min", "announce_per_min", "command_per_min", "login_per_min", "read_per_min"):
+        for key in (
+            "chat_per_min",
+            "announce_per_min",
+            "command_per_min",
+            "login_per_min",
+            "read_per_min",
+            "chat_lanes",
+            "read_lanes",
+        ):
             value = getattr(config.limits, key)
             if value != getattr(defaults, key):
                 limits[key] = value

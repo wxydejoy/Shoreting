@@ -5,6 +5,7 @@ import json
 import math
 import os
 import socket
+from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -184,7 +185,8 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._limit("chat")
                     hub.note_presence()
                     body = self._read_json()
-                    self._json(200, hub.companion_chat(body))
+                    with self._lane("chat"):
+                        self._json(200, hub.companion_chat(body))
                     return
                 if path == "/chats/login":
                     self._limit("login")
@@ -224,7 +226,8 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                         raise HubError("unauthorized", "Token 不正确")
                     self._limit("read")
                     body = self._read_json()
-                    self._json(200, hub.companion_read(body))
+                    with self._lane("read"):
+                        self._json(200, hub.companion_read(body))
                     return
                 if path == "/v1/companion/books":
                     self._story_ok()
@@ -328,6 +331,13 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 f"太频繁了，{seconds} 秒后再试",
                 headers={"Retry-After": str(seconds)},
             )
+
+        def _lane(self, lane: str):
+            """慢请求占一个名额；满了抛 503 busy，让手机过两秒再问。"""
+            lanes = getattr(hub, "lanes", None)
+            if lanes is None:
+                return nullcontext()
+            return lanes.hold(lane)
 
         def _require_auth(self) -> None:
             header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
