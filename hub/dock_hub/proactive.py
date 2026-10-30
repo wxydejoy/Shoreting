@@ -43,6 +43,28 @@ def in_quiet_hours(clock: tuple[str, str], now: datetime) -> bool:
     return current >= start or current < end
 
 
+class Sustained:
+    """某件事要连续坏多久才值得开口。
+
+    温度抖一下不算事，离线几秒也不算；这里只负责计时，
+    修好就清零，开口与否（配额、免打扰、一天一次）由 Proactive 决定。
+    """
+
+    def __init__(self) -> None:
+        self._first: dict[str, datetime] = {}
+
+    def check(self, key: str, bad: bool, now: datetime, seconds: float) -> bool:
+        """坏着就计时，够 `seconds` 返回 True；修好清零。"""
+        if not bad:
+            self._first.pop(key, None)
+            return False
+        first = self._first.setdefault(key, now)
+        return (now - first).total_seconds() >= seconds
+
+    def clear(self, key: str) -> None:
+        self._first.pop(key, None)
+
+
 @dataclass
 class Said:
     """一次决定的结果，方便打日志与写测试。"""
@@ -68,6 +90,7 @@ class Proactive:
         self._day: date | None = None
         self._count = 0
         self._morning_day: date | None = None
+        self._alerted: dict[str, date] = {}
 
     def configure(self, config: ProactiveConfig) -> None:
         self.config = config
@@ -87,6 +110,27 @@ class Proactive:
         if due is None:
             return Said(reason="idle")
         return self._say(due, now)
+
+    def alert(self, key: str, text: str, now: datetime | None = None) -> Said:
+        """异常提醒：免打扰与每日配额照走，同一件事一天最多说一次。
+
+        `key` 是这件事的名字（如 `temp` / `offline:lamp`），被配额或免打扰
+        拦下时**不**记「说过」——缓一缓（比如过了免打扰）还可以再说。
+        """
+        now = now or datetime.now().astimezone()
+        if not self.config.enabled:
+            return Said(reason="off")
+        self._reset_if_new_day(now.date())
+        if self._alerted.get(key) == now.date():
+            return Said(reason="dup")
+        if in_quiet_hours(self.config.quiet, now):
+            return Said(reason="quiet")
+        if self.config.daily_limit and self._count >= self.config.daily_limit:
+            return Said(reason="quota")
+        said = self._say(text, now)
+        if said.spoke:
+            self._alerted[key] = now.date()
+        return said
 
     def _morning_due(self, now: datetime) -> str | None:
         at = self.config.morning.at

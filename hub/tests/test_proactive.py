@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta
 
 from dock_hub.config import hub_config_to_raw, parse_config
-from dock_hub.proactive import MORNING_WINDOW, Proactive, in_quiet_hours
+from dock_hub.proactive import MORNING_WINDOW, Proactive, Sustained, in_quiet_hours
 
 
 def at(hour: int, minute: int = 0) -> datetime:
@@ -205,6 +205,108 @@ class TestConfigParse(unittest.TestCase):
         self.assertEqual(cfg.proactive.daily_limit, 6)
 
 
+class TestAlerts(unittest.TestCase):
+    def _bot(self, speaker=None, **kw):
+        from dock_hub.config import AlertsConfig, ProactiveConfig
+
+        sp = speaker or FakeSpeaker()
+        bot = Proactive(ProactiveConfig(enabled=True, **kw), speak=sp)
+        return bot, sp
+
+    def test_says_once_per_day_per_key(self) -> None:
+        bot, sp = self._bot()
+        self.assertTrue(bot.alert("temp", "有点热。", at(10, 0)).spoke)
+        again = bot.alert("temp", "有点热。", at(10, 30))
+        self.assertEqual(again.reason, "dup")
+        self.assertEqual(len(sp.said), 1)
+        # 另一件事是另一件事
+        self.assertTrue(bot.alert("offline:lamp", "台灯没应答。", at(10, 35)).spoke)
+
+    def test_next_day_fresh(self) -> None:
+        bot, sp = self._bot()
+        self.assertTrue(bot.alert("temp", "有点热。", at(10, 0)).spoke)
+        tomorrow = datetime(2026, 10, 31, 10, 0)
+        self.assertTrue(bot.alert("temp", "有点热。", tomorrow).spoke)
+
+    def test_blocked_does_not_mark(self) -> None:
+        bot, sp = self._bot(quiet=("00:00", "23:59"))
+        self.assertEqual(bot.alert("temp", "有点热。", at(10, 0)).reason, "quiet")
+        # 过了免打扰还能说
+        bot.configure(type(bot.config)(enabled=True))
+        self.assertTrue(bot.alert("temp", "有点热。", at(10, 0)).spoke)
+
+    def test_quota_shared_with_morning(self) -> None:
+        from dock_hub.config import MorningConfig
+
+        bot, sp = self._bot(daily_limit=1, morning=MorningConfig(at="07:30"))
+        self.assertTrue(bot.tick(at(7, 40)).spoke)
+        self.assertEqual(bot.alert("temp", "有点热。", at(10, 0)).reason, "quota")
+
+    def test_disabled(self) -> None:
+        from dock_hub.config import ProactiveConfig
+
+        bot, sp = make(ProactiveConfig())
+        self.assertEqual(bot.alert("temp", "有点热。", at(10, 0)).reason, "off")
+        self.assertEqual(sp.said, [])
+
+
+class TestSustained(unittest.TestCase):
+    def test_needs_full_duration(self) -> None:
+        sus = Sustained()
+        t0 = at(10, 0)
+        self.assertFalse(sus.check("temp", True, t0, 180))
+        self.assertFalse(sus.check("temp", True, t0 + timedelta(seconds=179), 180))
+        self.assertTrue(sus.check("temp", True, t0 + timedelta(seconds=180), 180))
+
+    def test_recovery_clears(self) -> None:
+        sus = Sustained()
+        t0 = at(10, 0)
+        sus.check("temp", True, t0, 180)
+        self.assertFalse(sus.check("temp", False, t0 + timedelta(minutes=2), 180))
+        self.assertFalse(sus.check("temp", True, t0 + timedelta(minutes=3), 180), "修好要重新计时")
+
+    def test_keys_are_independent(self) -> None:
+        sus = Sustained()
+        t0 = at(10, 0)
+        sus.check("temp", True, t0, 180)
+        self.assertFalse(sus.check("offline:lamp", True, t0, 180))
+
+
+class TestConfigAlerts(unittest.TestCase):
+    def _parse(self, proactive):
+        return parse_config(
+            {"name": "study", "token": "secret-token-value", "proactive": proactive, "devices": []}
+        )
+
+    def test_defaults(self) -> None:
+        cfg = self._parse({"morning": {"at": "07:30"}})
+        self.assertEqual(cfg.proactive.alerts.temp_celsius, 85)
+        self.assertEqual(cfg.proactive.alerts.offline_minutes, 10)
+
+    def test_false_disables_both(self) -> None:
+        cfg = self._parse({"morning": {"at": "07:30"}, "alerts": False})
+        self.assertEqual(cfg.proactive.alerts.temp_celsius, 0)
+        self.assertEqual(cfg.proactive.alerts.offline_minutes, 0)
+
+    def test_zero_means_off(self) -> None:
+        cfg = self._parse({"alerts": {"temp_celsius": 0}})
+        self.assertEqual(cfg.proactive.alerts.temp_celsius, 0)
+        self.assertEqual(cfg.proactive.alerts.offline_minutes, 10)
+
+    def test_negative_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            self._parse({"alerts": {"temp_celsius": -1}})
+
+    def test_roundtrip(self) -> None:
+        cfg = self._parse({"alerts": {"temp_celsius": 90, "offline_minutes": 5}})
+        again = parse_config(hub_config_to_raw(cfg))
+        self.assertEqual(again.proactive.alerts, cfg.proactive.alerts)
+
+    def test_alerts_false_serializes_as_false(self) -> None:
+        cfg = self._parse({"alerts": False})
+        self.assertEqual(hub_config_to_raw(cfg)["proactive"]["alerts"], False)
+
+
 class TestSpeakUp(unittest.TestCase):
     """companion.speak_up：手机不在、在打游戏就说不了，也不留痕。"""
 
@@ -247,6 +349,83 @@ class TestSpeakUp(unittest.TestCase):
         bot, _ = self._companion()
         bot._unsolicited_block = lambda: None  # type: ignore[method-assign]
         self.assertFalse(bot.speak_up("   "))
+
+
+class TestServiceAlerts(unittest.TestCase):
+    """温度与离线的判定在 service 一侧：坏够久才说，说过的不再说。"""
+
+    def _hub(self):
+        from dock_hub.config import ProactiveConfig
+        from dock_hub.service import DockHub
+
+        cfg = parse_config(
+            {
+                "name": "study",
+                "token": "secret-token-value",
+                "host": "127.0.0.1",
+                "port": 0,
+                "devices": [
+                    {
+                        "id": "lamp",
+                        "name": "台灯",
+                        "type": "light",
+                        "mijia_name": "台灯",
+                        "on_prop": "on-2",
+                    },
+                    {
+                        "id": "game",
+                        "name": "无畏契约",
+                        "type": "action",
+                        "program": "C:\\game.exe",
+                    },
+                ],
+            }
+        )
+        hub = DockHub(cfg)
+        self.addCleanup(hub.proactive.configure, ProactiveConfig())  # 保险：恢复关闭
+        hub.proactive.configure(ProactiveConfig(enabled=True, daily_limit=5))
+        said: list[str] = []
+        hub.proactive._speak = lambda text: (said.append(text), True)[1]
+        return hub, said
+
+    def _ready(self, hub, key: str, minutes: float) -> None:
+        hub._alert_state._first[key] = datetime.now().astimezone() - timedelta(minutes=minutes)
+
+    def test_temp_alerts_after_sustained_and_once(self) -> None:
+        hub, said = self._hub()
+        hub.pc_snapshot = lambda: {"online": True, "cpu": {"temp_celsius": 91, "percent": 30}}
+        hub._evaluate_alerts()  # 刚开始热：只计时，不开口
+        self.assertEqual(said, [])
+        self._ready(hub, "temp", minutes=4)
+        hub._evaluate_alerts()
+        self.assertEqual(said, ["Windows CPU 91 度，有点热。"])
+        hub._evaluate_alerts()  # 说过的这轮不再说
+        self.assertEqual(said, ["Windows CPU 91 度，有点热。"])
+
+    def test_temp_cool_clears_timer(self) -> None:
+        hub, said = self._hub()
+        hub.pc_snapshot = lambda: {"online": True, "cpu": {"temp_celsius": 60, "percent": 10}}
+        hub._evaluate_alerts()
+        self.assertEqual(hub._alert_state._first.get("temp"), None)
+
+    def test_offline_mijia_only(self) -> None:
+        hub, said = self._hub()
+        with hub._desk_lock:
+            hub._desk_devices = [
+                {"id": "lamp", "online": False},
+                {"id": "game", "online": False},  # 启动项：不提醒
+            ]
+        self.assertEqual(hub._offline_mijia_devices(), [{"id": "lamp", "name": "台灯"}])
+        self._ready(hub, "offline:lamp", minutes=11)
+        hub._evaluate_alerts()
+        self.assertEqual(said, ["台灯有一阵没应答了。"])
+
+    def test_offline_too_soon_is_silent(self) -> None:
+        hub, said = self._hub()
+        with hub._desk_lock:
+            hub._desk_devices = [{"id": "lamp", "online": False}]
+        hub._evaluate_alerts()  # 才离线几秒
+        self.assertEqual(said, [])
 
 
 if __name__ == "__main__":
