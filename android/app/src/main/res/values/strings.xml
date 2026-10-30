@@ -5,6 +5,9 @@
     <string name="hub_watch_channel">Hub 探测</string>
     <string name="hub_watch_title">正在等待电脑</string>
     <string name="hub_watch_text">Hub 恢复后会自动亮屏</string>
+    <string name="relay_channel">书桌递话</string>
+    <string name="relay_channel_desc">书桌/微信给你捎的话（对讲与留言）</string>
+    <string name="relay_title">书桌说</string>
     <string name="wake_word_channel">语音唤醒</string>
     <string name="wake_word_title">小岸 待命中</string>
     <string name="wake_word_text">说「小岸」可以唤醒</string>
