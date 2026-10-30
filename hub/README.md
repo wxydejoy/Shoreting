@@ -10,7 +10,8 @@ Python 服务：对内调 [mijia-api](https://github.com/Do1e/mijia-api)、收 W
 hub/
   dock_hub/           # 源码包
     __main__.py       # CLI 入口（--hub 完整 Hub / --probe Windows 探针 / 托盘）
-    server.py         # HTTP
+    server.py         # HTTP（含 /metrics 的 Prometheus 文本）
+    metrics.py        # 进程内计数与直方图，无依赖
     service.py        # snapshot / command
     companion.py      # 守岸人：LLM 调度、口头技能
     books.py          # 睡前朗读

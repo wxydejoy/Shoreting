@@ -86,6 +86,13 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 if path == "/health":
                     self._json(200, hub.health())
                     return
+                if path == "/metrics":
+                    # Prometheus 文本格式。本机随便读；跨机抓要带 Bearer，
+                    # 免得同网段谁都能看出你几点在跟谁说话。
+                    if not is_local_client(self.client_address):
+                        self._require_auth()
+                    self._text(200, hub.metrics_text(), "text/plain; version=0.0.4; charset=utf-8")
+                    return
                 if path == "/chats/claim":
                     query = parse_qs(parsed.query)
                     ticket = unquote((query.get("ticket") or [""])[0])
@@ -379,6 +386,15 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _text(self, status: int, payload: str, content_type: str) -> None:
+            data = payload.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

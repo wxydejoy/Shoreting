@@ -27,6 +27,7 @@ class _StorySpeaker:
         self._companion.begin_story_audio()
 from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig, PcConfig, PropConfig, TemperatureConfig, default_config_path
 from dock_hub.errors import HubError
+from dock_hub.metrics import METRICS
 from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
 from dock_hub.pc import PcSampler, utc_now
@@ -277,8 +278,22 @@ class DockHub:
         self.follow_pc(on)
 
     def snapshot(self) -> dict[str, Any]:
+        started = time.perf_counter()
         status, message, temperature, devices = self._mijia_desk_slice()
-        return self._snapshot_body(status, message, temperature, devices)
+        body = self._snapshot_body(status, message, temperature, devices)
+        # 手机每 3s 来一次，这是最容易拖慢体验的路径，所以只盯它一个
+        METRICS.observe("hub_snapshot_ms", round((time.perf_counter() - started) * 1000.0, 1))
+        return body
+
+    def metrics_text(self) -> str:
+        """给 /metrics：计数 + 当前状态。状态现算，不缓存。"""
+        status, _message = self._mijia_status()
+        gauges = {
+            "hub_mijia_login_ok": 1.0 if status == "ok" else 0.0,
+            "hub_devices_configured": float(len(self.config.devices)),
+            "hub_companion_enabled": 1.0 if self.companion.config.enabled else 0.0,
+        }
+        return METRICS.render(gauges)
 
     def _mijia_desk_slice(
         self,

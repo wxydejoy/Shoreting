@@ -32,6 +32,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+  /metrics:
+    get:
+      summary: Prometheus text metrics (Android must not call this)
+      description: >
+        纯文本，不是 JSON，也不属于协议面。本机直连免 Token；跨机抓要带
+        Bearer。计数在进程内，重启归零。首句延迟是最该看的一条。
+      operationId: getMetrics
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # TYPE hub_companion_chat_total counter
+                hub_companion_chat_total 12
+        "401":
+          $ref: "#/components/responses/Error"
   /v1/snapshot:
     get:
       summary: Full home-screen state
@@ -548,7 +567,7 @@ components:
         run:
           type: boolean
           enum: [true]
-          description: action only; Android must send exactly {"run": true}
+          description: 'action only; Android must send exactly {"run": true}'
         media:
           type: string
           enum: [toggle, next, previous]
