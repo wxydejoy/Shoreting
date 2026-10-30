@@ -40,7 +40,9 @@ def _minutes(clock: str) -> int:
 
 
 def in_quiet_hours(clock: tuple[str, str], now: datetime) -> bool:
-    """免打扰时段，允许跨零点（23:00–07:00 就是跨的）。"""
+    """免打扰时段，允许跨零点（23:00–07:00 就是跨的）。空 = 全天不打扰。"""
+    if not clock:
+        return False
     start, end = _minutes(clock[0]), _minutes(clock[1])
     if start == end:
         return False

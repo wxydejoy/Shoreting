@@ -454,7 +454,7 @@ class TestServiceAlerts(unittest.TestCase):
         )
         hub = DockHub(cfg)
         self.addCleanup(hub.proactive.configure, ProactiveConfig())  # 保险：恢复关闭
-        hub.proactive.configure(ProactiveConfig(enabled=True, daily_limit=5))
+        hub.proactive.configure(ProactiveConfig(enabled=True, daily_limit=5, quiet=()))  # 免打扰会随真实时钟半夜拦下断言
         said: list[str] = []
         hub.proactive._speak = lambda text: (said.append(text), True)[1]
         return hub, said
@@ -666,7 +666,7 @@ class TestServiceWeatherAlert(unittest.TestCase):
         cfg = parse_config({"name": "study", "token": "secret-token-value", "devices": []})
         hub = DockHub(cfg)
         self.addCleanup(hub.proactive.configure, ProactiveConfig())
-        hub.proactive.configure(ProactiveConfig(enabled=True, daily_limit=5))
+        hub.proactive.configure(ProactiveConfig(enabled=True, daily_limit=5, quiet=()))  # 免打扰会随真实时钟半夜拦下断言
         said: list[str] = []
         hub.proactive._speak = lambda text: (said.append(text), True)[1]
         return hub, said
@@ -802,6 +802,13 @@ class TestFinished(unittest.TestCase):
         hub = DockHub(cfg)
         self.addCleanup(hub.reporter.stop)
         self.addCleanup(hub.proactive.configure, ProactiveConfig())
+        # 免打扰会随真实时钟半夜拦下断言；只清 quiet，别把解析好的 alerts 冲掉
+        parsed = cfg.proactive
+        hub.proactive.configure(
+            ProactiveConfig(
+                enabled=True, daily_limit=parsed.daily_limit, quiet=(), alerts=parsed.alerts
+            )
+        )
         said: list[str] = []
         hub.proactive._speak = lambda text: (said.append(text), True)[1]
         return hub, said

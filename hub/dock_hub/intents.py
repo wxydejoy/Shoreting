@@ -109,6 +109,7 @@ def skill_prompt(skills: list[dict[str, str]]) -> str:
         "暂停/下一首：ACTION: media.toggle 或 ACTION: media.next。"
         "音量：ACTION: volume.up / volume.down / volume.mute。"
         "倒计时：ACTION: timer.<分钟>。"
+        "对方要出门想一次关掉所有灯和插座：ACTION: home.leave。"
         "正计时（记时长）：ACTION: stopwatch.start 开始，ACTION: stopwatch.stop 停表。"
     )
     return "\n".join(lines)
@@ -583,6 +584,21 @@ def parse_timer_action(raw: str) -> int | None:
 def parse_stopwatch_action(raw: str) -> str | None:
     match = _ACTION_STOPWATCH.search(raw or "")
     return match.group(1).lower() if match else None
+
+
+# 离家总控（F18）：「我出门了」→ 能关的全关，再报告没关掉的。
+_LEAVING = re.compile(
+    r"^\s*(?:我|俺)?(?:这|先|这就|要|得)?(?:出门|出去|外出|离开|走)(?:了|啦|咯)[。！!．]?\s*$"
+)
+_ACTION_LEAVE = re.compile(r"^\s*ACTION:\s*home\.leave\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def parse_leaving(text: str) -> bool:
+    return bool(_LEAVING.search((text or "").strip()))
+
+
+def parse_leave_action(raw: str) -> bool:
+    return bool(_ACTION_LEAVE.search(raw or ""))
 
 
 def parse_timer(text: str) -> int | None:

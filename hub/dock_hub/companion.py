@@ -39,6 +39,8 @@ from dock_hub.intents import (
     infer_media,
     infer_volume,
     parse_media_action,
+    parse_leave_action,
+    parse_leaving,
     parse_stopwatch_action,
     parse_stopwatch_start,
     parse_stopwatch_stop,
