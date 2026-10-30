@@ -29,6 +29,8 @@ CUE_TIMEOUT_SEC = 3.0
 READ_TIMEOUT_SEC = 90.0
 # 叫停是「顺手」的事，慢一点就算了，不拖累调用方
 STOP_TIMEOUT_SEC = 0.8
+# 白噪音开关：跟叫停一个量级，卡了就当没放成
+NOISE_TIMEOUT_SEC = 3.0
 
 Log = Callable[..., None]
 
@@ -159,6 +161,36 @@ class Tts:
             return None
         self._note(turn, "tts_done", ms=_ms(started), bytes=len(raw))
         return raw
+
+    def noise(self, name: str, minutes: int | None = None) -> dict[str, Any] | None:
+        """F31 白噪音：把开关转给 TTS 服务，name=off 是停。
+
+        返回状态 dict（playing / name / minutes / seconds_left）。没配嘴巴、
+        Mini 不在线、回的不是 JSON，一律 None —— 上层只说「这次没动成」，
+        不用分辨是哪种没成。
+        """
+        if not self.configured:
+            return None
+        body: dict[str, Any] = {"name": name}
+        if minutes is not None:
+            body["minutes"] = minutes
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            join_url(self.base_url, "/v1/noise"),
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=NOISE_TIMEOUT_SEC) as resp:
+                raw = resp.read()
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return None
+        try:
+            state = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return state if isinstance(state, dict) else None
 
 
 def _ms(started: float) -> int:

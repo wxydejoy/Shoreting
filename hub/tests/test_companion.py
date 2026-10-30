@@ -987,6 +987,56 @@ class CompanionProtocolTest(unittest.TestCase):
         self.assertIn("大声", body["text"])
         self.assertEqual(sent, ["up"])
 
+    def test_chat_noise_on(self) -> None:
+        seen: list[dict] = []
+
+        def noise(name: str, minutes: int | None = None) -> dict:
+            seen.append({"name": name, "minutes": minutes})
+            return {
+                "ok": True,
+                "playing": True,
+                "name": name,
+                "minutes": minutes or 30,
+                "seconds_left": (minutes or 30) * 60,
+            }
+
+        self.hub.companion.tts.noise = noise  # type: ignore[method-assign]
+        status, body = self._request("POST", "/v1/companion/chat", {"text": "放点雨声。"})
+        self.assertEqual(status, 200)
+        self.assertIn("雨声", body["text"])
+        self.assertIn("分钟后停", body["text"])
+        self.assertEqual(seen, [{"name": "rain", "minutes": None}])
+
+    def test_chat_noise_on_for_a_while(self) -> None:
+        seen: list[int | None] = []
+
+        def noise(name: str, minutes: int | None = None) -> dict:
+            seen.append(minutes)
+            return {"ok": True, "playing": True, "name": name, "minutes": 45}
+
+        self.hub.companion.tts.noise = noise  # type: ignore[method-assign]
+        status, body = self._request("POST", "/v1/companion/chat", {"text": "放点雨声 45 分钟。"})
+        self.assertEqual(status, 200)
+        self.assertEqual(seen, [45])
+
+    def test_chat_noise_off(self) -> None:
+        self.hub.companion.tts.noise = lambda name, minutes=None: {  # type: ignore[method-assign]
+            "ok": True,
+            "playing": False,
+            "name": None,
+            "minutes": 0,
+            "seconds_left": 0,
+        }
+        status, body = self._request("POST", "/v1/companion/chat", {"text": "把白噪音关了。"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["text"], "关掉了。")
+
+    def test_chat_noise_fails_when_tts_absent(self) -> None:
+        # 测试的 hub 没配 TTS：放不上就说没动成，不假装放上了
+        status, body = self._request("POST", "/v1/companion/chat", {"text": "放点雨声。"})
+        self.assertEqual(status, 200)
+        self.assertIn("没动成", body["text"])
+
     def test_chat_answers_temperature_from_cache(self) -> None:
         self.hub._last_temp = {"celsius": 23.5, "humidity": 80}
         status, body = self._request("POST", "/v1/companion/chat", {"text": "屋里多少度。"})

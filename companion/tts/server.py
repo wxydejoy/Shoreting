@@ -31,6 +31,14 @@ from mlx_audio.audio_io import write as audio_write
 from mlx_audio.tts.audio_player import AudioPlayer
 from mlx_audio.tts.utils import load_model
 
+from noise import (
+    FADE_SEC,
+    NOISE_NAMES,
+    SAMPLE_RATE,
+    clamp_minutes,
+    synth_loop,
+)
+
 HERE = Path(__file__).resolve().parent
 MODEL_ID = str(HERE / "models" / "Qwen3-TTS-12Hz-1.7B-Base-8bit")
 CUSTOMVOICE_MODEL_ID = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit"
@@ -310,6 +318,114 @@ class Engine:
         return buf.getvalue(), first_ms
 
 
+class NoiseBoard:
+    """白噪音播放（F31）。与 TTS 各开各的输出流；到点前统一淡出。
+
+    音量不和 TTS 抢：她说话时 TTS 流在上面，雨声当底。突然大声比小声吓人，
+    所以起播也有 2 秒淡入。
+    """
+
+    FADE_IN_SEC = 2.0
+    BLOCK_SEC = 2.0
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._name: str | None = None
+        self._deadline = 0.0
+        self._minutes = 0
+
+    def start(self, name: str, minutes: int) -> dict:
+        minutes = clamp_minutes(minutes)
+        with self._lock:
+            if name == "off":
+                self.stop()
+                return self.status()
+            if name not in NOISE_NAMES:
+                raise ValueError(f"没有这种声音：{name}")
+            self._name = name
+            self._minutes = minutes
+            self._deadline = time.monotonic() + minutes * 60
+            self._stop.clear()
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(
+                    target=self._loop, name="noise", daemon=True
+                )
+                self._thread.start()
+            print(f"tts noise start={name} minutes={minutes}", flush=True)
+            return self.status()
+
+    def stop(self) -> dict:
+        with self._lock:
+            self._stop.set()
+            self._name = None
+            self._minutes = 0
+            self._deadline = 0.0
+            return self.status()
+
+    def status(self) -> dict:
+        with self._lock:
+            if not self._name:
+                return {"playing": False, "name": None, "seconds_left": 0, "minutes": 0}
+            left = max(0.0, self._deadline - time.monotonic())
+            return {
+                "playing": True,
+                "name": self._name,
+                "seconds_left": int(left),
+                "minutes": self._minutes,
+            }
+
+    def _loop(self) -> None:
+        try:
+            import sounddevice as sd
+
+            with self._lock:
+                name = self._name
+            if not name:
+                return
+            loop = synth_loop(name)
+            block = int(self.BLOCK_SEC * SAMPLE_RATE)
+            position = 0
+            stream = sd.OutputStream(
+                samplerate=SAMPLE_RATE, channels=1, dtype="float32"
+            )
+            stream.start()
+            try:
+                while not self._stop.is_set() and not self._expired():
+                    chunk = loop[position : position + block]
+                    position = (position + len(chunk)) % len(loop)
+                    if len(chunk) < block:
+                        chunk = np.concatenate([chunk, loop[: block - len(chunk)]])
+                        position = block - len(chunk)
+                    chunk = self._shape(chunk)
+                    stream.write(chunk.reshape(-1, 1))
+            finally:
+                stream.stop()
+                stream.close()
+        except Exception as exc:  # noqa: BLE001 - 声卡忙/设备没了：白噪音闭嘴就行
+            print(f"tts noise error {exc}", flush=True)
+        finally:
+            self.stop()
+
+    def _expired(self) -> bool:
+        return self._deadline > 0 and time.monotonic() >= self._deadline
+
+    def _shape(self, chunk: np.ndarray) -> np.ndarray:
+        """淡入 + 到点前淡出，音量整体压到 0.32——底噪不该盖过她说话。"""
+        gain = 0.32
+        with self._lock:
+            total_left = max(0.0, self._deadline - time.monotonic())
+        elapsed_total = self._minutes * 60
+        if elapsed_total > 0:
+            played = elapsed_total - total_left
+            if played < self.FADE_IN_SEC:
+                gain *= max(0.0, played / self.FADE_IN_SEC)
+        if total_left < FADE_SEC:
+            gain *= max(0.0, total_left / FADE_SEC)
+        return (chunk * gain).astype(np.float32)
+
+
 def _ref_text_from_lab(audio_path: Path) -> str:
     lab = audio_path.with_suffix(".lab")
     if not lab.is_file():
@@ -332,7 +448,7 @@ def _resolve_refs(args: argparse.Namespace) -> tuple[str | None, str | None]:
     return str(audio), text
 
 
-def make_handler(engine: Engine):
+def make_handler(engine: Engine, noise: NoiseBoard):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: object) -> None:
             print(f"tts {self.address_string()} {fmt % args}", flush=True)
@@ -359,6 +475,9 @@ def make_handler(engine: Engine):
             if path == "/v1/settings":
                 self._json(200, {"ok": True, "speed": engine.speed, "volume": read_output_volume()})
                 return
+            if path == "/v1/noise":
+                self._json(200, {"ok": True, **noise.status()})
+                return
             self._json(404, {"error": {"code": "not_found", "message": "未知接口"}})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -376,6 +495,13 @@ def make_handler(engine: Engine):
                     if body.get("volume") is not None:
                         write_output_volume(int(body.get("volume")))
                     self._json(200, {"ok": True, "speed": engine.speed, "volume": read_output_volume()})
+                    return
+                if path == "/v1/noise":
+                    # F31：白噪音。name=off 或缺省就是停；到点自动淡出
+                    name = str(body.get("name") or "off").strip().lower()
+                    minutes = clamp_minutes(body.get("minutes"))
+                    state = noise.start(name, minutes)
+                    self._json(200, {"ok": True, **state})
                     return
                 if path != "/v1/speak":
                     self._json(404, {"error": {"code": "not_found", "message": "未知接口"}})
@@ -538,7 +664,7 @@ def main() -> None:
     if not engine.ready():
         raise SystemExit(1)
 
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(engine))
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(engine, NoiseBoard()))
     extra = "  本机播放" if args.play else ""
     print(f"TTS 听 {args.host}:{args.port}  POST /v1/speak /v1/stop{extra}", flush=True)
     try:

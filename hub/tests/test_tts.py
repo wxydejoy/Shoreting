@@ -161,6 +161,47 @@ class StopTest(unittest.TestCase):
         opened.assert_not_called()
 
 
+class NoiseTest(unittest.TestCase):
+    def test_posts_name_and_minutes(self) -> None:
+        tts = Tts("http://tts")
+        opened = _open_returning(
+            b'{"ok": true, "playing": true, "name": "rain", "minutes": 45, "seconds_left": 2700}'
+        )
+        with patch("dock_hub.tts.urllib.request.urlopen", opened):
+            state = tts.noise("rain", 45)
+        self.assertEqual(state and state.get("name"), "rain")
+        req = opened.call_args[0][0]
+        self.assertEqual(req.full_url, "http://tts/v1/noise")
+        self.assertEqual(json.loads(req.data), {"name": "rain", "minutes": 45})
+
+    def test_off_does_not_send_minutes(self) -> None:
+        tts = Tts("http://tts")
+        opened = _open_returning(b'{"ok": true, "playing": false}')
+        with patch("dock_hub.tts.urllib.request.urlopen", opened):
+            state = tts.noise("off")
+        self.assertTrue(state and state.get("ok"))
+        self.assertEqual(json.loads(opened.call_args[0][0].data), {"name": "off"})
+
+    def test_failure_is_none_not_exception(self) -> None:
+        tts = Tts("http://tts")
+        with patch(
+            "dock_hub.tts.urllib.request.urlopen",
+            MagicMock(side_effect=urllib.error.URLError("down")),
+        ):
+            self.assertIsNone(tts.noise("rain"))
+
+    def test_garbage_body_is_none(self) -> None:
+        tts = Tts("http://tts")
+        with patch("dock_hub.tts.urllib.request.urlopen", _open_returning(b"<html>")):
+            self.assertIsNone(tts.noise("rain"))
+
+    def test_unconfigured_never_calls(self) -> None:
+        opened = MagicMock()
+        with patch("dock_hub.tts.urllib.request.urlopen", opened):
+            self.assertIsNone(Tts(None).noise("rain"))
+        opened.assert_not_called()
+
+
 class FromConfigTest(unittest.TestCase):
     def test_reads_companion_config(self) -> None:
         cfg = CompanionConfig(
