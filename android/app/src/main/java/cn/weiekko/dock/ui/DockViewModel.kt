@@ -54,6 +54,7 @@ import cn.weiekko.dock.data.toWinApp
 import cn.weiekko.dock.media.PhoneMedia
 import cn.weiekko.dock.power.PresenceWatch
 import cn.weiekko.dock.power.ScreenCommand
+import cn.weiekko.dock.voice.AsrHotwords
 import cn.weiekko.dock.voice.ConversationBus
 import cn.weiekko.dock.voice.ConversationWindow
 import cn.weiekko.dock.voice.CompanionVoice
@@ -1463,6 +1464,9 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 presenceReporter.onPoll(onWifi = onWifi(), reachable = true, nowMs = SystemClock.elapsedRealtime())
                 consumeRelay(snapshot)
                 consumeMirror(snapshot)
+                // 设备名进 ASR 热词：主屏上叫什么，嘴上就该听得懂什么。
+                // 词表变了语音服务会在下一句之间重装识别器，这里只管喂名字。
+                AsrHotwords.setExtra(snapshot.devices.map { it.name })
                 _ui.update {
                     it.copy(
                         snapshot = snapshot,

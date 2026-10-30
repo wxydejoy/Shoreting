@@ -46,6 +46,20 @@ class AsrHotwordsTest {
     }
 
     @Test
+    fun versionOnlyMovesWhenTheVocabularyChanges() {
+        AsrHotwords.setExtra(emptyList())
+        val before = AsrHotwords.version
+        AsrHotwords.setExtra(listOf("书桌灯"))
+        val after = AsrHotwords.version
+        assertTrue(after > before)
+        // 同一份词表再说一次（还有空白和重复），不该让语音服务白装一遍识别器
+        AsrHotwords.setExtra(listOf("书桌灯", "书桌灯", "  "))
+        assertEquals(after, AsrHotwords.version)
+        AsrHotwords.setExtra(emptyList())
+        assertTrue(AsrHotwords.version > after)
+    }
+
+    @Test
     fun parseTokensTakesFirstColumn() {
         val known = AsrHotwords.parseTokens("<blk> 0\n台 100\n灯 101\n")
         assertTrue(known.contains("台"))

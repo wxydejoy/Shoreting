@@ -27,8 +27,19 @@ object AsrHotwords {
     var extra: List<String> = emptyList()
         private set
 
+    /**
+     * 词表改一次加一。识别器把热词表在 init 时读进 native，改不了；
+     * 语音服务看着这个版本号决定要不要在两句之间重装一份识别器。
+     */
+    @Volatile
+    var version: Int = 0
+        private set
+
     fun setExtra(names: Iterable<String>) {
-        extra = names.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        val next = names.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (next == extra) return
+        extra = next
+        version += 1
     }
 
     fun parseTokens(tokensTxt: String): Set<String> {

@@ -20,6 +20,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import cn.weiekko.dock.MainActivity
+import java.io.File
 import cn.weiekko.dock.R
 import com.k2fsa.sherpa.onnx.KeywordSpotter
 import com.k2fsa.sherpa.onnx.KeywordSpotterConfig
@@ -46,6 +47,25 @@ class WakeWordService : Service() {
     /** 模型装不起来（文件缺失之类），之后唤醒就只亮灯、不识别。 */
     @Volatile
     private var asrFailed = false
+    @Volatile
+    private var asrLoading = false
+    /** 现在这只识别器用的是第几版热词表；-1 表示它没带热词。 */
+    @Volatile
+    private var builtHotwords = -1
+    /** 带热词装不起来过，就别每句话都再试一遍。 */
+    @Volatile
+    private var hotwordsDisabled = false
+
+    private val hotwordFile: File by lazy { File(cacheDir, "asr-hotwords.txt") }
+
+    /** tokens.txt 里的字，用来把词表里模型不认识的字剔掉（否则热词整表失效）。 */
+    private val asrTokens: Set<String>? by lazy {
+        runCatching {
+            assets.open(AsrModels.TOKENS).bufferedReader().use {
+                AsrHotwords.parseTokens(it.readText())
+            }
+        }.onFailure { Log.w(TAG, "tokens unreadable, hotwords unfiltered", it) }.getOrNull()
+    }
     private var asrStream: OnlineStream? = null
     private var audioRecord: AudioRecord? = null
     /** 服务在拆了，迟到的模型要自己收掉。 */
@@ -306,6 +326,16 @@ class WakeWordService : Service() {
                 Thread.sleep(ASR_POLL_MS)
                 continue
             }
+            if (!capturing && asr != null && !asrLoading && !hotwordsDisabled &&
+                builtHotwords != AsrHotwords.version
+            ) {
+                // 设备名变了（新 snapshot 下来）：热词表要重装，下一句生效。
+                // 挑没人说话的时候做，装的时候新唤醒会等它一会儿。
+                Log.i(TAG, "hotwords v${AsrHotwords.version}, rebuilding asr")
+                asr = null
+                startAsrLoader()
+                continue
+            }
             val samples = queue.poll(QUEUE_POLL_MS) ?: continue
             val n = samples.size
             val now = SystemClock.elapsedRealtime()
@@ -440,14 +470,33 @@ class WakeWordService : Service() {
     /**
      * 模型在后台线程里装：麦克风和唤醒词先上线，装好了再把它挂上。
      * 服务正在拆的话，装出来的模型自己 release 掉，别漏一份几百兆的 native 内存。
+     *
+     * 热词表（设备名 + 常用指令）在 init 时就被读进 native，改不了，所以换词表
+     * 只能整只重装。带热词装不起来就退回不带热词的 greedy，别为了准确率把
+     * 语音整个搞哑。
      */
     private fun startAsrLoader() {
+        if (asrLoading) return
+        asrLoading = true
         asrLoader = thread(name = "asr-load", isDaemon = true) {
+            val version = AsrHotwords.version
             val started = SystemClock.elapsedRealtime()
-            val built = runCatching { buildAsr() }
-                .onFailure { Log.e(TAG, "asr init failed", it) }
-                .getOrNull()
+            val hotwords = prepareHotwords()
+            var usedHotwords = false
+            var built = hotwords?.let { path ->
+                runCatching { buildAsr(path) }
+                    .onFailure { Log.w(TAG, "asr with hotwords failed, retrying plain", it) }
+                    .getOrNull()
+                    ?.also { usedHotwords = true }
+            }
+            if (built == null) {
+                if (hotwords != null) hotwordsDisabled = true
+                built = runCatching { buildAsr(null) }
+                    .onFailure { Log.e(TAG, "asr init failed", it) }
+                    .getOrNull()
+            }
             val cost = SystemClock.elapsedRealtime() - started
+            asrLoading = false
             if (built == null) {
                 asrFailed = true
                 HelmLatency.log(currentTurn.ifBlank { "-" }, "asr_model", "ms=$cost failed=1")
@@ -457,13 +506,30 @@ class WakeWordService : Service() {
                 built.release()
                 return@thread
             }
+            val old = asr
             asr = built
-            Log.i(TAG, "asr ready in ${cost}ms")
-            HelmLatency.log(currentTurn.ifBlank { "-" }, "asr_model", "ms=$cost")
+            builtHotwords = if (usedHotwords) version else -1
+            old?.release()
+            Log.i(TAG, "asr ready in ${cost}ms hotwords=${if (usedHotwords) 1 else 0}")
+            HelmLatency.log(
+                currentTurn.ifBlank { "-" },
+                "asr_model",
+                "ms=$cost hotwords=${if (usedHotwords) 1 else 0}",
+            )
         }
     }
 
-    private fun buildAsr(): OnlineRecognizer {
+    /** 把当前热词表写到缓存目录（native 只认路径），没有可用词就返回 null。 */
+    private fun prepareHotwords(): String? {
+        val text = AsrHotwords.forStream(asrTokens)
+        if (text.isBlank()) return null
+        return runCatching {
+            hotwordFile.writeText(text + "\n")
+            hotwordFile.absolutePath
+        }.onFailure { Log.w(TAG, "hotwords file failed", it) }.getOrNull()
+    }
+
+    private fun buildAsr(hotwordsPath: String?): OnlineRecognizer {
         return OnlineRecognizer(
             assetManager = assets,
             config = OnlineRecognizerConfig(
@@ -481,7 +547,11 @@ class WakeWordService : Service() {
                     modelType = "zipformer2",
                 ),
                 enableEndpoint = false,
-                decodingMethod = "greedy_search",
+                // 热词只在 modified_beam_search 下生效；没词表就走 greedy，省点算力
+                decodingMethod = if (hotwordsPath == null) "greedy_search" else "modified_beam_search",
+                maxActivePaths = if (hotwordsPath == null) 4 else HOTWORDS_PATHS,
+                hotwordsFile = hotwordsPath.orEmpty(),
+                hotwordsScore = HOTWORDS_SCORE,
             ),
         )
     }
@@ -608,6 +678,10 @@ class WakeWordService : Service() {
 
         /** read 返回 0（这一拍没数据）时歇一下，别把核跑满。 */
         private const val READ_EMPTY_MS = 20L
+
+        /** 热词权重与 beam 宽度：权重偏高一点，设备名才压得住同音字。 */
+        private const val HOTWORDS_SCORE = 1.6f
+        private const val HOTWORDS_PATHS = 4
 
         /** 唤醒时模型还没装好的话，最多等这么久再放弃这一句。 */
         private const val ASR_WAIT_MS = 1_200L
