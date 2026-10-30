@@ -79,6 +79,34 @@ class AutoLoginTicketTest(unittest.TestCase):
         self.assertEqual(next_path, "/setup")
         self.assertIsNone(hub.claim_login_ticket(minted["ticket"]))
 
+    def test_mint_claim_url_ignores_proxy_env(self) -> None:
+        # 环境里挂着 http_proxy 时（桌面端常见），urlopen 会把对 Hub 的
+        # 回环请求也送进代理—— intermittent 502，自动登录跟着挂。
+        # mint_claim_url 必须直连局域网 / 回环，不读代理环境变量。
+        import os
+        from dock_hub.probe import mint_claim_url
+
+        hub = DockHub(_cfg())
+        self.addCleanup(hub.pc.stop)
+        self.addCleanup(hub.reporter.stop)
+        hub_handler = make_handler(hub)
+        hub_server = ThreadingHTTPServer(("127.0.0.1", 0), hub_handler)
+        threading.Thread(target=hub_server.serve_forever, daemon=True).start()
+        self.addCleanup(hub_server.server_close)
+        self.addCleanup(hub_server.shutdown)
+        cfg = _cfg(probe={"hub_url": f"http://127.0.0.1:{hub_server.server_address[1]}"})
+        with patch.dict(
+            os.environ,
+            {
+                "http_proxy": "http://127.0.0.1:9",
+                "https_proxy": "http://127.0.0.1:9",
+                "HTTP_PROXY": "http://127.0.0.1:9",
+                "HTTPS_PROXY": "http://127.0.0.1:9",
+            },
+        ):
+            url = mint_claim_url(cfg, "/setup")  # 代理端口 9 是死的，直连才能活
+        self.assertIn("/chats/claim?ticket=", url)
+
     def test_probe_open_setup_redirects_to_claim(self) -> None:
         from dock_hub.probe import make_probe_handler
 
