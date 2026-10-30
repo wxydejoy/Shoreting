@@ -52,7 +52,7 @@ Hub 在 Mini 上，`hub.yaml` 里 llm / tts 用 `127.0.0.1`。
 当前 debug 包 **versionName `0.4.6`**（`versionCode` 27）。主屏方块数量跟 Hub `devices[]` 一致，室内温湿度是传感器方块。
 
 - 设置只填 Hub 的 host / port / token。不要填 LLM、TTS、在线 API Key
-- Hub 占位默认 `10.83.22.31`；粘贴 `IP:端口` 时会丢掉端口，避免拼成双端口
+- Hub 占位默认 Mini `10.83.22.121`；粘贴 `IP:端口` 时会丢掉端口，避免拼成双端口
 - `companion != null && ready`：主屏可点人物（时钟区域）说话；说「小岸」同样开听
 - `null` 或 `ready == false`：不打开对话。`ready` 表示 LLM 探活成功（Ollama `/api/tags` 或 OpenAI 兼容 `/models`）
 - `POST /v1/companion/chat`，超时 90s；可带 `turn_id`
@@ -70,7 +70,7 @@ Hub 在 Mini 上，`hub.yaml` 里 llm / tts 用 `127.0.0.1`。
 | 空听超时 | 6.5s | 一直没出字 |
 | 上限 | 16s | 再说也截 |
 
-Hub 在 Windows 时，`companion.tts.base_url` 填 Mini：`http://10.83.22.121:18100`。TTS 进程在 Mini 上跑，不要打进 `dock_hub` 包。`companion.llm` 可填 OpenAI 兼容网关，或仍填 Mini Ollama `http://10.83.22.121:11434`。
+Hub 和 TTS 都跑在 Mini 上，`companion.tts.base_url` 填 `http://127.0.0.1:18100`（同一台机器，不用绕网络）；只有把 Hub 临时挪到别的机器调试时才写 `http://10.83.22.121:18100`。TTS 进程不要打进 `dock_hub` 包。`companion.llm` 可填 OpenAI 兼容网关，或仍填 Mini Ollama `http://10.83.22.121:11434`。
 
 ## Mini TTS
 
@@ -172,7 +172,7 @@ companion:
 
 | 现象 | 原因 | 怎么办 |
 |---|---|---|
-| 测试 Hub 成功，灯和对话失败 | Hub 栏填了 Mini 的 IP，连到 Mini 上另一份 dock-hub | 改成 Windows `10.83.22.31`；不要在 Mini 上再开 `:17890` 的 dock-hub |
+| 测试 Hub 成功，灯和对话失败 | Hub 栏填的是 Windows 探针（`:17892`）或 Mini 监控（`:17891`）的地址 | 改成 Mini `10.83.22.121:17890`，`/health` 要回 `service=dock-hub` |
 | 有字幕没声音 | TTS 没 `--play`、没接音箱、或 Hub 没填 `tts.base_url` | Mini 上看 `/health` 的 `play` / `ready` |
 | 说话一顿一顿 | 旧 TTS 在下一句合成时 `flush` 了上一句 | 用现在的 `server.py`：同轮只排队，只有 `/v1/stop` 才清空 |
 | 开口总是「不知道」 | 伴侣模型没配好或探活失败；人设又禁止编造 | 在配置向导「伴侣大模型」里点**测试连接**确认可用 |

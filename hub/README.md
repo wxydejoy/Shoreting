@@ -70,13 +70,6 @@ powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 
 不要再让 Windows 占 `:17890`。探针端口是 **17892**。
 
-```powershell
-cd hub
-powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
-```
-
-产物：`hub\dist\DockHub.exe`（无黑窗口 + 系统托盘）。
-
 1. **右键 → 以管理员身份运行**（或 `.\run-admin.ps1`，有 exe 时会优先启动它）
 2. 托盘右键：**打开配置向导** 或 **退出**（首次启动会自动打开向导）
 3. 配置向导地址：`http://127.0.0.1:17890/setup`（**仅本机**可访问）
