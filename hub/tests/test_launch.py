@@ -88,3 +88,50 @@ class FinishedWatchTest(unittest.TestCase):
         watch.diff({"a.exe"}, 0.0)
         watch.diff({"a.exe"}, 500.0)
         self.assertEqual(watch.diff({"a.exe"}, 1000.0), [])
+class RunningScanCacheTest(unittest.TestCase):
+    def setUp(self) -> None:
+        from dock_hub import launch as module
+
+        self.module = module
+        module.invalidate_running_cache()
+        module._scan_names = set()  # noqa: SLF001
+        self.addCleanup(module.invalidate_running_cache)
+
+    def _scan(self, names: set[str]):
+        return patch.object(self.module, "_scan_images", return_value=set(names))
+
+    def test_second_call_reuses_snapshot(self) -> None:
+        with self._scan({"steam.exe"}) as mocked:
+            first = self.module.running_image_names()
+            second = self.module.running_image_names()
+        self.assertEqual(first, {"steam.exe"})
+        self.assertEqual(second, {"steam.exe"})
+        self.assertEqual(mocked.call_count, 1)
+
+    def test_callers_get_their_own_copy(self) -> None:
+        with self._scan({"steam.exe"}):
+            first = self.module.running_image_names()
+            first.add("oops.exe")
+            second = self.module.running_image_names()
+        self.assertNotIn("oops.exe", second)
+
+    def test_force_rescans(self) -> None:
+        with self._scan({"steam.exe"}) as mocked:
+            self.module.running_image_names()
+            self.module.running_image_names(force=True)
+        self.assertEqual(mocked.call_count, 2)
+
+    def test_invalidate_makes_next_call_fresh(self) -> None:
+        with self._scan({"steam.exe"}) as mocked:
+            self.module.running_image_names()
+            self.module.invalidate_running_cache()
+            self.module.running_image_names()
+        self.assertEqual(mocked.call_count, 2)
+
+    def test_cache_expires_after_ttl(self) -> None:
+        with self._scan({"steam.exe"}) as mocked:
+            self.module.running_image_names()
+            later = self.module._scan_at + self.module.SCAN_TTL + 1  # noqa: SLF001
+            with patch.object(self.module.time, "monotonic", return_value=later):
+                self.module.running_image_names()
+        self.assertEqual(mocked.call_count, 2)

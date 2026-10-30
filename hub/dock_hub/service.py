@@ -49,7 +49,13 @@ from dock_hub.diary import (
     render_material,
 )
 from dock_hub.lanes import Lanes
-from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
+from dock_hub.launch import (
+    invalidate_running_cache,
+    launch,
+    launch_exists,
+    launch_running,
+    running_image_names,
+)
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
 from dock_hub.pc import PcSampler, utc_now
 from dock_hub.ratelimit import Gate
@@ -1648,6 +1654,7 @@ class DockHub:
                 self._probe_launch(cfg)
             else:
                 launch(cfg)
+                invalidate_running_cache()
         except HubError:
             raise
         except Exception as exc:
