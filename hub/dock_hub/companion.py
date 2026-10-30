@@ -164,6 +164,55 @@ _POWER_YES_RE = re.compile(r"^(?:好的?|好呀|行|嗯+|对呀?|是的?|要)[�
 _POWER_CANCEL_RE = re.compile(r"算了|不用|取消|别弄|不弄|先不|不关|不锁|不睡")
 
 
+class _TurnCancelled(Exception):
+    """这一轮已经被下一轮顶掉。别再写字幕、别再进记忆。"""
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_ACTION_RE = re.compile(r"^\s*ACTION:\s*\S+\s*$", re.MULTILINE)
+_ACTION_PARSE = re.compile(r"^\s*ACTION:\s*(\S+?)\.(on|off|run)\s*$", re.IGNORECASE | re.MULTILINE)
+_ACTION_BRI = re.compile(
+    r"^\s*ACTION:\s*(\S+?)\.(?:bri|brightness)\.(\d{1,3})\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ACTION_TEMP = re.compile(
+    r"^\s*ACTION:\s*(\S+?)\.(?:temp|temperature)\.(\d{1,2})\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_CONTROL_HINT = re.compile(
+    r"(打开|关掉|关闭|关上|开启|开一下|关一下|开灯|关灯|开空调|关空调|启动|"
+    r"无畏契约|valorant|打瓦|开黑|打游戏|玩游戏|启动游戏|开游戏|wegame|"
+    r"抖音|亮一点|调亮|暗一点|调暗|调到|调成|设成|设为|设定|再亮|再暗|灯带|台灯|挂灯|"
+    r"暂停|下一首|上一首|切歌|继续播放|继续放|静音|音量|声音大|声音小|"
+    r"叫我|提醒我|喊我)"
+)
+_QUERY_TIME = re.compile(r"(几点|几号|星期几|周几|礼拜几|什么日子|现在.*时间)")
+_QUERY_TEMP = re.compile(
+    r"(多少度|几度|室温|潮不潮|湿度|屋里.*(?:度|温|热|潮|湿)|室内.*(?:度|温|热|潮|湿))"
+)
+_QUERY_PC = re.compile(r"(热|忙|卡|占用|cpu|内存|显卡)", re.IGNORECASE)
+_QUERY_LIGHT = re.compile(r"(开了没|亮着吗|开着吗|关了没|亮着没有)")
+_QUERY_MEDIA = re.compile(r"(在播什么|放的什么|在放什么|现在放的|播放的是什么|放什么歌)")
+_QUERY_LAST = re.compile(r"(刚才那句|刚才你说|刚才说了什么|上一句|你刚说)")
+_QUERY_MINI = re.compile(r"(mac\s*mini|mini|麦金塔|迷你|咪妮|麦克迷)", re.IGNORECASE)
+_MEDIA_NEXT = re.compile(r"(下一首|切歌|换一首|下一曲)")
+_MEDIA_PREV = re.compile(r"(上一首|上一曲)")
+_MEDIA_PAUSE = re.compile(r"(暂停|停下|别放了)")
+_MEDIA_RESUME = re.compile(r"(继续放|继续播放|接着放)")
+_VOLUME_UP = re.compile(r"(声音大|音量大|大声点|大声一)")
+_VOLUME_DOWN = re.compile(r"(声音小|音量小|小声点|小声一)")
+_VOLUME_UNMUTE = re.compile(r"(取消静音|打开声音)")
+_VOLUME_MUTE = re.compile(r"(静音)")
+_ACTION_MEDIA = re.compile(
+    r"^\s*ACTION:\s*media\.(toggle|next|previous)\s*$", re.IGNORECASE | re.MULTILINE
+)
+_ACTION_VOLUME = re.compile(
+    r"^\s*ACTION:\s*volume\.(up|down|mute)\s*$", re.IGNORECASE | re.MULTILINE
+)
+_ACTION_TIMER = re.compile(
+    r"^\s*ACTION:\s*timer\.(\d{1,3})\s*$", re.IGNORECASE | re.MULTILINE
+)
+_RECENT_TURNS = 4
+_RECENT_CLIP = 72
 PRESENCE_SEC = 90
 
 
@@ -184,6 +233,8 @@ class Companion:
         self._speaking = False
         self._seq = 0
         self._lock = threading.Lock()
+        # 在飞那一轮的取消令牌：新一轮进来就 set，旧的流式循环立刻收手
+        self._turn_cancel = threading.Event()
         self._clips: OrderedDict[str, bytes] = OrderedDict()
         self._skills: list[dict[str, str]] = []
         self._run_skill = None
@@ -282,6 +333,21 @@ class Companion:
         self._ready_at = now
         return self._ready
 
+    def _begin_turn(self) -> tuple[int, threading.Event]:
+        """开新一轮，顺便把还在想的那一轮顶掉。
+
+        安卓重试、连着说两句话都会让两条 chat 并行：旧的那条不但继续烧
+        模型额度，回复回来还会抢字幕、抢记忆。seq 只能挡住「已经生成完」的
+        那一步，流式途中的句子仍在往外 cue，所以额外给每轮发一个取消令牌。
+        """
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+            self._turn_cancel.set()
+            cancel = threading.Event()
+            self._turn_cancel = cancel
+        return seq, cancel
+
     def chat(self, body: dict[str, Any], facts: str = "") -> dict[str, Any]:
         if not self.config.enabled:
             raise HubError("not_found", "未开启桌面伴侣")
@@ -294,9 +360,7 @@ class Companion:
         turn = _turn_id(body)
         started = time.monotonic()
         _latency(turn, "chat_recv", chars=len(heard))
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
+        seq, cancel = self._begin_turn()
         self.tts.stop()
         pending = self._pop_clarify()
         power_pending = self._pop_power()
@@ -417,9 +481,15 @@ class Companion:
         cue_as_we_go = self.tts.configured and not self.tts.deliver
         try:
             if cue_as_we_go:
-                raw = self._stream_and_cue(messages, turn, seq)
+                raw = self._stream_and_cue(messages, turn, seq, cancel)
             else:
                 raw = self._complete(messages)
+            if cancel.is_set():
+                raise _TurnCancelled()
+        except _TurnCancelled:
+            _latency(turn, "barge_in", ms=_ms(llm_at))
+            self._record_turn(turn, heard, "", _ms(started), [], "被下一轮顶掉")
+            return {"text": "", "audio_id": None}
         except HubError as exc:
             _latency(turn, "ollama_error", ms=_ms(llm_at))
             self._record_turn(turn, heard, "", _ms(started), [], exc.message)
@@ -526,6 +596,7 @@ class Companion:
         with self._lock:
             self._seq += 1
             self._speaking = False
+            self._turn_cancel.set()
         self.reads.cancel_all()
         self.tts.stop()
         _latency("-", "stop")
@@ -1292,7 +1363,13 @@ class Companion:
             raise HubError("companion_unavailable", "大脑返回无法解析")
         return str(message.get("content") or "")
 
-    def _stream_and_cue(self, messages: list[dict[str, str]], turn: str, seq: int) -> str:
+    def _stream_and_cue(
+        self,
+        messages: list[dict[str, str]],
+        turn: str,
+        seq: int,
+        cancel: threading.Event | None = None,
+    ) -> str:
         openai = openai_mode(self.config)
         path = "/chat/completions" if openai else "/api/chat"
         accept = "text/event-stream" if openai else "application/x-ndjson"
@@ -1311,6 +1388,8 @@ class Companion:
                 if not (200 <= resp.status < 300):
                     raise HubError("companion_unavailable", "大脑拒绝请求")
                 for raw_line in resp:
+                    if cancel is not None and cancel.is_set():
+                        raise _TurnCancelled()
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
                         continue

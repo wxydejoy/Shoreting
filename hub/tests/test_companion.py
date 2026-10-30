@@ -107,6 +107,34 @@ class _FakeLineResp:
         return False
 
 
+class _GatedLineResp:
+    """第一行要等 gate 放行，用来模拟「还在往外流过字幕」的那一刻。"""
+
+    def __init__(self, lines: list[str], gate: threading.Event) -> None:
+        self.status = 200
+        self._lines = lines
+        self._gate = gate
+        self._i = 0
+
+    def __enter__(self) -> "_GatedLineResp":
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+    def __iter__(self) -> "_GatedLineResp":
+        return self
+
+    def __next__(self) -> bytes:
+        if self._i >= len(self._lines):
+            raise StopIteration
+        if self._i == 0 and not self._gate.wait(5):
+            raise StopIteration
+        line = self._lines[self._i]
+        self._i += 1
+        return line.encode("utf-8")
+
+
 def _ndjson_chat(content: str) -> _FakeLineResp:
     blob = (
         json.dumps({"message": {"content": content}, "done": False})
@@ -606,6 +634,26 @@ class CompanionProtocolTest(unittest.TestCase):
         payload = json.loads(resp.read().decode("utf-8"))
         conn.close()
         return resp.status, payload
+
+    def _enable_streaming_companion(self) -> None:
+        self.hub.companion.configure(
+            parse_config(
+                {
+                    "name": "study",
+                    "token": "secret-token-value",
+                    "companion": {
+                        "enabled": True,
+                        "llm": {
+                            "base_url": "http://127.0.0.1:9",
+                            "model": "qwen3.5:4b",
+                            "timeout_sec": 2,
+                        },
+                        "tts": {"base_url": "http://127.0.0.1:9"},
+                    },
+                    "devices": [],
+                }
+            ).companion
+        )
 
     def _raw(self, method: str, path: str):
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -1357,9 +1405,63 @@ class CompanionProtocolTest(unittest.TestCase):
             gate.set()
             worker.join(timeout=3)
         self.assertEqual(result.get("status"), 200)
-        self.assertEqual(result["body"]["text"], "晚上好，漂泊者。")
+        # 被打断的这轮不再回文本：客户端已经放弃这条请求，回半句只会让旧字幕盖上来
+        self.assertEqual(result["body"]["text"], "")
         self.assertIsNone(result["body"]["audio_id"])
         self.assertFalse(any(url.endswith("/v1/speak") for url in seen))
+
+    def test_new_chat_cancels_the_one_still_streaming(self) -> None:
+        """安卓重试 / 连着说两句：旧的那条流要立刻收手，别再 cue TTS、别再进记忆。"""
+        streaming = threading.Event()
+        release = threading.Event()
+        spoken: list[str] = []
+        chats: list[int] = []
+
+        def fake(req: Request, timeout: object = None):
+            url = req.get_full_url()
+            if url.endswith("/api/tags") or url.endswith("/health") or url.endswith("/v1/stop"):
+                return _FakeResp({"ok": True, "ready": True, "models": []})
+            if url.endswith("/api/chat"):
+                chats.append(1)
+                if len(chats) == 1:
+                    streaming.set()
+                    return _GatedLineResp(
+                        [
+                            json.dumps({"message": {"content": "晚上好。"}, "done": False}) + "\n",
+                            json.dumps({"message": {"content": "还早。"}, "done": False}) + "\n",
+                            json.dumps({"done": True}) + "\n",
+                        ],
+                        gate=release,
+                    )
+                release.set()
+                return _ndjson_chat("好。")
+            if url.endswith("/v1/speak"):
+                spoken.append(str(json.loads((req.data or b"{}").decode("utf-8")).get("text")))
+                return _FakeBytes(b"RIFF")
+            raise AssertionError(url)
+
+        self._enable_streaming_companion()
+        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+            first: dict = {}
+
+            def slow_chat() -> None:
+                first["status"], first["body"] = self._request(
+                    "POST", "/v1/companion/chat", {"text": "在吗。"}
+                )
+
+            worker = threading.Thread(target=slow_chat, daemon=True)
+            worker.start()
+            self.assertTrue(streaming.wait(5), "第一条流没开始")
+            status, body = self._request("POST", "/v1/companion/chat", {"text": "算了，别说了。"})
+            worker.join(5)
+
+        self.assertFalse(worker.is_alive(), "旧的那条流没有立刻收手")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["text"], "好。")
+        # 被顶掉的那轮不能再开口，也不能拿到半句字幕；只有新一轮说了话
+        self.assertEqual(first["status"], 200)
+        self.assertEqual(first["body"]["text"], "")
+        self.assertEqual(spoken, ["好。"])
 
     def test_stream_cues_each_sentence(self) -> None:
         spoken: list[str] = []
