@@ -141,6 +141,10 @@ from dock_hub.tts import Tts
 
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
+# F 收尾：慢慢关灯。12 秒从当前亮度收到 1 再断电，不经过模型
+SLOW_DIM_SEC = 12.0
+SLOW_DIM_STEPS = 12
+_SLOW_DIM = re.compile(r"(慢慢|渐渐|缓缓|一点点).{0,8}(关|暗|灭)|渐暗|淡出")
 
 # 白噪音没放成时的统一口径（_handle_desk 里用它判断 ok）
 _NOISE_FAIL_SPOKEN = ("这次没动成。", "这台 Mini 还不能放白噪音。")
@@ -252,6 +256,8 @@ class Companion:
         self._recent: deque[tuple[str, str]] = deque(maxlen=5)
         self._timer: threading.Timer | None = None
         self.timers = TimerBoard()
+        self._dim_gen = 0
+        self._dim_thread: threading.Thread | None = None
         self._extra_llm_headers: dict[str, str] = {}
         self._k20_seen_at = 0.0
         self._story_books = None
@@ -275,6 +281,7 @@ class Companion:
         with self._lock:
             self._speaking = False
             self._seq += 1
+            self._dim_gen += 1
             self._clips.clear()
             # 换配置后要重新探活：冷启动那条同步路径会再走一次
             self._probing = False
@@ -635,6 +642,7 @@ class Companion:
             self._seq += 1
             self._speaking = False
             self._turn_cancel.set()
+            self._dim_gen += 1
         self.reads.cancel_all()
         self.tts.stop()
         _latency("-", "stop")
@@ -960,6 +968,9 @@ class Companion:
         return spoken, [{"id": "leave", "leave": True, "ok": bool(result.get("ok"))}]
 
     def _handle_desk(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        dimmed = self._run_slow_dim(text, turn)
+        if dimmed:
+            return dimmed
         act = parse_stopwatch_action(text)
         if act is None:
             if parse_stopwatch_start(text):
@@ -1009,6 +1020,103 @@ class Companion:
         if climate:
             return climate
         return None
+
+    def _run_slow_dim(
+        self, text: str, turn: str
+    ) -> tuple[str, list[dict[str, Any]]] | None:
+        """「慢慢关灯」：不啪一下黑掉，用十几秒把亮度收到底再关。"""
+        if not self._skills or self._run_skill is None:
+            return None
+        if not _SLOW_DIM.search(text or ""):
+            return None
+        targets = self._slow_dim_targets(text)
+        if not targets:
+            return None
+        getter = self._world.get("device")
+        with self._lock:
+            self._dim_gen += 1
+            gen = self._dim_gen
+        events: list[dict[str, Any]] = []
+        workers: list[threading.Thread] = []
+        for item in targets:
+            ident = str(item["id"])
+            name = str(item.get("name") or ident)
+            if not item.get("brightness"):
+                # 不能调亮度就老实关掉，别假装在暗
+                try:
+                    self._call_run_skill(ident, False)
+                except HubError as exc:
+                    events.append({"id": ident, "name": name, "ok": False, "code": exc.code})
+                    continue
+                _latency(turn, "skill_ok", id=ident, on=0)
+                events.append({"id": ident, "name": name, "on": False, "ok": True})
+                continue
+            start: int | None = None
+            already_off = False
+            if callable(getter):
+                state = getter(ident)
+                if isinstance(state, dict):
+                    if isinstance(state.get("brightness"), int):
+                        start = int(state["brightness"])
+                    already_off = state.get("on") is False
+            if already_off:
+                continue
+            worker = threading.Thread(
+                target=self._dim_worker,
+                args=(ident, start if start and start > 1 else 60, gen),
+                name=f"slow-dim-{ident}",
+                daemon=True,
+            )
+            worker.start()
+            workers.append(worker)
+            _latency(turn, "skill_ok", id=ident, on=0, slow=1)
+            events.append({"id": ident, "name": name, "on": False, "slow": True, "ok": True})
+        if not events:
+            return None
+        self._dim_thread = workers[-1] if workers else None
+        _latency(turn, "slow_dim", n=len(events))
+        return "好，灯慢慢暗。", events
+
+    def _slow_dim_targets(self, text: str) -> list[dict[str, Any]]:
+        picked: list[dict[str, Any]] = []
+        for token, on in infer_control(text, self._skills, self._aliases):
+            if on:
+                continue
+            ident = resolve_skill(token, self._skills)
+            item = next((row for row in self._skills if row["id"] == ident), None)
+            if item is not None and item.get("kind") == "toggle":
+                picked.append(item)
+        if picked:
+            return picked
+        # 只说「慢慢关灯」时，把正开着、能调亮度的灯都算上
+        getter = self._world.get("device")
+        if not callable(getter):
+            return []
+        for item in self._skills:
+            if item.get("kind") != "toggle" or not item.get("brightness"):
+                continue
+            state = getter(item["id"])
+            if isinstance(state, dict) and state.get("on"):
+                picked.append(item)
+        return picked
+
+    def _dim_worker(self, ident: str, start: int, gen: int) -> None:
+        step_wait = max(0.02, SLOW_DIM_SEC / max(1, SLOW_DIM_STEPS))
+        for step in range(1, SLOW_DIM_STEPS + 1):
+            if gen != self._dim_gen:
+                return
+            level = max(1, int(round(start * (1 - step / SLOW_DIM_STEPS))))
+            try:
+                self._call_run_skill(ident, True, brightness=level)
+            except HubError:
+                return
+            time.sleep(step_wait)
+        if gen != self._dim_gen:
+            return
+        try:
+            self._call_run_skill(ident, False)
+        except HubError:
+            pass
 
     def _run_launch(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         return launch_apps(
