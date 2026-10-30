@@ -490,6 +490,10 @@ def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
             llm_raw["model"] = model_in
         if key_in:
             llm_raw["api_key"] = key_in
+    if dumped.get("tokens"):
+        # 表单里没有这一块：按设备的 token 只能手写 yaml，但点一次「保存」
+        # 不能把它抹掉，否则那台设备下一次请求就是 401
+        raw["tokens"] = dumped["tokens"]
     if dumped.get("mini") is not None:
         raw["mini"] = dumped["mini"]
     if dumped.get("probe") is not None:

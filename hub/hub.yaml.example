@@ -7,6 +7,15 @@ host: 0.0.0.0
 port: 17890
 token: "replace-with-a-long-random-string"
 
+# 除主 token 之外，可以给每台设备发一枚，删掉一条就等于吊销它。
+# 手机丢了只删这一条，其他设备不用改；至少 8 个字符。
+# tokens:
+#   - id: phone
+#     name: 我的手机
+#     value: "另一段同样够长的随机字符串"
+#   - id: tablet
+#     value: "第三段随机字符串"
+
 # 电脑监控。Hub 在 Mini 上时不要本机采样，改走 Windows 探针上报
 pc:
   enabled: false

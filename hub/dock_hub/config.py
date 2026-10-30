@@ -38,6 +38,15 @@ class MediaConfig:
 
 
 @dataclass
+class TokenConfig:
+    """一枚给某台设备的 token。删掉这一条就等于吊销它。"""
+
+    id: str
+    value: str
+    name: str | None = None
+
+
+@dataclass
 class MiniLinkConfig:
     enabled: bool = True
     base_url: str = "http://10.83.22.121:17891"
@@ -166,7 +175,15 @@ class HubConfig:
     companion: CompanionConfig | None = None
     mini: MiniLinkConfig | None = None
     probe: ProbeConfig = field(default_factory=ProbeConfig)
+    # 除主 token 之外按设备分发的 token；删一条即吊销一台
+    tokens: list[TokenConfig] = field(default_factory=list)
     path: Path | None = None
+
+    def auth_values(self) -> tuple[str, ...]:
+        """所有算数的 token：主 token + 每台设备那一枚。拿去常量时间比对。"""
+        values = [self.token]
+        values.extend(item.value for item in self.tokens if item.value)
+        return tuple(dict.fromkeys(v for v in values if v))
 
     def device(self, device_id: str) -> DeviceConfig:
         for item in self.devices:
@@ -246,6 +263,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     companion = _parse_companion(raw.get("companion"))
     mini = _parse_mini(raw.get("mini"))
     probe = _parse_probe(raw.get("probe"))
+    tokens = _parse_tokens(raw.get("tokens"), token)
 
     devices: list[DeviceConfig] = []
     seen: set[str] = set()
@@ -268,6 +286,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         companion=companion,
         mini=mini,
         probe=probe,
+        tokens=tokens,
         path=path,
     )
 
@@ -371,6 +390,36 @@ def _parse_device(raw: dict[str, Any]) -> DeviceConfig:
         icon=icon,
         props=props,
     )
+
+
+def _parse_tokens(raw: Any, owner: str) -> list[TokenConfig]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("tokens 必须是列表，每项写成 {id, value}")
+    seen: set[str] = set()
+    values: set[str] = {owner}
+    parsed: list[TokenConfig] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"tokens 第 {index} 项必须是对象")
+        ident = str(item.get("id") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not ident:
+            raise ValueError(f"tokens 第 {index} 项缺少 id")
+        _check_id(ident)
+        if ident in seen:
+            raise ValueError(f"重复的 token id：{ident}")
+        seen.add(ident)
+        if len(value) < 8:
+            # 短 token 在局域网里等于没有：脚本几秒就能撞出来
+            raise ValueError(f"token {ident} 太短，至少 8 个字符")
+        if value in values:
+            raise ValueError(f"token {ident} 和别的 token 重复")
+        values.add(value)
+        name = str(item.get("name") or "").strip() or None
+        parsed.append(TokenConfig(id=ident, value=value, name=name))
+    return parsed
 
 
 def _parse_probe(raw: Any) -> ProbeConfig:
@@ -691,6 +740,11 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             if config.mini.mijia_ms != 15000:
                 mini["mijia_ms"] = config.mini.mijia_ms
         raw["mini"] = mini
+    if config.tokens:
+        raw["tokens"] = [
+            {"id": item.id, "value": item.value, **({"name": item.name} if item.name else {})}
+            for item in config.tokens
+        ]
     probe = config.probe
     if probe.url or probe.token or probe.stale_ms != 4000 or probe.hub_url != DEFAULT_PROBE_HUB_URL or probe.listen != DEFAULT_PROBE_LISTEN:
         dumped: dict[str, Any] = {}
