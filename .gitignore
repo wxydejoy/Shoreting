@@ -28,3 +28,7 @@ android/app/src/main/assets/asr/*.onnx
 .idea/
 .DS_Store
 /1.mp4
+
+# 工作区杂物（勿入库）
+.workbuddy/
+/plan/
