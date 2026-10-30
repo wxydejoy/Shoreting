@@ -126,7 +126,8 @@ def asset_page_html(name: str) -> bytes:
 
 
 def chats_page_html() -> bytes:
-    return asset_page_html("app.html")
+    """F30 时间线版对话页：独立小页（gate + ‹ › 翻天），不再走 app.html 三栏。"""
+    return asset_page_html("chats.html")
 
 
 def read_page_html() -> bytes:
