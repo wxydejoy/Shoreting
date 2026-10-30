@@ -18,6 +18,7 @@ hub/
     speech.py         # 断句、切块、拼 wav（朗读与 TTS 之间那层）
     llm.py            # 提示词组装、人设正文、两种流式回复的解析
     reads.py          # 朗读任务：排队、工作线程、wav 落盘与任务表
+    actions.py        # ACTION 行落成设备动作：逐台执行、单台失败不连坐
     books.py          # 睡前朗读
     schedule.py       # 定时任务（到点开关设备 / 说一句）
     probe.py          # 探针模式（CPU 上报 + 远程开程序）

@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 import yaml
 
+from dock_hub.actions import apply_device_skills, launch_apps, set_temperature
 from dock_hub.chat_log import ChatLog
 from dock_hub.config import CompanionConfig, ID_RE
 from dock_hub.errors import HubError
@@ -612,74 +613,23 @@ class Companion:
         return None
 
     def _run_launch(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
-        if not self._skills or self._run_skill is None:
-            return None
-        wanted = infer_control(text, self._skills, self._aliases)
-        for token, on in wanted:
-            if not on:
-                continue
-            ident = resolve_skill(token, self._skills)
-            if not ident:
-                continue
-            item = next((s for s in self._skills if s["id"] == ident), None)
-            if not item or item.get("kind") != "run":
-                continue
-            name = item.get("name") or ident
-            try:
-                self._call_run_skill(ident, True)
-            except HubError as exc:
-                _latency(turn, "skill_error", id=ident, code=exc.code)
-                return (
-                    "这次没动成。",
-                    [{"id": ident, "name": name, "on": True, "ok": False, "code": exc.code}],
-                )
-            _latency(turn, "skill_ok", id=ident, on=1)
-            return f"好，开{name}。", [{"id": ident, "name": name, "on": True, "ok": True}]
-        return None
+        return launch_apps(
+            text=text,
+            turn=turn,
+            skills=self._skills,
+            aliases=self._aliases,
+            run_skill=self._run_skill,
+            note=_latency,
+        )
 
     def _run_temp(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
-        wanted = infer_temp(text, self._skills)
-        if not wanted or self._run_skill is None:
-            return None
-        events: list[dict[str, Any]] = []
-        applied = False
-        spoken = ""
-        for token, spec in wanted:
-            ident = resolve_skill(token, self._skills)
-            if not ident:
-                continue
-            item = next((row for row in self._skills if row["id"] == ident), None)
-            if not item:
-                continue
-            name = item.get("name") or ident
-            prop_id = str(item.get("temp_id") or "temp")
-            value = int(spec["value"])
-            try:
-                self._call_run_skill(ident, True, props={prop_id: value})
-            except HubError as exc:
-                _latency(turn, "skill_error", id=ident, code=exc.code)
-                return (
-                    "这次没动成。",
-                    [
-                        {
-                            "id": ident,
-                            "name": name,
-                            "on": True,
-                            "temp": value,
-                            "ok": False,
-                            "code": exc.code,
-                        }
-                    ],
-                )
-            applied = True
-            _latency(turn, "skill_ok", id=ident, on=1, temp=value)
-            events.append(
-                {"id": ident, "name": name, "on": True, "temp": value, "ok": True}
-            )
-            spoken = f"好，{name}{cn_num(value)}度。"
-        if not applied:
-            return None
-        return spoken, events
+        return set_temperature(
+            text=text,
+            turn=turn,
+            skills=self._skills,
+            run_skill=self._run_skill,
+            note=_latency,
+        )
 
     def _run_media(self, action: str, turn: str) -> str:
         fn = self._world.get("media_command")
@@ -764,129 +714,19 @@ class Companion:
             return
         self._recent.append((heard, spoken))
 
-    def _call_run_skill(
-        self,
-        ident: str,
-        on: bool,
-        brightness: int | None = None,
-        props: dict[str, Any] | None = None,
-    ) -> None:
-        fn = self._run_skill
-        if fn is None:
-            return
-        kwargs: dict[str, Any] = {}
-        if brightness is not None:
-            kwargs["brightness"] = brightness
-        if props:
-            kwargs["props"] = props
-        try:
-            fn(ident, on, **kwargs)
-        except TypeError:
-            fn(ident, on)
-
     def _apply_device_skills(
         self, user_text: str, raw_reply: str, turn: str
     ) -> tuple[bool, list[dict[str, Any]]]:
-        events: list[dict[str, Any]] = []
-        if not self._skills or self._run_skill is None:
-            desk_ok = self._apply_desk_actions(user_text, raw_reply, turn, events)
-            return desk_ok, events
-        wanted = parse_action_lines(raw_reply)
-        bri_wanted = parse_bri_actions(raw_reply)
-        temp_wanted = parse_temp_actions(raw_reply)
-        if (wanted or bri_wanted or temp_wanted) and not looks_like_control(user_text):
-            wanted = []
-            bri_wanted = []
-            temp_wanted = []
-        wanted = constrain_light_actions(user_text, wanted, self._skills)
-        bri_wanted = constrain_light_actions(user_text, bri_wanted, self._skills)
-        if not wanted:
-            wanted = infer_control(user_text, self._skills, self._aliases)
-        if not bri_wanted:
-            bri_wanted = infer_brightness(user_text, self._skills)
-        if not temp_wanted:
-            temp_wanted = infer_temp(user_text, self._skills)
-        applied = False
-        for token, on in wanted:
-            ident = resolve_skill(token, self._skills)
-            if not ident:
-                continue
-            name = next((item["name"] for item in self._skills if item["id"] == ident), ident)
-            try:
-                self._call_run_skill(ident, on)
-            except HubError as exc:
-                _latency(turn, "skill_error", id=ident, code=exc.code)
-                events.append(
-                    {"id": ident, "name": name, "on": on, "ok": False, "code": exc.code}
-                )
-                continue
-            applied = True
-            _latency(turn, "skill_ok", id=ident, on=int(on))
-            events.append({"id": ident, "name": name, "on": on, "ok": True})
-        getter = self._world.get("device")
-        for token, spec in bri_wanted:
-            ident = resolve_skill(token, self._skills)
-            if not ident:
-                continue
-            name = next((item["name"] for item in self._skills if item["id"] == ident), ident)
-            target = spec.get("value")
-            if target is None:
-                current = None
-                if callable(getter):
-                    state = getter(ident)
-                    if isinstance(state, dict):
-                        current = state.get("brightness")
-                base = int(current) if isinstance(current, int) else 50
-                target = max(1, min(100, base + int(spec.get("delta") or 0)))
-            target = max(1, min(100, int(target)))
-            try:
-                self._call_run_skill(ident, True, brightness=target)
-            except HubError as exc:
-                _latency(turn, "skill_error", id=ident, code=exc.code)
-                events.append(
-                    {
-                        "id": ident,
-                        "name": name,
-                        "on": True,
-                        "brightness": target,
-                        "ok": False,
-                        "code": exc.code,
-                    }
-                )
-                continue
-            applied = True
-            _latency(turn, "skill_ok", id=ident, on=1, bri=target)
-            events.append(
-                {"id": ident, "name": name, "on": True, "brightness": target, "ok": True}
-            )
-        for token, spec in temp_wanted:
-            ident = resolve_skill(token, self._skills)
-            if not ident:
-                continue
-            item = next((row for row in self._skills if row["id"] == ident), None)
-            name = (item or {}).get("name") or ident
-            prop_id = str((item or {}).get("temp_id") or "temp")
-            value = int(spec["value"])
-            try:
-                self._call_run_skill(ident, True, props={prop_id: value})
-            except HubError as exc:
-                _latency(turn, "skill_error", id=ident, code=exc.code)
-                events.append(
-                    {
-                        "id": ident,
-                        "name": name,
-                        "on": True,
-                        "temp": value,
-                        "ok": False,
-                        "code": exc.code,
-                    }
-                )
-                continue
-            applied = True
-            _latency(turn, "skill_ok", id=ident, on=1, temp=value)
-            events.append(
-                {"id": ident, "name": name, "on": True, "temp": value, "ok": True}
-            )
+        applied, events = apply_device_skills(
+            user_text=user_text,
+            raw_reply=raw_reply,
+            turn=turn,
+            skills=self._skills,
+            aliases=self._aliases,
+            run_skill=self._run_skill,
+            world=self._world,
+            note=_latency,
+        )
         desk_ok = self._apply_desk_actions(user_text, raw_reply, turn, events)
         return applied or desk_ok, events
 
