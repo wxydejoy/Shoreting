@@ -96,12 +96,13 @@ class AlertsConfig:
 
 @dataclass
 class PresenceConfig:
-    """回家问候（F25）：手机 away → home 的那一句。
+    """问候语（F25 回家 / F24 回座）：两句都只各在那一刻。
 
-    只有一句、只在回家的那一刻。不放假热情，`home_text` 置空就是彻底不问候。
+    不放假热情，哪句置空就是哪句彻底不问候。
     """
 
     home_text: str = "回来了。"
+    desk_text: str = "回来了。"
 
 
 @dataclass
@@ -869,9 +870,14 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
     if presence_raw is None or presence_raw is True:
         presence = PresenceConfig()
     elif presence_raw is False:
-        presence = PresenceConfig(home_text="")
+        presence = PresenceConfig(home_text="", desk_text="")
     elif isinstance(presence_raw, dict):
-        presence = PresenceConfig(home_text=str(presence_raw.get("home_text") or "").strip())
+        home_raw = presence_raw.get("home_text")
+        desk_raw = presence_raw.get("desk_text")
+        presence = PresenceConfig(
+            home_text=str(home_raw).strip() if home_raw is not None else PresenceConfig().home_text,
+            desk_text=str(desk_raw).strip() if desk_raw is not None else PresenceConfig().desk_text,
+        )
     else:
         raise ValueError("proactive.presence 必须是对象，或用 presence: false 关掉问候")
     return ProactiveConfig(
@@ -1227,8 +1233,14 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
             raw["alerts"]["memory_percent"] = config.alerts.memory_percent
         if config.alerts.finished:
             raw["alerts"]["finished"] = list(config.alerts.finished)
-    if config.presence.home_text != PresenceConfig().home_text:
-        raw["presence"] = {"home_text": config.presence.home_text}
+    if config.presence != PresenceConfig():
+        entry: dict[str, str] = {}
+        if config.presence.home_text != PresenceConfig().home_text:
+            entry["home_text"] = config.presence.home_text
+        if config.presence.desk_text != PresenceConfig().desk_text:
+            entry["desk_text"] = config.presence.desk_text
+        if entry:
+            raw["presence"] = entry
     return raw
 
 

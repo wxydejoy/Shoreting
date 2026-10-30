@@ -247,6 +247,17 @@ class Proactive:
         和 `alert` 的区别是不做「一天只说一次」——一天来回几趟就说几句，
         但配额、免打扰、主动播报总开关照样兜底。拦下时不补发。
         """
+        return self._greet(text, now)
+
+    def desk(self, text: str, now: datetime | None = None) -> Said:
+        """回座问候（F24）：离座 5 分钟以上，摄像头又看到人的那一句。
+
+        规矩同 `presence`：边沿才有份，配额、免打扰、总开关照走，
+        拦下时不补发。
+        """
+        return self._greet(text, now)
+
+    def _greet(self, text: str, now: datetime | None) -> Said:
         now = now or datetime.now().astimezone()
         if not self.config.enabled:
             return Said(reason="off")

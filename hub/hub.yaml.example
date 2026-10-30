@@ -69,10 +69,11 @@ mini:
 #                           # 只在 07:00–21:00 看，城市用手机最近查过的那个；false = 不提
 #     finished:             # 任务完成播报：额外盯的进程名（启动项里的进程默认在名单里）
 #       - Blender.exe
-#   # 回家问候（F25）：手机连上家里 WiFi 的那一刻说一句；away → home 才说
-#   # presence: false 整个关掉；home_text 置空也一样
+#   # 问候语（F25 回家 / F24 回座）：都只在那一刻说；presence: false 整个关掉
+#   # 哪句 text 置空就是哪句彻底不说
 #   presence:
-#     home_text: "回来了。"
+#     home_text: "回来了。"   # 手机连上家里 WiFi
+#     desk_text: "回来了。"   # 摄像头看到人回座（离座满 5 分钟才算）
 
 # 桌面伴侣（本地 LLM + Mini TTS）。整段删掉或 enabled: false → snapshot.companion = null
 # Hub 在 Mini 上填 127.0.0.1

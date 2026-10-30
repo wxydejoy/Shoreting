@@ -687,6 +687,42 @@ paths:
           $ref: "#/components/responses/Error"
         "401":
           $ref: "#/components/responses/Error"
+  /v1/at-desk:
+    post:
+      summary: At-desk report — camera ran locally, only a boolean leaves the device (F24)
+      operationId: postAtDesk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [present]
+              properties:
+                present:
+                  type: boolean
+                  description: >-
+                    Whether anyone is at the desk. Frames never leave the
+                    device; only this boolean is reported.
+                away_sec:
+                  type: integer
+                  minimum: 0
+                  description: >-
+                    How long the desk had been empty before this report, in
+                    seconds. The Hub re-checks it: a greeting is only possible
+                    when present is true and the desk was empty for at least
+                    5 minutes.
+      responses:
+        "200":
+          description: Recorded state; `said` is what she actually spoke, if any
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AtDeskReport"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
   /v1/scenes/{id}:
     post:
       summary: Run one configured scene (a bundle of device commands)
@@ -835,6 +871,13 @@ components:
           description: >
             Phone presence from POST /v1/presence. null until the first
             report after the Hub started.
+        at_desk:
+          allOf:
+            - $ref: "#/components/schemas/AtDesk"
+          nullable: true
+          description: >
+            Desk presence from POST /v1/at-desk. null until the first report
+            after the Hub started.
     Presence:
       type: object
       required: [state]
@@ -847,6 +890,34 @@ components:
           type: string
           nullable: true
           description: ISO local time of the last state change.
+    AtDesk:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          nullable: true
+          enum: [present, away]
+        since:
+          type: string
+          nullable: true
+          description: ISO local time of the last state change.
+    AtDeskReport:
+      type: object
+      required: [ok, present, said]
+      properties:
+        ok:
+          type: boolean
+        present:
+          type: boolean
+        away_sec:
+          type: integer
+          nullable: true
+          description: The reported gap in seconds; null when the request omitted it.
+        said:
+          type: string
+          nullable: true
+          description: The line she actually spoke, null when gated (quota/quiet/off).
     PresenceReport:
       type: object
       required: [ok, state, previous, said]
