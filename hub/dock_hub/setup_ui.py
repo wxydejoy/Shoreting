@@ -276,7 +276,7 @@ def apply_voice(hub: DockHub, body: dict[str, Any]) -> dict[str, Any]:
         write_output_volume(volume)
     except (OSError, subprocess.SubprocessError) as exc:
         note = f"音量没改成：{exc}"
-    pushed = _push_voice_to_tts(comp.tts_base_url, volume, speed)
+    pushed = _push_voice_to_tts(comp.tts_base_url, volume, speed, getattr(comp, "tts_token", None))
     if pushed:
         note = pushed if note == "已生效" else f"{note}；{pushed}"
     return {"ok": True, "message": note, "volume": volume, "speed": speed}
@@ -297,17 +297,17 @@ def _write_voice_yaml(hub: DockHub, volume: int, speed: float) -> None:
     save_config_raw(raw, path)
 
 
-def _push_voice_to_tts(base_url: str | None, volume: int, speed: float) -> str | None:
+def _push_voice_to_tts(
+    base_url: str | None, volume: int, speed: float, token: str | None = None
+) -> str | None:
     if not base_url:
         return None
     url = base_url.rstrip("/") + "/v1/settings"
     payload = json.dumps({"volume": volume, "speed": speed}).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-    )
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if (token or "").strip():
+        headers["Authorization"] = f"Bearer {token.strip()}"
+    req = urllib.request.Request(url, data=payload, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=2) as resp:
             if resp.status == 404:

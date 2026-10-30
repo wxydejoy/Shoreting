@@ -227,6 +227,7 @@ class CompanionConfig:
     num_ctx: int = 4096
     num_predict: int = 256
     tts_base_url: str | None = None
+    tts_token: str | None = None
     tts_timeout_sec: float = 20.0
     tts_deliver: bool = False
     persona: str | None = None
@@ -1104,6 +1105,7 @@ def _parse_companion(raw: Any) -> CompanionConfig | None:
         num_ctx=int(llm.get("num_ctx") or 4096),
         num_predict=int(llm.get("num_predict") or 256),
         tts_base_url=tts_url,
+        tts_token=str(tts.get("token") or "").strip() or None,
         tts_timeout_sec=float(tts.get("timeout_sec") or 20),
         tts_deliver=bool(tts.get("deliver", False)),
         persona=persona or None,
@@ -1652,6 +1654,8 @@ def hub_config_to_raw(config: HubConfig, *, mask_secrets: bool = False) -> dict[
             companion["llm"] = llm
             if config.companion.tts_base_url:
                 tts: dict[str, Any] = {"base_url": config.companion.tts_base_url}
+                if config.companion.tts_token:
+                    tts["token"] = config.companion.tts_token
                 if config.companion.tts_timeout_sec != 20.0:
                     tts["timeout_sec"] = config.companion.tts_timeout_sec
                 if config.companion.tts_deliver:

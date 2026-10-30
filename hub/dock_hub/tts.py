@@ -54,12 +54,14 @@ class Tts:
         deliver: bool = False,
         timeout_sec: float = 20.0,
         speed: float = 1.0,
+        token: str = "",
         log: Log | None = None,
     ) -> None:
         self.base_url = (base_url or "").strip().rstrip("/")
         self.deliver = bool(deliver)
         self.timeout_sec = float(timeout_sec)
         self.speed = round(float(speed or 1.0), 2)
+        self.token = (token or "").strip()
         # 打点回调：真的用了才传（Companion 传 _latency），单独测时不传
         self.log = log
         # 熔断（F 收尾）：cue 这条路连着不应答就歇 60s，别每句都等满超时
@@ -73,12 +75,21 @@ class Tts:
             deliver=bool(getattr(config, "tts_deliver", False)),
             timeout_sec=float(getattr(config, "tts_timeout_sec", 20.0) or 20.0),
             speed=float(getattr(config, "voice_speed", 1.0) or 1.0),
+            token=str(getattr(config, "tts_token", "") or ""),
             log=log,
         )
 
     @property
     def configured(self) -> bool:
         return bool(self.base_url)
+
+    def _headers(self, *, accept: str = "application/json", content_type: str | None = None) -> dict[str, str]:
+        headers = {"Accept": accept}
+        if content_type:
+            headers["Content-Type"] = content_type
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
 
     def _note(self, turn: str, stage: str, **fields: Any) -> None:
         if self.log is not None:
@@ -108,7 +119,7 @@ class Tts:
         if not self.configured:
             return False
         try:
-            req = urllib.request.Request(join_url(self.base_url, "/health"), method="GET")
+            req = urllib.request.Request(join_url(self.base_url, "/health"), method="GET", headers=self._headers())
             with urllib.request.urlopen(req, timeout=0.4) as resp:
                 if not (200 <= resp.status < 300):
                     return False
@@ -129,7 +140,7 @@ class Tts:
             join_url(self.base_url, "/v1/stop"),
             data=b"{}",
             method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers=self._headers(content_type="application/json"),
         )
         try:
             with urllib.request.urlopen(req, timeout=STOP_TIMEOUT_SEC) as resp:
@@ -177,7 +188,7 @@ class Tts:
             join_url(self.base_url, "/v1/speak"),
             data=payload,
             method="POST",
-            headers={"Content-Type": "application/json", "Accept": accept},
+            headers=self._headers(accept=accept, content_type="application/json"),
         )
         started = time.monotonic()
         try:
@@ -214,7 +225,7 @@ class Tts:
             join_url(self.base_url, "/v1/noise"),
             data=payload,
             method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers=self._headers(content_type="application/json"),
         )
         try:
             with urllib.request.urlopen(req, timeout=NOISE_TIMEOUT_SEC) as resp:

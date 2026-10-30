@@ -14,6 +14,15 @@ if [[ ! -f "$REF" ]]; then
 fi
 LABEL="cn.weiekko.companion-tts"
 DEST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+# Hub 和 TTS 都在 Mini 上，走回环即可；确实要给局域网用，设 TTS_HOST=0.0.0.0
+# 并同时设 TTS_TOKEN（服务端拒绝在非回环地址上无口令监听）。
+TTS_HOST="${TTS_HOST:-127.0.0.1}"
+TTS_TOKEN="${TTS_TOKEN:-}"
+TOKEN_ENV=""
+if [[ -n "$TTS_TOKEN" ]]; then
+  TOKEN_ENV="    <key>HELM_TTS_TOKEN</key>
+    <string>${TTS_TOKEN}</string>"
+fi
 cat > "$DEST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -28,7 +37,7 @@ cat > "$DEST" <<EOF
     <string>${BIN}</string>
     <string>${ROOT}/server.py</string>
     <string>--host</string>
-    <string>0.0.0.0</string>
+    <string>${TTS_HOST}</string>
     <string>--port</string>
     <string>18100</string>
     <string>--model</string>
@@ -60,6 +69,7 @@ cat > "$DEST" <<EOF
     <string>1</string>
     <key>PYTHONUNBUFFERED</key>
     <string>1</string>
+${TOKEN_ENV}
   </dict>
   <key>StandardOutPath</key>
   <string>${ROOT}/tts.log</string>

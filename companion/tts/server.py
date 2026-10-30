@@ -15,8 +15,10 @@ Serena / CustomVoice 用 --no-clone 和对应 --model 切回去。
 from __future__ import annotations
 
 import argparse
+import hmac
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -449,12 +451,41 @@ def _resolve_refs(args: argparse.Namespace) -> tuple[str | None, str | None]:
     return str(audio), text
 
 
-def make_handler(engine: Engine, noise: NoiseBoard, music: "MusicBoard | None" = None):
+def make_handler(
+    engine: Engine,
+    noise: NoiseBoard,
+    token: str = "",
+    music: "MusicBoard | None" = None,
+):
+    secret = (token or "").strip()
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: object) -> None:
             print(f"tts {self.address_string()} {fmt % args}", flush=True)
 
+        def _authorized(self) -> bool:
+            # 没设 token 时只允许本机回环访问（main 里会拒绝非回环绑定）
+            if not secret:
+                return True
+            header = self.headers.get("Authorization") or self.headers.get("authorization") or ""
+            value = header.strip()
+            if not value.lower().startswith("bearer "):
+                return False
+            got = value[7:].strip()
+            if not got:
+                return False
+            try:
+                return hmac.compare_digest(got.encode("utf-8"), secret.encode("utf-8"))
+            except (UnicodeError, TypeError):
+                return False
+
+        def _deny(self) -> None:
+            self._json(401, {"error": {"code": "unauthorized", "message": "Token 不正确"}})
+
         def do_GET(self) -> None:  # noqa: N802
+            if not self._authorized():
+                self._deny()
+                return
             path = urlparse(self.path).path.rstrip("/") or "/"
             if path == "/health":
                 self._json(
@@ -488,6 +519,9 @@ def make_handler(engine: Engine, noise: NoiseBoard, music: "MusicBoard | None" =
             self._json(404, {"error": {"code": "not_found", "message": "未知接口"}})
 
         def do_POST(self) -> None:  # noqa: N802
+            if not self._authorized():
+                self._deny()
+                return
             path = urlparse(self.path).path.rstrip("/") or "/"
             try:
                 body = self._read_json()
@@ -677,9 +711,22 @@ def _retry_load(engine: "Engine", *, first_delay: float = 30.0, max_delay: float
         delay = min(max_delay, delay * 2)
 
 
+def _loopback(host: str) -> bool:
+    return (host or "").strip().lower() in {"127.0.0.1", "::1", "localhost"}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Shoreting companion TTS")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="默认只听本机；要给局域网用必须同时设置 --token",
+    )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("HELM_TTS_TOKEN", ""),
+        help="Bearer 口令；监听非回环地址时必填",
+    )
     parser.add_argument("--port", type=int, default=18100)
     parser.add_argument("--model", default=MODEL_ID)
     parser.add_argument("--voice", default=DEFAULT_VOICE)
@@ -711,6 +758,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    token = (args.token or "").strip()
+    if not _loopback(args.host) and not token:
+        raise SystemExit(
+            f"拒绝在 {args.host} 上无口令监听：局域网内任何人都能让 Mini 说话、改音量。"
+            "请设 --token（或 HELM_TTS_TOKEN），或改回 --host 127.0.0.1。"
+        )
+
     ref_audio, ref_text = _resolve_refs(args)
     engine = Engine(args.model, args.voice, ref_audio, ref_text, args.play)
     engine.load()
@@ -725,10 +779,11 @@ def main() -> None:
 
     server = ThreadingHTTPServer(
         (args.host, args.port),
-        make_handler(engine, NoiseBoard(), MusicBoard(args.music_dir)),
+        make_handler(engine, NoiseBoard(), token, MusicBoard(args.music_dir)),
     )
     extra = "  本机播放" if args.play else ""
-    print(f"TTS 听 {args.host}:{args.port}  POST /v1/speak /v1/stop{extra}", flush=True)
+    auth = "  Bearer" if token else "  本机免口令"
+    print(f"TTS 听 {args.host}:{args.port}  POST /v1/speak /v1/stop{extra}{auth}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -79,10 +79,12 @@ Hub 和 TTS 都跑在 Mini 上，`companion.tts.base_url` 填 `http://127.0.0.1:
 ```bash
 cd companion/tts
 HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
-  .venv/bin/python server.py --host 0.0.0.0 --port 18100 \
+  .venv/bin/python server.py --port 18100 \
   --ref-audio voices/shorekeeper/clone.wav --voice shorekeeper --play
 ```
 
+- 默认只听 `127.0.0.1`（Hub 和 TTS 都在 Mini 上）。要给局域网用必须同时给 `--token`（或 `HELM_TTS_TOKEN`），服务端会拒绝在非回环地址上无口令启动
+- 设了口令后，`hub.yaml` 里补 `companion.tts.token`，Hub 的 speak / stop / health / 语速推送都会带上 `Authorization: Bearer`
 - `POST /v1/speak` + `play_only: true` → **202**，本机边合成边播
 - 同一轮可以多次 speak（边写边念）：音频接到**同一条播放队列**，下一句不要 `flush` 上一句
 - `POST /v1/stop` → 立刻清缓冲并丢掉这一轮合成（再喊「小岸」走这条）
