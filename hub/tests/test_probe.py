@@ -339,6 +339,9 @@ class ProbeServerTest(unittest.TestCase):
             self.assertEqual(resp.status, 200)
             self.assertEqual(health["service"], "dock-probe")
             self.assertEqual(health["name"], "windows")
+            # 仓库 checkout 里跑测试：应该拿得到短提交号；拿不到（exe/无 git）
+            # 字段就整个不出现，两种都算合法
+            self.assertTrue("revision" not in health or isinstance(health["revision"], str))
 
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             raw = json.dumps({"id": "cursor", "run": True}).encode("utf-8")

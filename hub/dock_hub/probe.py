@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -75,9 +76,34 @@ def probe_token(config: HubConfig) -> str:
     return (config.probe.token or config.token).strip()
 
 
+def probe_revision() -> str | None:
+    """当前 checkout 的 git 短提交号，用来回答「Windows 端跑的哪一版」。
+
+    只在仓库 checkout 里跑得出来；PyInstaller 的 exe、没有 git 的机器返回
+    None（/health 里就不带 revision 字段，客户端按缺失处理）。
+    """
+    root = Path(__file__).resolve().parent.parent
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            cwd=str(root),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    rev = out.stdout.strip()
+    return rev or None
+
+
 def make_probe_handler(config: HubConfig) -> type[BaseHTTPRequestHandler]:
     # 探针和 Hub 共用同一套访问日志：默认落文件、按天滚、不记查询串
     access = AccessLog.from_config(config, service="probe")
+    # 服务起来时取一次就够了：更新探针本来就要重启进程，重启即拿到新提交号
+    revision = probe_revision()
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -89,15 +115,15 @@ def make_probe_handler(config: HubConfig) -> type[BaseHTTPRequestHandler]:
             path = urlparse(self.path).path.rstrip("/") or "/"
             try:
                 if path == "/health":
-                    self._json(
-                        200,
-                        {
-                            "ok": True,
-                            "service": "dock-probe",
-                            "protocol": 1,
-                            "name": "windows",
-                        },
-                    )
+                    payload: dict[str, Any] = {
+                        "ok": True,
+                        "service": "dock-probe",
+                        "protocol": 1,
+                        "name": "windows",
+                    }
+                    if revision:
+                        payload["revision"] = revision
+                    self._json(200, payload)
                     return
                 if path in OPEN_PAGES:
                     if not is_local_client(self.client_address):
