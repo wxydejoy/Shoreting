@@ -61,6 +61,7 @@ import cn.weiekko.dock.voice.ConversationBus
 import cn.weiekko.dock.voice.ConversationWindow
 import cn.weiekko.dock.voice.CompanionVoice
 import cn.weiekko.dock.voice.HelmLatency
+import cn.weiekko.dock.voice.WakeKeywords
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -92,8 +93,6 @@ data class DockUiState(
     val stale: Boolean = false,
     val banner: String? = null,
     val busyIds: Set<String> = emptySet(),
-    /** 正在跑的场景（F7）：跑着的按钮变省略号，再点忽略。 */
-    val sceneBusy: Set<String> = emptySet(),
     val settingsStatus: String? = null,
     val settingsOk: Boolean = false,
     val testing: Boolean = false,
@@ -591,7 +590,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun onWakeWord(keyword: String = "小岸", turnId: String = "") {
+    fun onWakeWord(keyword: String = WakeKeywords.PHRASE, turnId: String = "") {
         noteUserInteraction()
         val interrupting = _ui.value.companionBusy ||
             !_ui.value.companionReply.isNullOrBlank() ||
@@ -744,11 +743,17 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         commitLayout(layout.with(id, current.copy(chrome = !current.chrome)))
     }
 
-    fun hideModule(id: String, canvasW: Float, canvasH: Float, tileW: Float, tileH: Float) {
+    /**
+     * 编辑态的「隐藏」是双向的：隐藏后模块留在原位半透明，选中不变，
+     * 按钮原地变成「显示」，再点一次就回来。
+     *
+     * 之前只有单向的 hide，一旦点下去，画布上再没有把它设回 visible 的入口
+     * （设置页那个开关藏得太深，用户根本不知道要去那儿找）。
+     */
+    fun toggleModuleVisible(id: String, canvasW: Float, canvasH: Float, tileW: Float, tileH: Float) {
         val layout = resolvedLayout(canvasW, canvasH, tileW, tileH)
         val current = layout.rect(id) ?: return
-        commitLayout(layout.with(id, current.copy(visible = false)))
-        _ui.update { it.copy(selectedModule = null) }
+        commitLayout(layout.with(id, current.copy(visible = !current.visible)))
     }
 
     fun moveModule(
@@ -1394,48 +1399,6 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 onFailure = { error ->
                     handleFailure(error)
                     _ui.update { it.copy(busyIds = it.busyIds - deviceId) }
-                },
-            )
-        }
-    }
-
-    /** 场景（F7）：点一下让 Hub 把一组设备一次做完。 */
-    fun runScene(scene: Scene) {
-        if (scene.id in _ui.value.sceneBusy) return
-        if (_ui.value.preview) {
-            _ui.update { it.copy(sceneBusy = it.sceneBusy + scene.id) }
-            viewModelScope.launch {
-                delay(600)
-                _ui.update { it.copy(sceneBusy = it.sceneBusy - scene.id) }
-            }
-            return
-        }
-        val connection = _ui.value.connection
-        if (!currentLink().pollsHub || !connection.isConfigured) return
-        _ui.update { it.copy(sceneBusy = it.sceneBusy + scene.id, banner = null) }
-        viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching { client.runScene(connection, scene.id) }
-            }
-            result.fold(
-                onSuccess = { run ->
-                    val failed = run.actions.filter { !it.ok }
-                    _ui.update { state ->
-                        state.copy(
-                            sceneBusy = state.sceneBusy - scene.id,
-                            banner = when {
-                                run.ok -> null
-                                failed.isNotEmpty() ->
-                                    "${run.name}：${failed.first().message ?: "有一台没动成"}"
-                                else -> "${run.name}没动成"
-                            },
-                        )
-                    }
-                    pullSnapshot(connection, showLoading = false)
-                },
-                onFailure = { error ->
-                    _ui.update { it.copy(sceneBusy = it.sceneBusy - scene.id) }
-                    handleFailure(error)
                 },
             )
         }

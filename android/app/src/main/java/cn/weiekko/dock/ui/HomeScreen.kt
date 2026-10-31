@@ -36,7 +36,6 @@ import cn.weiekko.dock.data.HubDevice
 import cn.weiekko.dock.data.MediaInfo
 import cn.weiekko.dock.data.ModuleCatalog
 import cn.weiekko.dock.data.ModuleType
-import cn.weiekko.dock.data.Scene
 import cn.weiekko.dock.data.WinApp
 import cn.weiekko.dock.data.defaultDockLayout
 import cn.weiekko.dock.data.deviceType
@@ -56,11 +55,10 @@ fun HomeScreen(
     onPower: (HubDevice, Boolean) -> Unit,
     onWinClick: (WinApp) -> Unit,
     onMedia: (String) -> Unit,
-    onScene: (Scene) -> Unit = {},
     onSelectModule: (String?) -> Unit = {},
     onMoveModule: (String, Float, Float, Float, Float, Float, Float) -> Unit = { _, _, _, _, _, _, _ -> },
     onResizeModule: (String, Float, Float, Float, Float, Float, Float) -> Unit = { _, _, _, _, _, _, _ -> },
-    onHideModule: (String, Float, Float, Float, Float) -> Unit = { _, _, _, _, _ -> },
+    onToggleModuleVisible: (String, Float, Float, Float, Float) -> Unit = { _, _, _, _, _ -> },
     onToggleModuleChrome: (String, Float, Float, Float, Float) -> Unit = { _, _, _, _, _ -> },
     onExitEdit: () -> Unit = {},
     onResetLayout: () -> Unit = {},
@@ -168,7 +166,7 @@ fun HomeScreen(
                     onSelect = onSelectModule,
                     onMove = onMoveModule,
                     onResize = onResizeModule,
-                    onHide = onHideModule,
+                    onToggleVisible = onToggleModuleVisible,
                     onToggleChrome = onToggleModuleChrome,
                 )
 
@@ -335,21 +333,6 @@ fun HomeScreen(
                             .padding(top = 8.dp)
                             .padding(horizontal = 48.dp)
                             .zIndex(8f),
-                    )
-                }
-
-                // 场景（F7）：右下角一列按钮，点一下让 Hub 把一组设备一次做完。
-                // 编辑态收起别挡拖拽；睡着了屏幕本来就黑，不画。
-                val scenes = state.snapshot?.scenes.orEmpty()
-                if (scenes.isNotEmpty() && !editing && !state.hubSleeping) {
-                    SceneDock(
-                        scenes = scenes,
-                        busy = state.sceneBusy,
-                        onRun = onScene,
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(end = 20.dp, bottom = 32.dp)
-                            .zIndex(9f),
                     )
                 }
 

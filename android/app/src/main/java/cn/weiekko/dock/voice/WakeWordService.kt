@@ -196,7 +196,7 @@ class WakeWordService : Service() {
         val wakeStream = spotter.createStream(WakeKeywords.STREAM)
         kwsStream = wakeStream
         // ASR 模型比唤醒词大一个量级，加载要几百毫秒。原来是在这里同步加载，
-        // 麦克风要等它加载完才开：开机头一秒喊「小岸」是没人应的。
+        // 麦克风要等它加载完才开：开机头一秒喊「岸宝」是没人应的。
         // 现在先开麦，模型在后台线程里装，装好之前叫醒的那一句会等它一会儿。
         startAsrLoader()
 
@@ -330,6 +330,7 @@ class WakeWordService : Service() {
         var vadMs = 0L
         var bargeMs = 0L
         var partial = StablePartial()
+        var kwsTraceAt = 0L
 
         while (running) {
             if (micGap) {
@@ -381,7 +382,7 @@ class WakeWordService : Service() {
                     stream = recognizer.createStream()
                     asrStream = stream
                     utteranceAudio.clear()
-                    // 喊小岸后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了。
+                    // 喊岸宝后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了。
                     // 只丢「音频」不按墙钟丢：等过模型之后队列里排着的是刚唤醒时的
                     // 音频，按墙钟会把用户的话丢掉。
                     skipMs = if (chimePending) CHIME_SKIP_MS else 0L
@@ -453,7 +454,7 @@ class WakeWordService : Service() {
                     spotter.reset(wakeStream)
                 }
             } else {
-                // 对话窗口内：不用喊小岸，持续人声够 300ms 就直接进听写
+                // 对话窗口内：不用喊岸宝，持续人声够 300ms 就直接进听写
                 if (ConversationBus.bypass(now)) {
                     if (audioRms(samples) >= VAD_RMS) vadMs += dtMs else vadMs = 0L
                     if (vadMs >= VAD_TRIGGER_MS) {
@@ -478,8 +479,22 @@ class WakeWordService : Service() {
                     wakeStream.acceptWaveform(samples, SAMPLE_RATE)
                     while (spotter.isReady(wakeStream)) {
                         spotter.decode(wakeStream)
-                        val keyword = spotter.getResult(wakeStream).keyword
-                        if (keyword.isBlank()) continue
+                        val result = spotter.getResult(wakeStream)
+                        val keyword = result.keyword
+                        if (keyword.isBlank()) {
+                            // 诊断：`adb shell setprop log.tag.WakeWord DEBUG` 后每 5 秒
+                            // 报一次 KWS 手上听到了什么，用来区分「麦克风没声音」和
+                            // 「有声音但没命中关键词」——这两种在用户看来都是「喊了没反应」。
+                            if (now - kwsTraceAt >= KWS_TRACE_MS && Log.isLoggable(TAG, Log.DEBUG)) {
+                                kwsTraceAt = now
+                                Log.d(
+                                    TAG,
+                                    "kws listening rms=${audioRms(samples)} " +
+                                        "tokens=${result.tokens.size}",
+                                )
+                            }
+                            continue
+                        }
                         if (now - lastDetectAt < COOLDOWN_MS) {
                             spotter.reset(wakeStream)
                             continue
@@ -813,6 +828,9 @@ class WakeWordService : Service() {
         private const val NOTIFICATION_ID = 48
         private const val SAMPLE_RATE = 16_000
         private const val COOLDOWN_MS = 1_000L
+
+        /** KWS 诊断日志的间隔，只在 log.tag.WakeWord=DEBUG 时打。 */
+        private const val KWS_TRACE_MS = 5_000L
         private const val CHIME_SKIP_MS = 500L
         private const val VAD_TRIGGER_MS = 300L
         private const val VAD_RMS = 0.030f

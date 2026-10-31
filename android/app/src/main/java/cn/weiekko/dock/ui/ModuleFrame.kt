@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -70,7 +71,7 @@ internal data class EditCanvas(
     val onSelect: (String?) -> Unit,
     val onMove: (String, Float, Float, Float, Float, Float, Float) -> Unit,
     val onResize: (String, Float, Float, Float, Float, Float, Float) -> Unit,
-    val onHide: (String, Float, Float, Float, Float) -> Unit,
+    val onToggleVisible: (String, Float, Float, Float, Float) -> Unit,
     val onToggleChrome: (String, Float, Float, Float, Float) -> Unit,
 )
 
@@ -112,8 +113,8 @@ internal fun PlaceModule(
                 canvas.tileH,
             )
         },
-        onHide = {
-            canvas.onHide(slot.id, canvas.canvasW, canvas.canvasH, canvas.tileW, canvas.tileH)
+        onToggleVisible = {
+            canvas.onToggleVisible(slot.id, canvas.canvasW, canvas.canvasH, canvas.tileW, canvas.tileH)
         },
         onToggleChrome = {
             canvas.onToggleChrome(slot.id, canvas.canvasW, canvas.canvasH, canvas.tileW, canvas.tileH)
@@ -132,7 +133,7 @@ private fun ModuleBox(
     onSelect: () -> Unit,
     onMove: (Float, Float) -> Unit,
     onResize: (Float, Float) -> Unit,
-    onHide: () -> Unit,
+    onToggleVisible: () -> Unit,
     onToggleChrome: () -> Unit,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -171,6 +172,11 @@ private fun ModuleBox(
                         color = if (selected) Color.White.copy(alpha = 0.92f) else Color.White.copy(alpha = 0.32f),
                         shape = shape,
                     )
+                    // 单击就能选中。原来只有拖动才 onSelect：想选一个隐藏的模块
+                    // 得先拖它一下，手一抖还会把位置挪掉——看着就像「点不动」。
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = { onSelect() })
+                    }
                     .pointerInput(Unit) {
                         detectDragGestures(
                             onDragStart = { onSelect() },
@@ -211,7 +217,10 @@ private fun ModuleBox(
                         label = if (rect.chrome) "去底" else "加底",
                         onClick = onToggleChrome,
                     )
-                    EditChip(label = "隐藏", onClick = onHide)
+                    EditChip(
+                        label = if (rect.visible) "隐藏" else "显示",
+                        onClick = onToggleVisible,
+                    )
                 }
                 Box(
                     modifier = Modifier

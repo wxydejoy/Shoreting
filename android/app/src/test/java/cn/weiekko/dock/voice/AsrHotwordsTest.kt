@@ -7,9 +7,9 @@ import org.junit.Test
 class AsrHotwordsTest {
     @Test
     fun chineseSplitsPerChar() {
-        assertEquals("小 岸", AsrHotwords.toTokens("小岸"))
+        assertEquals("岸 宝", AsrHotwords.toTokens("岸宝"))
         assertEquals("无 畏 契 约", AsrHotwords.toTokens("无畏契约"))
-        assertEquals("嘿 小 岸", AsrHotwords.toTokens("嘿小岸"))
+        assertEquals("嘿 岸 宝", AsrHotwords.toTokens("嘿岸宝"))
     }
 
     @Test
@@ -21,7 +21,7 @@ class AsrHotwordsTest {
     @Test
     fun streamJoinsWithNewline() {
         val stream = AsrHotwords.forStream()
-        assertTrue(stream.contains("小 岸"))
+        assertTrue(stream.contains("岸 宝"))
         assertTrue(stream.contains("无 畏 契 约"))
         // sherpa 的热词文件每行一个词；用 / 拼会把整行当成一个词，全部编码失败
         assertTrue(stream.contains("\n"))
@@ -30,7 +30,7 @@ class AsrHotwordsTest {
 
     @Test
     fun extraAppearsInStream() {
-        AsrHotwords.setExtra(listOf("书桌灯", "  ", "小岸"))
+        AsrHotwords.setExtra(listOf("书桌灯", "  ", "岸宝"))
         val stream = AsrHotwords.forStream()
         assertTrue(stream.contains("书 桌 灯"))
         AsrHotwords.setExtra(emptyList())

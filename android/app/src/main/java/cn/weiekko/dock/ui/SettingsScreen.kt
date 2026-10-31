@@ -74,6 +74,7 @@ import cn.weiekko.dock.background.BackgroundServer
 import cn.weiekko.dock.background.lanIpv4
 import cn.weiekko.dock.data.HubPreferences
 import cn.weiekko.dock.data.MemoryEntry
+import cn.weiekko.dock.voice.WakeKeywords
 import cn.weiekko.dock.data.TileLook
 import cn.weiekko.dock.data.TileStyle
 import cn.weiekko.dock.data.TypeLook
@@ -430,7 +431,8 @@ fun SettingsScreen(
                 Text("主屏布局", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "长按主屏任意模块进入编排：拖动移动，右下角缩放。选中后可隐藏模块，或去掉背景边框。",
+                    "长按主屏任意模块进入编排：拖动移动，右下角缩放。选中后可隐藏模块，或去掉背景边框。" +
+                        "隐藏的模块在编排态里半透明留在原位，再点一次「显示」就回来了。",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(14.dp))
@@ -861,7 +863,7 @@ fun SettingsScreen(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             if (state.wakeWordEnabled) {
-                                "已开。说「小岸」会亮屏并进入聆听，全程在手机上离线识别。"
+                                "已开。说「${WakeKeywords.PHRASE}」会亮屏并进入聆听，全程在手机上离线识别。"
                             } else {
                                 "已关。打开后会持续听唤醒词，需要麦克风权限。"
                             },

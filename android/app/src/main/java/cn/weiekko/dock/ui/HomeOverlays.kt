@@ -48,7 +48,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import cn.weiekko.dock.data.Scene
 import cn.weiekko.dock.data.TimerStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -274,48 +273,6 @@ private fun WakeListeningChip(
                 overflow = TextOverflow.Ellipsis,
                 style = TextStyle(shadow = StatShadow),
             )
-        }
-    }
-}
-
-/** 右下角一列场景（F7）：点一下让 Hub 把一组设备一次做完。 */
-@Composable
-internal fun SceneDock(
-    scenes: List<Scene>,
-    busy: Set<String>,
-    onRun: (Scene) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val type = LocalTypeLook.current
-    val family = type.font.toFamily()
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.End,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        scenes.take(4).forEach { scene ->
-            val working = scene.id in busy
-            Surface(
-                shape = RoundedCornerShape(50),
-                color = Color.White.copy(alpha = if (working) 0.08f else 0.18f),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .clickable(enabled = !working) { onRun(scene) },
-            ) {
-                Text(
-                    text = if (working) "…" else scene.name,
-                    fontFamily = family,
-                    fontSize = type.chipSize.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color.White.copy(alpha = if (working) 0.55f else 0.94f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.End,
-                    modifier = Modifier
-                        .widthIn(max = 132.dp)
-                        .padding(horizontal = 14.dp, vertical = 9.dp),
-                )
-            }
         }
     }
 }
