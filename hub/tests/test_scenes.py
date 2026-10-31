@@ -9,6 +9,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 from dock_hub.companion import Companion
 from dock_hub.config import CompanionConfig, hub_config_to_raw, parse_config
 from dock_hub.errors import HubError
@@ -81,6 +83,29 @@ class SceneConfigTest(unittest.TestCase):
         self.assertEqual(cfg.scenes[0].on, ["lamp"])
         self.assertEqual(cfg.scenes[0].brightness, {"lamp": 80})
         self.assertEqual(cfg.scenes[0].triggers(), ["干活"])
+
+    def test_yaml_boolean_keys_still_reach_on_off(self) -> None:
+        """真 YAML 文本里裸的 on/off 会被 PyYAML 变成 True/False 键——开关列表不能被它吃掉。"""
+        raw = yaml.safe_load(
+            "name: study\n"
+            "token: secret\n"
+            "devices:\n"
+            "  - id: lamp\n"
+            "    name: 台灯\n"
+            "    type: light\n"
+            "    mijia_name: 台灯\n"
+            "scenes:\n"
+            "  - id: bedtime\n"
+            "    name: 睡前\n"
+            "    on: [lamp]\n"
+            "    say: 灯关了\n"
+        )
+        scene = parse_config(raw).scenes[0]
+        self.assertEqual(scene.on, ["lamp"])
+
+        # safe_load 之后的等价形态：布尔键直接出现在 dict 里也得认
+        cfg = parse_config(_raw(scenes=[{"id": "x", "name": "X", True: ["lamp"]}]))
+        self.assertEqual(cfg.scenes[0].on, ["lamp"])
 
     def test_unknown_device_is_rejected(self) -> None:
         with self.assertRaises(ValueError) as ctx:
