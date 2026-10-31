@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
                 intent.getStringExtra(WakeWordService.EXTRA_TEXT).orEmpty(),
                 intent.getBooleanExtra(WakeWordService.EXTRA_SETTLED, false),
                 intent.getStringExtra(WakeWordService.EXTRA_TURN).orEmpty(),
+                intent.getStringExtra(WakeWordService.EXTRA_SPEAKER).orEmpty(),
             )
         }
     }
@@ -220,6 +221,11 @@ class MainActivity : ComponentActivity() {
                                     onSetWeatherCity = viewModel::setWeatherCity,
                                     onSetWakeWord = viewModel::setWakeWord,
                                     onSetDeskPresence = viewModel::setDeskPresence,
+                                    onSetVoiceprint = viewModel::setVoiceprintEnabled,
+                                    onStartVoiceprintEnroll = viewModel::startVoiceprintEnroll,
+                                    onCancelVoiceprintEnroll = viewModel::cancelVoiceprintEnroll,
+                                    onDeleteVoiceprintSpeaker = viewModel::deleteVoiceprintSpeaker,
+                                    onLoadVoiceprint = viewModel::loadVoiceprintSpeakers,
                                     onSetMirrorEnabled = viewModel::setMirrorEnabled,
                                     onSetMirrorApps = viewModel::setMirrorApps,
                                     onLoadMemory = viewModel::loadMemory,

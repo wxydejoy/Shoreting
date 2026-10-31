@@ -78,6 +78,16 @@ class WakeWordService : Service() {
     /** 采集线程重开过录音器，解码线程据此丢掉手上的流。 */
     @Volatile
     private var micGap = false
+    /** F5 声纹：模型懒加载，第一次用到才装；装不起来就当这功能不存在。 */
+    private var voiceprint: VoiceprintEngine? = null
+    /** 正在识别的那句话的音频（只在本机内存里，说完就清）。 */
+    private val utteranceAudio = UtteranceAudio()
+    private var enrollBuffer: EnrollmentBuffer? = null
+    private var enrollTarget: String? = null
+    /** 声纹的活儿（模型加载、算向量、读花名册）都排这一条线程，别压解码线程。 */
+    private val vpExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "voiceprint").apply { isDaemon = true }
+    }
     private var turnAt = 0L
     private var asrAt = 0L
     private var loggedPartial = false
@@ -111,6 +121,9 @@ class WakeWordService : Service() {
         kws = null
         asr?.release()
         asr = null
+        voiceprint?.release()
+        voiceprint = null
+        vpExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -312,6 +325,7 @@ class WakeWordService : Service() {
                 // 唤醒词也把缓冲清掉，免得拿断档前后的音频凑出一句话。
                 micGap = false
                 queue.clear()
+                utteranceAudio.clear()
                 if (capturing) {
                     capturing = false
                     asrStream?.release()
@@ -354,6 +368,7 @@ class WakeWordService : Service() {
                 if (stream == null) {
                     stream = recognizer.createStream()
                     asrStream = stream
+                    utteranceAudio.clear()
                     // 喊小岸后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了。
                     // 只丢「音频」不按墙钟丢：等过模型之后队列里排着的是刚唤醒时的
                     // 音频，按墙钟会把用户的话丢掉。
@@ -371,6 +386,10 @@ class WakeWordService : Service() {
                     continue
                 }
                 processedMs += dtMs
+                // F5：声纹开着（或在注册）才攒这轮音频，平时一分内存都不占
+                if (VoiceprintBus.enabled || VoiceprintBus.enrollName != null) {
+                    utteranceAudio.add(samples)
+                }
                 if (asrAt == 0L) {
                     asrAt = now
                     HelmLatency.log(currentTurn, "asr_start", "since_wake_ms=${now - turnAt}")
@@ -407,7 +426,11 @@ class WakeWordService : Service() {
                     )
                     capturing = false
                     asrStream = null
+                    // F5：认人跟收尾解码并行——她先开口，声纹在旁边算，发广播前等一小会儿
+                    val speakerJob = startSpeakerTask(gate.heard)
                     val finalText = finishUtterance(recognizer, stream, lastEmitted)
+                    val speaker = awaitSpeaker(speakerJob)
+                    emitTranscript(finalText, settled = true, speaker = speaker)
                     HelmLatency.log(
                         currentTurn,
                         "asr_end",
@@ -468,9 +491,108 @@ class WakeWordService : Service() {
             recognizer.decode(stream)
         }
         val text = AsrModels.display(recognizer.getResult(stream).text).ifBlank { lastEmitted }
-        emitTranscript(text, settled = true)
         stream.release()
         return text
+    }
+
+    /**
+     * F5：把这轮的认人任务排进声纹线程，跟收尾解码并行跑，别让她等声纹算完才开口。
+     * 返回 null 表示这轮不认人（没开声纹、没在注册、或这轮没听到什么）。
+     * 音频不出设备——攒的那份随取随清，出门的只有「认出的称呼」。
+     */
+    private fun startSpeakerTask(heardSomething: Boolean): Future<String>? {
+        val target = VoiceprintBus.enrollName
+        if (!VoiceprintBus.enabled && target == null) {
+            utteranceAudio.clear()
+            return null
+        }
+        val samples = utteranceAudio.samples()
+        utteranceAudio.clear()
+        if (!heardSomething || samples.size < EMBED_MIN_SAMPLES) return null
+        return vpExecutor.submit(Callable { settleSpeaker(samples, target) })
+    }
+
+    /** 声纹线程上跑：一句音频 → 向量 → 注册或认人。出任何岔子都当「没认出来」。 */
+    private fun settleSpeaker(samples: FloatArray, target: String?): String {
+        val engine = voiceprintEngine() ?: return ""
+        val startedAt = SystemClock.elapsedRealtime()
+        val embedding = engine.embed(samples) ?: return ""
+        val cost = SystemClock.elapsedRealtime() - startedAt
+        val store = VoiceprintStore(File(filesDir, VOICEPRINT_FILE))
+        if (target != null) {
+            enroll(embedding, target, store)
+            return ""
+        }
+        val roster = store.load()
+        val name = roster.match(embedding)
+        HelmLatency.log(
+            currentTurn,
+            "voiceprint",
+            "ms=$cost matched=${name ?: "-"} speakers=${roster.names().size}",
+        )
+        return name ?: ""
+    }
+
+    /** 最多陪声纹线程等这么久；等不到这轮就不带称呼——对话本身不等声纹。 */
+    private fun awaitSpeaker(job: Future<String>?): String {
+        if (job == null) return ""
+        return try {
+            job.get(SPEAKER_JOIN_MS, TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            job.cancel(true)
+            ""
+        }
+    }
+
+    /** 注册：同一目标凑满 N 句取均值落盘；换了目标（或取消过）就重攒。 */
+    private fun enroll(embedding: FloatArray, target: String, store: VoiceprintStore) {
+        if (enrollTarget != target) {
+            enrollTarget = target
+            enrollBuffer = EnrollmentBuffer()
+        }
+        val buffer = enrollBuffer ?: EnrollmentBuffer().also { enrollBuffer = it }
+        val collected = buffer.offer(embedding)
+        if (!buffer.complete()) {
+            VoiceprintBus.report(
+                VoiceprintBus.EnrollState(target, collected, VoiceprintBus.ENROLL_UTTERANCES),
+            )
+            HelmLatency.log(currentTurn, "voiceprint_enroll", "name=$target got=$collected")
+            return
+        }
+        runCatching { store.save(store.load().enrolled(target, buffer.average())) }
+            .onSuccess {
+                VoiceprintBus.report(
+                    VoiceprintBus.EnrollState(
+                        target,
+                        collected,
+                        VoiceprintBus.ENROLL_UTTERANCES,
+                        saved = true,
+                    ),
+                )
+                HelmLatency.log(currentTurn, "voiceprint_enroll", "name=$target ok=1")
+            }
+            .onFailure {
+                VoiceprintBus.report(
+                    VoiceprintBus.EnrollState(
+                        target,
+                        collected,
+                        VoiceprintBus.ENROLL_UTTERANCES,
+                        error = "没存下来，再试一次",
+                    ),
+                )
+                HelmLatency.log(currentTurn, "voiceprint_enroll", "name=$target ok=0")
+            }
+        VoiceprintBus.enrollName = null
+        enrollTarget = null
+        enrollBuffer = null
+    }
+
+    private fun voiceprintEngine(): VoiceprintEngine? {
+        val current = voiceprint
+        if (current != null) return if (current.failed) null else current
+        val built = VoiceprintEngine(assets)
+        voiceprint = built
+        return if (built.failed) null else built
     }
 
     /**
@@ -600,12 +722,13 @@ class WakeWordService : Service() {
         }
     }
 
-    private fun emitTranscript(text: String, settled: Boolean) {
+    private fun emitTranscript(text: String, settled: Boolean, speaker: String = "") {
         sendBroadcast(
             Intent(ACTION_TRANSCRIPT).setPackage(packageName).apply {
                 putExtra(EXTRA_TEXT, text)
                 putExtra(EXTRA_SETTLED, settled)
                 putExtra(EXTRA_TURN, currentTurn)
+                putExtra(EXTRA_SPEAKER, speaker)
             },
         )
     }
@@ -698,6 +821,10 @@ class WakeWordService : Service() {
         const val EXTRA_TEXT = "text"
         const val EXTRA_SETTLED = "settled"
         const val EXTRA_TURN = "turn_id"
+        const val EXTRA_SPEAKER = "speaker"
+
+        /** 花名册文件名（应用私有目录，不出设备）。 */
+        private const val VOICEPRINT_FILE = "voiceprint.json"
 
         fun start(context: Context) {
             val intent = Intent(context, WakeWordService::class.java)

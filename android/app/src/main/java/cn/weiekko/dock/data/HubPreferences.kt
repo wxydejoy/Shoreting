@@ -155,6 +155,11 @@ class HubPreferences(private val context: Context) {
         prefs[KEY_DESK_PRESENCE] ?: false
     }
 
+    /** 声纹（F5）：默认关。开了也只在手机本地比对，音频不出设备。 */
+    val voiceprintEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_VOICEPRINT] ?: false
+    }
+
     /** 递话去重（F33/F4）：已经发过通知的最大 notify id。 */
     val lastNotifyId: Flow<Int> = context.dataStore.data.map { prefs ->
         prefs[KEY_LAST_NOTIFY_ID] ?: 0
@@ -289,6 +294,12 @@ class HubPreferences(private val context: Context) {
         }
     }
 
+    suspend fun saveVoiceprintEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_VOICEPRINT] = enabled
+        }
+    }
+
     suspend fun saveMirrorEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[KEY_MIRROR_ENABLED] = enabled
@@ -327,6 +338,7 @@ class HubPreferences(private val context: Context) {
         private val KEY_WAKE_WORD = booleanPreferencesKey("wake_word")
         private val KEY_HUB_ENABLED = booleanPreferencesKey("hub_enabled")
         private val KEY_DESK_PRESENCE = booleanPreferencesKey("desk_presence")
+        private val KEY_VOICEPRINT = booleanPreferencesKey("voiceprint")
         private val KEY_LAST_NOTIFY_ID = intPreferencesKey("last_notify_id")
         private val KEY_MIRROR_ENABLED = booleanPreferencesKey("mirror_enabled")
         private val KEY_MIRROR_APPS = stringPreferencesKey("mirror_apps")

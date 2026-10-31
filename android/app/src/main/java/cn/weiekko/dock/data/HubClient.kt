@@ -133,6 +133,7 @@ class HubClient(
         connection: HubConnection,
         text: String,
         turnId: String = "",
+        speaker: String = "",
     ): CompanionChatResponse {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) {
@@ -141,6 +142,8 @@ class HubClient(
         val payload = buildJsonObject {
             put("text", JsonPrimitive(trimmed))
             if (turnId.isNotBlank()) put("turn_id", JsonPrimitive(turnId.trim()))
+            // F5 声纹：只送本地认出的称呼，没认出来就不带这个字段
+            if (speaker.isNotBlank()) put("speaker", JsonPrimitive(speaker))
         }
         val request = authorized(connection, "/v1/companion/chat")
             .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))

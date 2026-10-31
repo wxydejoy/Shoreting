@@ -43,6 +43,8 @@ import cn.weiekko.dock.data.WeatherInfo
 import cn.weiekko.dock.data.WeatherPlaces
 import cn.weiekko.dock.data.TileLook
 import cn.weiekko.dock.data.TypeLook
+import cn.weiekko.dock.voice.VoiceprintBus
+import cn.weiekko.dock.voice.VoiceprintStore
 import cn.weiekko.dock.data.WinApp
 import cn.weiekko.dock.data.defaultDockLayout
 import cn.weiekko.dock.data.deviceType
@@ -113,6 +115,10 @@ data class DockUiState(
     val hubSleeping: Boolean = false,
     val deskPresenceEnabled: Boolean = false,
     val deskSleeping: Boolean = false,
+    // F5 声纹：谁在说话。开关在本地；花名册和注册进度只服务设置页
+    val voiceprintEnabled: Boolean = false,
+    val voiceprintSpeakers: List<String> = emptyList(),
+    val voiceprintEnroll: VoiceprintBus.EnrollState? = null,
     val mirrorEnabled: Boolean = false,
     val mirrorAppsRaw: String = "",
     // F35 通知镜像：白名单应用的通知，亮在屏幕上，30 秒自己收走
@@ -297,6 +303,19 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch {
+            prefs.voiceprintEnabled.collect { enabled ->
+                _ui.update { it.copy(voiceprintEnabled = enabled) }
+                VoiceprintBus.enabled = enabled
+                if (!enabled) cancelVoiceprintEnroll()
+            }
+        }
+        viewModelScope.launch {
+            VoiceprintBus.enroll.collect { state ->
+                _ui.update { it.copy(voiceprintEnroll = state) }
+                if (state?.saved == true) loadVoiceprintSpeakers()
+            }
+        }
+        viewModelScope.launch {
             prefs.layout.collect { layout ->
                 if (!_ui.value.editing) {
                     _ui.update { it.copy(layout = layout) }
@@ -467,6 +486,45 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 声纹（F5）总开关：默认关。开了也只在手机本地比对，音频不出设备。 */
+    fun setVoiceprintEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.saveVoiceprintEnabled(enabled)
+        }
+    }
+
+    /** 开始给一个称呼注册声纹：接下来对着书桌说几句就行。 */
+    fun startVoiceprintEnroll(raw: String) {
+        val name = raw.trim().take(12)
+        if (name.isEmpty()) return
+        VoiceprintBus.report(
+            VoiceprintBus.EnrollState(name, 0, VoiceprintBus.ENROLL_UTTERANCES),
+        )
+        VoiceprintBus.enrollName = name
+    }
+
+    fun cancelVoiceprintEnroll() {
+        VoiceprintBus.enrollName = null
+        VoiceprintBus.report(null)
+    }
+
+    fun deleteVoiceprintSpeaker(name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val store = VoiceprintStore(voiceprintFile())
+            store.save(store.load().without(name))
+            loadVoiceprintSpeakers()
+        }
+    }
+
+    fun loadVoiceprintSpeakers() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val names = VoiceprintStore(voiceprintFile()).load().names()
+            _ui.update { it.copy(voiceprintSpeakers = names) }
+        }
+    }
+
+    private fun voiceprintFile() = File(getApplication<Application>().filesDir, "voiceprint.json")
+
     /** 通知镜像（F35）：开关与白名单。默认关。 */
     fun setMirrorEnabled(enabled: Boolean) {
         viewModelScope.launch {
@@ -558,7 +616,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun onVoiceTranscript(text: String, settled: Boolean, turnId: String = "") {
+    fun onVoiceTranscript(text: String, settled: Boolean, turnId: String = "", speaker: String = "") {
         listeningJob?.cancel()
         rememberTurn(turnId)
         _voice.value = VoiceState(listening = true, text = text, settled = settled)
@@ -568,7 +626,11 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         if (spoken.isNotEmpty() && companionReady()) {
             conversationWindow.onInput(now)
             _voice.value = _voice.value.copy(listening = false)
-            hearCompanion(spoken)
+            if (VoiceprintBus.enrollName != null) {
+                // 注册中：这几句话只喂声纹，别再当聊天发出去
+            } else {
+                hearCompanion(spoken, speaker)
+            }
             return
         }
         if (spoken.isEmpty()) {
@@ -1018,13 +1080,13 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         _ui.update { it.copy(companionDraft = text, companionError = null) }
     }
 
-    fun hearCompanion(text: String) {
+    fun hearCompanion(text: String, speaker: String = "") {
         val spoken = text.trim()
         if (spoken.isEmpty()) return
-        sendCompanion(spoken)
+        sendCompanion(spoken, speaker)
     }
 
-    fun sendCompanion(text: String? = null) {
+    fun sendCompanion(text: String? = null, speaker: String = "") {
         val spoken = (text ?: _ui.value.companionDraft).trim()
         if (spoken.isEmpty()) return
         // 对讲捷径（F33 正向）：「对讲，饭好了」直接从书桌喇叭出声，不走 LLM
@@ -1092,7 +1154,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             HelmLatency.log(turn, "chat_http_start", "since_wake_ms=${HelmLatency.ms(voiceTurnAt)}")
             val started = HelmLatency.now()
             val result = withContext(Dispatchers.IO) {
-                runCatching { client.companionChat(connection, spoken, turn) }
+                runCatching { client.companionChat(connection, spoken, turn, speaker) }
             }
             result.fold(
                 onSuccess = { reply ->
