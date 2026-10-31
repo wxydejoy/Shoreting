@@ -96,3 +96,13 @@ Windows 的 Hub exe 只能在 Windows 上打，Mac 会自动跳过并提醒—�
 - **Hub**：`git checkout main~1` 重启进程即回上一版；配置 yaml 不动。
 - **App**：K20 重装上一个 APK（每次发版前把旧 APK 留一份在 `dist/`）。
 - 配置向前兼容是新版本的红线：回滚旧版读不起新配置时，手工把 yaml 里新增的段删掉。
+
+## 已知的发版坑（本轮真机踩过的）
+
+- **TTS 起不来，反复退出**：0.9.0 起 TTS 拒绝在 `0.0.0.0` 上无口令监听。Hub 只从本机
+  调它，把 LaunchAgent 里的 `--host` 改成 `127.0.0.1`（或给 `--token` 并在 hub.yaml
+  `companion.tts_token` 里配同一个值），然后 `launchctl bootout` + `bootstrap` 重载。
+- **场景的 on/off 解析成空**：裸写 `off: [lamp]` 会被 PyYAML 当布尔键吃掉——hub 侧已
+  兜底（两种键都认），自己写配置时给键加引号 `"off":` 更稳。
+- **repo 里残留 hub/hub.yaml 会顶掉真配置**：搜索顺序是 cwd → hub/ → ~/.config，
+  仓库工作树里那个占位 hub.yaml 必须挪走（已改名 hub.yaml.pre-0.9.0-bak 留档）。
