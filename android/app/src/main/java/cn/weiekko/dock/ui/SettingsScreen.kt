@@ -99,6 +99,8 @@ fun SettingsScreen(
     onSetWeatherCity: (String) -> Unit = {},
     onSetWakeWord: (Boolean) -> Unit = {},
     onSetDeskPresence: (Boolean) -> Unit = {},
+    onSetMirrorEnabled: (Boolean) -> Unit = {},
+    onSetMirrorApps: (String) -> Unit = {},
     onLoadMemory: () -> Unit = {},
     onDeleteMemory: (String) -> Unit = {},
     onSetHubEnabled: (Boolean) -> Unit = {},
@@ -900,6 +902,62 @@ fun SettingsScreen(
                             checkedThumbColor = colors.onPrimary,
                             checkedTrackColor = colors.primary,
                         ),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        // F35 通知镜像：默认关。「哪些消息值得打断」很难调，白名单一个一个填。
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = colors.surface,
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("通知镜像", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (state.mirrorEnabled) {
+                                "已开。白名单应用来通知时，书桌顶部亮一下，30 秒自己收走。只亮不念。"
+                            } else {
+                                "已关。屏幕全屏当摆件时，系统的横幅根本看不见；开了才会把白名单应用的通知亮出来。"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    Switch(
+                        checked = state.mirrorEnabled,
+                        onCheckedChange = onSetMirrorEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.onPrimary,
+                            checkedTrackColor = colors.primary,
+                        ),
+                    )
+                }
+                if (state.mirrorEnabled) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "白名单（包名，逗号或换行分开），例如 com.tencent.mm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    var mirrorDraft by remember(state.mirrorAppsRaw) { mutableStateOf(state.mirrorAppsRaw) }
+                    OutlinedTextField(
+                        value = mirrorDraft,
+                        onValueChange = { mirrorDraft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 1,
+                        maxLines = 3,
+                        placeholder = { Text("com.tencent.mm, com.yourapp") },
+                        trailingIcon = {
+                            TextButton(onClick = { onSetMirrorApps(mirrorDraft) }) { Text("保存") }
+                        },
                     )
                 }
             }

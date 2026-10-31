@@ -113,6 +113,10 @@ data class DockUiState(
     val hubSleeping: Boolean = false,
     val deskPresenceEnabled: Boolean = false,
     val deskSleeping: Boolean = false,
+    val mirrorEnabled: Boolean = false,
+    val mirrorAppsRaw: String = "",
+    // F35 通知镜像：白名单应用的通知，亮在屏幕上，30 秒自己收走
+    val mirrorText: String? = null,
     val wakeWordEnabled: Boolean = true,
     val voiceListening: Boolean = false,
     val conversationOpen: Boolean = false,
@@ -264,6 +268,16 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 _ui.update { it.copy(deskPresenceEnabled = enabled) }
                 if (!enabled) stopDeskWatch()
                 else startDeskWatch()
+            }
+        }
+        viewModelScope.launch {
+            prefs.mirrorEnabled.collect { enabled ->
+                _ui.update { it.copy(mirrorEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.mirrorApps.collect { apps ->
+                _ui.update { it.copy(mirrorAppsRaw = apps.joinToString(", ")) }
             }
         }
         viewModelScope.launch {
@@ -439,6 +453,19 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun setDeskPresence(enabled: Boolean) {
         viewModelScope.launch {
             prefs.saveDeskPresenceEnabled(enabled)
+        }
+    }
+
+    /** 通知镜像（F35）：开关与白名单。默认关。 */
+    fun setMirrorEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.saveMirrorEnabled(enabled)
+        }
+    }
+
+    fun setMirrorApps(raw: String) {
+        viewModelScope.launch {
+            prefs.saveMirrorApps(raw)
         }
     }
 
@@ -1222,8 +1249,30 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 通知镜像（F35）：比已亮过的 id 新的就亮一下，30 秒自己收走。 */
+    private var mirrorJob: Job? = null
+    private fun consumeMirror(snapshot: Snapshot) {
+        val mirror = snapshot.mirror ?: return
+        if (mirror.lastId <= 0) return
+        viewModelScope.launch {
+            val seen = prefs.lastMirrorId.first()
+            if (mirror.lastId > seen) prefs.saveLastMirrorId(mirror.lastId)
+            val newest = mirror.items.lastOrNull { it.id > seen } ?: return@launch
+            val text = if (newest.title.isBlank()) newest.text else "${newest.title}：${newest.text}"
+            _ui.update { it.copy(mirrorText = text) }
+            mirrorJob?.cancel()
+            mirrorJob = viewModelScope.launch {
+                delay(mirrorVisibleMs)
+                _ui.update { if (it.mirrorText == text) it.copy(mirrorText = null) else it }
+            }
+        }
+    }
+
     /** 对讲捷径（F33 正向）：说「对讲，饭好了」——话从书桌喇叭出来，不经大脑。 */
     private val intercomPrefix = Regex("^(?:对讲|广播|喇叭说)[，,：:.\\s]+(.+)$")
+
+    /** 通知镜像（F35）在屏上停多久：临时浮层 ≤30 秒，主屏信息层级的硬规矩。 */
+    private val mirrorVisibleMs = 30_000L
 
     private suspend fun sendAnnounce(message: String) {
         val connection = _ui.value.connection
@@ -1419,6 +1468,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 noteDeskPc(snapshot.pc?.online)
                 presenceReporter.onPoll(onWifi = onWifi(), reachable = true, nowMs = SystemClock.elapsedRealtime())
                 consumeRelay(snapshot)
+                consumeMirror(snapshot)
                 _ui.update {
                     it.copy(
                         snapshot = snapshot,

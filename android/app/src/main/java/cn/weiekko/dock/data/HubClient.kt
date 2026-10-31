@@ -173,6 +173,22 @@ class HubClient(
         execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
     }
 
+    /**
+     * 通知镜像（F35）：把一条白名单通知送到 Hub，书桌屏幕亮一下。
+     * 失败会抛给调用方——监听器那边 runCatching 兜住就行，消息不值得连累服务。
+     */
+    fun mirror(connection: HubConnection, app: String, title: String, text: String) {
+        val payload = buildJsonObject {
+            put("app", JsonPrimitive(app.trim().take(80)))
+            put("title", JsonPrimitive(title.trim().take(60)))
+            put("text", JsonPrimitive(text.trim().take(200)))
+        }
+        val request = authorized(connection, "/v1/mirror")
+            .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))
+            .build()
+        execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
+    }
+
     /** 她记得的事（F28）：列表给设置页「她记得的事」分区。 */
     fun companionMemory(connection: HubConnection): MemoryList {
         val request = authorized(connection, "/v1/companion/memory").get().build()

@@ -21,6 +21,7 @@ data class Snapshot(
     val companion: CompanionStatus? = null,
     val devices: List<HubDevice> = emptyList(),
     val notify: NotifyState? = null,
+    val mirror: MirrorState? = null,
     val alarm: AlarmStatus? = null,
     val theme: ThemeStatus? = null,
     val photos: PhotoIds? = null,
@@ -73,6 +74,22 @@ data class NotifyItem(
     val id: Int,
     val text: String,
     val source: String = "desk",
+    val at: String = "",
+)
+
+/** 通知镜像（F35）：白名单应用的通知名单，安卓拿自增 id 去重，见新的就亮一下。 */
+@Serializable
+data class MirrorState(
+    val lastId: Int = 0,
+    val items: List<MirrorItem> = emptyList(),
+)
+
+@Serializable
+data class MirrorItem(
+    val id: Int,
+    val app: String,
+    val title: String = "",
+    val text: String,
     val at: String = "",
 )
 

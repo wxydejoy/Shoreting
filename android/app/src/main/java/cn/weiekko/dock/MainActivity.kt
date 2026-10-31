@@ -218,6 +218,8 @@ class MainActivity : ComponentActivity() {
                                     onSetWeatherCity = viewModel::setWeatherCity,
                                     onSetWakeWord = viewModel::setWakeWord,
                                     onSetDeskPresence = viewModel::setDeskPresence,
+                                    onSetMirrorEnabled = viewModel::setMirrorEnabled,
+                                    onSetMirrorApps = viewModel::setMirrorApps,
                                     onLoadMemory = viewModel::loadMemory,
                                     onDeleteMemory = viewModel::deleteMemory,
                                     onSetHubEnabled = viewModel::setHubEnabled,

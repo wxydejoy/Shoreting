@@ -556,6 +556,19 @@ fun HomeScreen(
                 )
             }
 
+            // 通知镜像（F35）：手机收到的重要消息在顶部亮一下，30 秒自己收走。
+            // 睡着了就别亮了——黑屏是让人休息的，不是让人看消息的。
+            val mirrorLine = state.mirrorText
+            if (mirrorLine != null && !state.hubSleeping && !state.editing) {
+                MirrorBanner(
+                    text = mirrorLine,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 10.dp)
+                        .zIndex(16f),
+                )
+            }
+
             if (state.hubSleeping && !state.voiceListening) {
                 Box(
                     modifier = Modifier
@@ -1498,6 +1511,33 @@ private fun CompanionCaption(
         style = TextStyle(shadow = StatShadow),
         modifier = modifier,
     )
+}
+
+/** 通知镜像（F35）：顶部一条窄横幅，亮一下就走。 */
+@Composable
+private fun MirrorBanner(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = Color.Black.copy(alpha = 0.55f),
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text,
+                color = Color.White.copy(alpha = 0.88f),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = TextStyle(shadow = StatShadow),
+            )
+        }
+    }
 }
 
 /** 番茄钟细环（F9）：倒计时走环、正计时满环，中间是时间。 */
