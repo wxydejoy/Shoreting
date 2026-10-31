@@ -450,7 +450,6 @@ class TestSpeakUp(unittest.TestCase):
 
         bot._finish_spoken = finish  # type: ignore[method-assign]
         bot._commit_reply = lambda text: None  # type: ignore[method-assign]
-        bot._stop_tts = lambda: None  # type: ignore[method-assign]
         return bot, calls
 
     def test_says_when_clear(self) -> None:

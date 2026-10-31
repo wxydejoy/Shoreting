@@ -702,7 +702,7 @@ class CompanionProtocolTest(unittest.TestCase):
 
     def test_chat_ok_strips_action(self) -> None:
         fake = _fake_ollama("晚上好，漂泊者。\nACTION: lamp.on")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "晚上好，漂泊者。")
@@ -719,7 +719,7 @@ class CompanionProtocolTest(unittest.TestCase):
             lambda ident, on: seen.append((ident, on)),
         )
         fake = _fake_ollama("好。\nACTION: lamp.off")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "关灯。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "好。")
@@ -732,7 +732,7 @@ class CompanionProtocolTest(unittest.TestCase):
             lambda ident, on: seen.append((ident, on)),
         )
         fake = _fake_ollama("好。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "开空调。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "好。")
@@ -762,7 +762,7 @@ class CompanionProtocolTest(unittest.TestCase):
         def boom(*_args: object, **_kwargs: object) -> object:
             raise AssertionError("setting AC temp must not call LLM")
 
-        with patch("dock_hub.companion.urllib.request.urlopen", boom):
+        with patch("urllib.request.urlopen", boom):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "把空调调成二十四度"})
         self.assertEqual(status, 200)
         self.assertEqual(seen, [{"id": "ac", "on": True, "brightness": None, "props": {"temp": 24}}])
@@ -777,7 +777,7 @@ class CompanionProtocolTest(unittest.TestCase):
         def boom(*_args: object, **_kwargs: object) -> object:
             raise AssertionError("launching a game must not call the LLM")
 
-        with patch("dock_hub.companion.urllib.request.urlopen", boom):
+        with patch("urllib.request.urlopen", boom):
             for utterance in (
                 "启动无畏契约。",
                 "打开无畏契约",
@@ -803,7 +803,7 @@ class CompanionProtocolTest(unittest.TestCase):
             path,
         )
         fake = _fake_ollama("好。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request(
                 "POST",
                 "/v1/companion/chat",
@@ -813,7 +813,7 @@ class CompanionProtocolTest(unittest.TestCase):
         self.assertIn("开黑", body["text"])
         self.assertEqual(seen, [])
         fake = _fake_ollama("好。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request(
                 "POST",
                 "/v1/companion/chat",
@@ -823,7 +823,7 @@ class CompanionProtocolTest(unittest.TestCase):
         self.assertIn("打游戏", body["text"])
         self.assertEqual(seen, [])
         fake = _fake_ollama("好。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "开黑。"})
         self.assertEqual(status, 200)
         self.assertEqual(seen, [("wegame", True)])
@@ -835,7 +835,7 @@ class CompanionProtocolTest(unittest.TestCase):
             lambda ident, on: seen.append((ident, on)),
         )
         fake = _fake_ollama("好。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request(
                 "POST",
                 "/v1/companion/chat",
@@ -852,7 +852,7 @@ class CompanionProtocolTest(unittest.TestCase):
             lambda ident, on: seen.append((ident, on)),
         )
         fake = _fake_ollama("晚上好，漂泊者。\nACTION: lamp.on")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "晚上好，漂泊者。")
@@ -864,7 +864,7 @@ class CompanionProtocolTest(unittest.TestCase):
 
         self.hub.snapshot = boom  # type: ignore[method-assign]
         fake = _fake_ollama("晚上好，漂泊者。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "晚上好，漂泊者。")
@@ -903,7 +903,7 @@ class CompanionProtocolTest(unittest.TestCase):
                 return _FakeResp({"ok": True})
             raise AssertionError(url)
 
-        with patch("dock_hub.companion.urllib.request.urlopen", urlopen):
+        with patch("urllib.request.urlopen", urlopen):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "晚上好，漂泊者。")
@@ -960,7 +960,7 @@ class CompanionProtocolTest(unittest.TestCase):
             lambda ident, on: seen.append((ident, on)),
         )
         fake = _fake_ollama("好。还要开空调吗？")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "关灯。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "好。")
@@ -1008,10 +1008,10 @@ class CompanionProtocolTest(unittest.TestCase):
             raise AssertionError(url)
 
         fake = _fake_ollama("晚上好，漂泊者。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 200)
-        with patch("dock_hub.companion.urllib.request.urlopen", urlopen):
+        with patch("urllib.request.urlopen", urlopen):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "你还在吗。"})
         self.assertEqual(status, 200)
         system = captured[0][0]["content"]
@@ -1021,7 +1021,7 @@ class CompanionProtocolTest(unittest.TestCase):
 
     def test_chat_recalls_last_reply(self) -> None:
         fake = _fake_ollama("晚上好，漂泊者。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         status, body = self._request("POST", "/v1/companion/chat", {"text": "刚才你说什么。"})
         self.assertEqual(status, 200)
@@ -1144,7 +1144,7 @@ class CompanionProtocolTest(unittest.TestCase):
             world={"device": lambda ident: {"on": True, "brightness": 40}},
         )
         fake = _fake_ollama("好。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "亮一点。"})
         self.assertEqual(status, 200)
         self.assertEqual(seen, [("lamp", True, 55)])
@@ -1156,7 +1156,7 @@ class CompanionProtocolTest(unittest.TestCase):
             lambda ident, on: seen.append((ident, on)),
         )
         fake = _fake_ollama("先坐一会儿。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "累了。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "先坐一会儿。")
@@ -1171,7 +1171,7 @@ class CompanionProtocolTest(unittest.TestCase):
             boom,
         )
         fake = _fake_ollama("好。")
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "关灯。"})
         self.assertEqual(status, 200)
         self.assertIn("没动成", body["text"])
@@ -1197,7 +1197,7 @@ class CompanionProtocolTest(unittest.TestCase):
                 }
             ).companion
         )
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
             self.assertEqual(status, 200)
             self.assertEqual(body["text"], "晚上好，漂泊者。")
@@ -1233,7 +1233,7 @@ class CompanionProtocolTest(unittest.TestCase):
                 }
             ).companion
         )
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request(
                 "POST",
                 "/v1/companion/chat",
@@ -1263,7 +1263,7 @@ class CompanionProtocolTest(unittest.TestCase):
                 }
             ).companion
         )
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request(
                 "POST",
                 "/v1/companion/chat",
@@ -1305,7 +1305,7 @@ class CompanionProtocolTest(unittest.TestCase):
                 }
             ).companion
         )
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "岸边很安静。")
@@ -1344,7 +1344,7 @@ class CompanionProtocolTest(unittest.TestCase):
                 }
             ).companion
         )
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/stop", {})
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
@@ -1393,7 +1393,7 @@ class CompanionProtocolTest(unittest.TestCase):
             result["status"] = status
             result["body"] = body
 
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             worker = threading.Thread(target=run_chat)
             worker.start()
             deadline = time.monotonic() + 1.5
@@ -1441,7 +1441,7 @@ class CompanionProtocolTest(unittest.TestCase):
             raise AssertionError(url)
 
         self._enable_streaming_companion()
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             first: dict = {}
 
             def slow_chat() -> None:
@@ -1483,7 +1483,7 @@ class CompanionProtocolTest(unittest.TestCase):
                 }
             ).companion
         )
-        with patch("dock_hub.companion.urllib.request.urlopen", slow):
+        with patch("urllib.request.urlopen", slow):
             # 冷启动那次同步探活（要如实报状态），慢就慢
             self._request("GET", "/v1/snapshot")
             # 假装有效期已过：这一次只读缓存，刷新丢给后台
@@ -1536,7 +1536,7 @@ class CompanionProtocolTest(unittest.TestCase):
                 }
             ).companion
         )
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "在吗。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "晚上好。还早。")
@@ -1583,7 +1583,7 @@ class CompanionProtocolTest(unittest.TestCase):
                 }
             ).companion
         )
-        with patch("dock_hub.companion.urllib.request.urlopen", fake):
+        with patch("urllib.request.urlopen", fake):
             status, body = self._request("POST", "/v1/companion/chat", {"text": "晚上好。"})
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "晚上好，漂泊者。")
@@ -1658,7 +1658,7 @@ class CompanionProtocolTest(unittest.TestCase):
     def test_read_play_cues_mini_without_file(self) -> None:
         self._enable_tts()
         seen: list[dict] = []
-        with patch("dock_hub.companion.urllib.request.urlopen", _fake_read_tts(_tiny_wav(), seen)):
+        with patch("urllib.request.urlopen", _fake_read_tts(_tiny_wav(), seen)):
             status, body = self._request(
                 "POST",
                 "/v1/companion/read",
@@ -1696,7 +1696,7 @@ class CompanionProtocolTest(unittest.TestCase):
         self._enable_tts()
         seen: list[dict] = []
         wav = _tiny_wav(frames=2400)
-        with patch("dock_hub.companion.urllib.request.urlopen", _fake_read_tts(wav, seen)):
+        with patch("urllib.request.urlopen", _fake_read_tts(wav, seen)):
             status, body = self._request(
                 "POST",
                 "/v1/companion/read",
@@ -1738,7 +1738,7 @@ class CompanionProtocolTest(unittest.TestCase):
         status, body = self._request("GET", "/v1/companion/read/jobs")
         self.assertEqual(status, 200)
         self.assertEqual(body["items"], [])
-        with patch("dock_hub.companion.urllib.request.urlopen", _fake_read_tts(_tiny_wav(), [])):
+        with patch("urllib.request.urlopen", _fake_read_tts(_tiny_wav(), [])):
             status, posted = self._request(
                 "POST",
                 "/v1/companion/read",
@@ -1756,7 +1756,7 @@ class CompanionProtocolTest(unittest.TestCase):
     def test_read_job_cancel_delete_and_replay(self) -> None:
         self._enable_tts()
         seen: list[dict] = []
-        with patch("dock_hub.companion.urllib.request.urlopen", _fake_read_tts(_tiny_wav(), seen)):
+        with patch("urllib.request.urlopen", _fake_read_tts(_tiny_wav(), seen)):
             status, posted = self._request(
                 "POST",
                 "/v1/companion/read",
