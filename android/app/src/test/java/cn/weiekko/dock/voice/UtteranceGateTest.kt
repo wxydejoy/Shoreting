@@ -2,6 +2,7 @@ package cn.weiekko.dock.voice
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UtteranceGateTest {
@@ -46,6 +47,25 @@ class UtteranceGateTest {
         gate.noteHeard()
         feed(gate, rms = 0.003f, ms = 1_300L)
         assertEquals(UtteranceGate.StopReason.Tail, gate.shouldStop(1_580L))
+    }
+
+    @Test
+    fun repeatedAsrTextDoesNotPostponeTheTail() {
+        // 真机上的形态：识别结果不清空，每一块音频都 noteHeard 一次。
+        // 这里每 50ms 调一次，断言静音照样能凑满、不被反复清零。
+        val gate = UtteranceGate()
+        feed(gate, rms = 0.006f, ms = 280L)
+        feed(gate, rms = 0.09f, ms = 600L)
+        var elapsed = 880L
+        var stop: UtteranceGate.StopReason? = null
+        while (elapsed < 4_000L && stop == null) {
+            gate.noteHeard()
+            gate.onAudio(0.003f, 50L)
+            elapsed += 50L
+            stop = gate.shouldStop(elapsed)
+        }
+        assertEquals(UtteranceGate.StopReason.Tail, stop)
+        assertTrue(elapsed < 2_500L)
     }
 
     @Test

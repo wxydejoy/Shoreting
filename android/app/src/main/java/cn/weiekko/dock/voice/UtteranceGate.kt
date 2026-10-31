@@ -21,9 +21,16 @@ internal class UtteranceGate(
     private var calibratedMs = 0L
     private var noise = 0.012f
 
+    /**
+     * 只标记「听到了人声」，**不动静音计时**。
+     *
+     * 这里千万别再 `silenceMs = 0`：识别器的结果在静音时不会清空，调用方每 50ms
+     * 的音频块都会看到非空文本进而调到这里，静音计时就被无限清零，尾静音永远
+     * 凑不满，每句话都要等到 16s 上限才停（真机日志：`asr stop Max elapsed=16000`，
+     * 唤醒到说话整整 17 秒）。计时归零只归 [onAudio] 管，它看的是音量。
+     */
     fun noteHeard() {
         heard = true
-        silenceMs = 0L
         speechRunMs = minSpeechMs
     }
 
