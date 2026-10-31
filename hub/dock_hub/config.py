@@ -633,6 +633,18 @@ def _parse_schedule(raw: dict[str, Any], known: set[str]) -> ScheduleConfig:
     )
 
 
+def _scene_field(item: dict[str, Any], name: str) -> Any:
+    """取场景里的一个键，YAML 1.1 的布尔键也认。
+
+    PyYAML 会把裸的 ``on:`` / ``off:`` 键解析成 ``True`` / ``False``（挪威问题连键
+    一起吃），示例配置里那种 ``off: [lamp]`` 落到 dict 里就换了名字。两种键都查，
+    写了引号的照常优先。
+    """
+    if name in item:
+        return item[name]
+    return item.get(name == "on")
+
+
 def _parse_scenes(raw: Any, devices: list[DeviceConfig]) -> list[SceneConfig]:
     if not raw:
         return []
@@ -652,8 +664,8 @@ def _parse_scenes(raw: Any, devices: list[DeviceConfig]) -> list[SceneConfig]:
         if ident in seen:
             raise ValueError(f"重复的场景 id：{ident}")
         seen.add(ident)
-        on = _scene_ids(ident, "on", item.get("on"), by_id)
-        off = _scene_ids(ident, "off", item.get("off"), by_id)
+        on = _scene_ids(ident, "on", _scene_field(item, "on"), by_id)
+        off = _scene_ids(ident, "off", _scene_field(item, "off"), by_id)
         run = _scene_run_ids(ident, item.get("run"), by_id)
         both = sorted(set(on) & set(off))
         if both:
