@@ -116,7 +116,7 @@ powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 
 ## 桌面伴侣
 
-默认 `companion.tts.deliver: false`：Hub 流式读 LLM，每写出一句（`。！？`）就 cue Mini TTS（`play_only`）。`POST /v1/companion/chat` 仍等全文再返回给安卓字幕。`companion.llm.base_url` 可填 OpenAI 兼容地址（如阿里云 MaaS `qwen3.8-flash`），`api_key` 只写本机 yaml；请求顶层带 `enable_thinking: false`（推理型模型不关会把额度花在思考上）。未配密钥且 base 是 Ollama 时仍走 `/api/chat`（`think: false`）。TTS 仍指向 Mini。对话不预先读米家状态。白名单灯/开关/灯带可口头开关（`ACTION: id.on|off` 或「关灯」「开灯带」「开空调」兜底），真正执行仍走 devices/command。打断走 `POST /v1/companion/stop`。另有 `POST /v1/companion/announce` 让外部脚本（如微信机器人）直接让书桌喇叭说话；天气由 `GET /v1/weather` 代取。说明见 [docs/companion.md](../docs/companion.md)。
+默认 `companion.tts.deliver: false`：Hub 流式读 LLM，每写出一句（`。！？`）就 cue Mini TTS（`play_only`）。`POST /v1/companion/chat` 仍等全文再返回给安卓字幕。`companion.llm.base_url` 可填 OpenAI 兼容地址（如阿里云 MaaS `qwen3.8-flash`），`api_key` 只写本机 yaml；请求顶层带 `enable_thinking: false`（推理型模型不关会把额度花在思考上）。未配密钥且 base 是 Ollama 时仍走 `/api/chat`（`think: false`）。TTS 仍指向 Mini。对话不预先读米家状态。白名单灯/开关/灯带可口头开关（`ACTION: id.on|off` 或「关灯」「开灯带」「开空调」兜底），真正执行仍走 devices/command。「慢慢关灯」这类说法会被直接接住：12 秒把亮度收到底再断电，不经过模型。打断走 `POST /v1/companion/stop`。另有 `POST /v1/companion/announce` 让外部脚本（如微信机器人）直接让书桌喇叭说话；天气由 `GET /v1/weather` 代取。说明见 [docs/companion.md](../docs/companion.md)。
 
 ## 定时任务
 

@@ -34,6 +34,9 @@ class PcSampler:
         self.want_gpu = gpu
         self._lock = threading.Lock()
         self._sample: dict[str, Any] | None = None
+        # 还没有任何样本时的「离线」时间戳。每次读都打当前时间的话，
+        # /v1/snapshot 的 payload 会每 3s 变一次，客户端每次都得重建状态。
+        self._since = utc_now()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._nvml_ok = False
@@ -58,7 +61,7 @@ class PcSampler:
             return None
         with self._lock:
             if self._sample is None:
-                return {"online": False, "updated_at": utc_now()}
+                return {"online": False, "updated_at": self._since}
             return dict(self._sample)
 
     def _loop(self) -> None:
@@ -68,16 +71,21 @@ class PcSampler:
             try:
                 self._sample_once()
             except Exception:
-                with self._lock:
-                    self._sample = {"online": False, "updated_at": utc_now()}
+                self._note_offline()
             if self._stop.wait(interval):
                 break
 
+    def _note_offline(self) -> None:
+        """记一次「采不到」。已经是离线态就别再改写时间戳了。"""
+        with self._lock:
+            current = self._sample
+            if isinstance(current, dict) and current.get("online") is False:
+                return
+            self._sample = {"online": False, "updated_at": utc_now()}
+
     def _sample_once(self) -> None:
         if psutil is None:
-            sample = {"online": False, "updated_at": utc_now()}
-            with self._lock:
-                self._sample = sample
+            self._note_offline()
             return
 
         cpu: dict[str, Any] = {"percent": _round(psutil.cpu_percent(interval=None))}

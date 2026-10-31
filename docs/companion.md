@@ -8,7 +8,7 @@
 
 ## 三台机器
 
-下面 IP 是**本宅当前地址**。换网络请改成自己的，安卓默认值也在 `HubPreferences` / `MiniConnection` 里。
+下面 IP 是**本宅当前地址**。换网络请改成自己的，安卓的默认地址在 `HubPreferences` / `MiniConnection` 里；**口令没有默认值**，Hub 的从配置向导复制、Mini 的看 `install-launchd.sh` 装完那行。
 
 ```
 K20 岸亭（脸+耳+字幕）
@@ -79,10 +79,12 @@ Hub 和 TTS 都跑在 Mini 上，`companion.tts.base_url` 填 `http://127.0.0.1:
 ```bash
 cd companion/tts
 HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
-  .venv/bin/python server.py --host 0.0.0.0 --port 18100 \
+  .venv/bin/python server.py --port 18100 \
   --ref-audio voices/shorekeeper/clone.wav --voice shorekeeper --play
 ```
 
+- 默认只听 `127.0.0.1`（Hub 和 TTS 都在 Mini 上）。要给局域网用必须同时给 `--token`（或 `HELM_TTS_TOKEN`），服务端会拒绝在非回环地址上无口令启动
+- 设了口令后，`hub.yaml` 里补 `companion.tts.token`，Hub 的 speak / stop / health / 语速推送都会带上 `Authorization: Bearer`
 - `POST /v1/speak` + `play_only: true` → **202**，本机边合成边播
 - 同一轮可以多次 speak（边写边念）：音频接到**同一条播放队列**，下一句不要 `flush` 上一句
 - `POST /v1/stop` → 立刻清缓冲并丢掉这一轮合成（再喊「小岸」走这条）
@@ -125,6 +127,8 @@ HF_HOME=.cache-base HF_HUB_OFFLINE=1 HF_HUB_DISABLE_XET=1 \
 2. 4B 漏写 ACTION 时，Hub 从「关灯 / 开灯带 / 开空调 / 关掉加湿器 / 启动无畏契约 / 亮一点 / 下一首 / 十分钟后叫我」这类话里按**设备名或书桌动词**兜底
 
 真正执行走 `POST /v1/devices/{id}/command`。窗帘、温湿度计等没有 on 类属性的仍不能口头开关。启动项仍要写进 `hub.yaml`。闲聊里的 ACTION 会丢掉。失败时不要假装「好。」。
+
+**慢慢关灯**：「慢慢关灯 / 灯渐渐暗下来 / 灯带慢慢关」不经过模型，Hub 直接接住。对能调亮度的灯，它用 12 秒把亮度从当前值一路收到 1 再断电（每 0.1 秒一档，一共 12 档），已经是关着的灯跳过；不能调亮度的开关就老实直接关。再喊一次会从当前亮度重新开始，喊「小岸」打断（`/v1/companion/stop`）会让它停在原地。响应里的 skill 事件带 `slow: true`。
 
 情绪由 Hub 持有（`companion-mood.yaml`）：漂泊者此刻疲倦/烦/轻快，守岸人安静/担心/乏。只注入两三行中文，不写分数。叹气、打招呼不当成关灯。上一轮问过，这一轮不要再问。
 
@@ -199,6 +203,7 @@ companion:
 |---|---|---|
 | 测试 Hub 成功，灯和对话失败 | Hub 栏填的是 Windows 探针（`:17892`）或 Mini 监控（`:17891`）的地址 | 改成 Mini `10.83.22.121:17890`，`/health` 要回 `service=dock-hub` |
 | 有字幕没声音 | TTS 没 `--play`、没接音箱、或 Hub 没填 `tts.base_url` | Mini 上看 `/health` 的 `play` / `ready` |
+| 有字幕没声音，日志里有 `tts_muted` | TTS 连挂两次后 Hub 主动闭嘴 60s，免得每句都等满 3s 超时 | 修好 `:18100`（看 `/health` 的 `ready`）；冷却会自动过期，不用重启 Hub |
 | 说话一顿一顿 | 旧 TTS 在下一句合成时 `flush` 了上一句 | 用现在的 `server.py`：同轮只排队，只有 `/v1/stop` 才清空 |
 | 开口总是「不知道」 | 伴侣模型没配好或探活失败；人设又禁止编造 | 在配置向导「伴侣大模型」里点**测试连接**确认可用 |
 | 手机看不到天气 | 手机所在 Wi‑Fi 无外网（本宅 `P-5G` 就是纯局域网） | 天气默认由 **Hub 代取**；只要跑 Hub 的机器能上网即可。Hub 不可用才回落手机直连 |

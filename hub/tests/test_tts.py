@@ -261,5 +261,58 @@ class MusicTest(unittest.TestCase):
         opened.assert_not_called()
 
 
+class CueBreakerTest(unittest.TestCase):
+    """cue 这条路连挂两次就歇 60s——别让一轮五句话白等 15 秒超时。"""
+
+    def _broken(self) -> MagicMock:
+        return MagicMock(side_effect=urllib.error.URLError("connection refused"))
+
+    def test_outage_mutes_after_two_failures(self) -> None:
+        tts = Tts("http://127.0.0.1:9")
+        opened = self._broken()
+        with patch("dock_hub.tts.urllib.request.urlopen", opened):
+            for i in range(4):
+                self.assertIsNone(tts.speak(f"第{i + 1}句。", f"t{i}"))
+        # 前两次真的发出去了；后两次在冷却里，根本不发
+        self.assertEqual(opened.call_count, 2)
+
+    def test_success_resets_fail_count(self) -> None:
+        tts = Tts("http://127.0.0.1:9")
+        opened = self._broken()
+        with patch("dock_hub.tts.urllib.request.urlopen", opened):
+            self.assertIsNone(tts.speak("一。", "t1"))
+            opened.side_effect = None
+            opened.return_value = FakeResponse(b'{"ok": true}')
+            self.assertIsNone(tts.speak("二。", "t2"))
+            opened.side_effect = urllib.error.URLError("down again")
+            self.assertIsNone(tts.speak("三。", "t3"))
+        # 成功清过一次账：第三次失败只是第 1 次连续失败，还没进冷却
+        self.assertEqual(opened.call_count, 3)
+
+    def test_recovers_after_cooldown(self) -> None:
+        tts = Tts("http://127.0.0.1:9")
+        opened = self._broken()
+        with patch("dock_hub.tts.urllib.request.urlopen", opened):
+            self.assertIsNone(tts.speak("一。", "t1"))
+            self.assertIsNone(tts.speak("二。", "t2"))
+            self.assertEqual(opened.call_count, 2)
+            tts._skip_until = 0.0  # 冷却到点（time.monotonic 追上来了）
+            opened.side_effect = None
+            opened.return_value = FakeResponse(b'{"ok": true}')
+            self.assertIsNone(tts.speak("三。", "t3"))
+        self.assertEqual(opened.call_count, 3)
+
+    def test_reads_ignore_cooldown(self) -> None:
+        # 朗读要的是 wav，不是 cue：TTS 挂了也得照发，朗读自己有 90s 的账
+        tts = Tts("http://127.0.0.1:9")
+        opened = self._broken()
+        with patch("dock_hub.tts.urllib.request.urlopen", opened):
+            self.assertIsNone(tts.speak("一。", "t1"))
+            self.assertIsNone(tts.speak("二。", "t2"))
+            # 真实朗读调用是 play_only=False + play=False（要 wav，不要播）
+            self.assertIsNone(tts.speak("三。", "t3", play_only=False, play=False))
+        self.assertEqual(opened.call_count, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

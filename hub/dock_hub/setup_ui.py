@@ -12,9 +12,11 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
+from dock_hub.assets import read_asset
 from dock_hub.config import (
     default_config_path,
     device_to_raw,
@@ -44,7 +46,7 @@ def setup_asset_path() -> Path:
 
 
 def setup_page_html() -> bytes:
-    return setup_asset_path().read_bytes()
+    return read_asset(setup_asset_path())
 
 
 def is_local_client(address: tuple[str, int] | str) -> bool:
@@ -170,6 +172,15 @@ def fetch_mijia_props(hub: DockHub, name: str) -> tuple[list[dict[str, Any]], st
         return [], f"拉取属性失败：{exc}"
 
 
+def mask_secret(value: str, keep: int = 4) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= keep * 2:
+        return "••••"
+    return f"••••{text[-keep:]}"
+
+
 def build_state(hub: DockHub) -> dict[str, Any]:
     from dock_hub.server import lan_ips
 
@@ -178,8 +189,13 @@ def build_state(hub: DockHub) -> dict[str, Any]:
     if devices_error and status != "ok":
         message = message or devices_error
 
+    # Token 是安卓那边的口令，原文不进浏览器：页面只显示末 4 位，
+    # 用户点「复制」时才走 /setup/api/token/reveal 取一次。
+    config_raw = hub_config_to_raw(hub.config, mask_secrets=True)
+    config_raw["token"] = ""
     return {
-        "config": hub_config_to_raw(hub.config),
+        "config": config_raw,
+        "token_masked": mask_secret(hub.config.token),
         "lan_ips": lan_ips(),
         "mijia": status,
         "mijia_message": message,
@@ -261,7 +277,7 @@ def apply_voice(hub: DockHub, body: dict[str, Any]) -> dict[str, Any]:
         write_output_volume(volume)
     except (OSError, subprocess.SubprocessError) as exc:
         note = f"音量没改成：{exc}"
-    pushed = _push_voice_to_tts(comp.tts_base_url, volume, speed)
+    pushed = _push_voice_to_tts(comp.tts_base_url, volume, speed, getattr(comp, "tts_token", None))
     if pushed:
         note = pushed if note == "已生效" else f"{note}；{pushed}"
     return {"ok": True, "message": note, "volume": volume, "speed": speed}
@@ -282,17 +298,17 @@ def _write_voice_yaml(hub: DockHub, volume: int, speed: float) -> None:
     save_config_raw(raw, path)
 
 
-def _push_voice_to_tts(base_url: str | None, volume: int, speed: float) -> str | None:
+def _push_voice_to_tts(
+    base_url: str | None, volume: int, speed: float, token: str | None = None
+) -> str | None:
     if not base_url:
         return None
     url = base_url.rstrip("/") + "/v1/settings"
     payload = json.dumps({"volume": volume, "speed": speed}).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-    )
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if (token or "").strip():
+        headers["Authorization"] = f"Bearer {token.strip()}"
+    req = urllib.request.Request(url, data=payload, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=2) as resp:
             if resp.status == 404:
@@ -573,6 +589,10 @@ def handle_setup_post(hub: DockHub, path: str, body: dict[str, Any], handler: An
     if path == "/setup/api/token":
         handler._json(200, {"token": secrets.token_urlsafe(32)})  # noqa: SLF001
         return True
+    if path == "/setup/api/token/reveal":
+        # 用户点「复制」时才取一次原文；调用方已过 ensure_local + CSRF 检查
+        handler._json(200, {"token": hub.config.token})  # noqa: SLF001
+        return True
     if path == "/setup/api/llm-models":
         base_url, _, api_key = _resolve_llm(hub, body)
         models, error = fetch_llm_models(base_url, api_key)
@@ -593,6 +613,26 @@ def handle_setup_post(hub: DockHub, path: str, body: dict[str, Any], handler: An
         handler._json(200, result)  # noqa: SLF001
         return True
     return False
+
+
+def guard_write(handler: Any) -> None:
+    """配置写入的 CSRF 防线。
+
+    本机访问是免 Token 的（页面就在 127.0.0.1 上），所以只要用户浏览器打开
+    了恶意页面，一个 text/plain 的简单请求就能改掉 token / llm.base_url。
+    这里要求两点：
+    1. Content-Type 必须是 application/json —— 跨站简单请求做不到，会触发预检；
+    2. 带 Origin 时必须是同源 —— 顺手挡住预检被放行的漏网情况。
+    """
+    ctype = (handler.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if ctype != "application/json":
+        raise HubError("unsupported", "配置写入需要 application/json", status=415)
+    origin = (handler.headers.get("Origin") or "").strip()
+    if not origin:
+        return
+    host = (handler.headers.get("Host") or "").strip().lower()
+    if not host or urlparse(origin).netloc.lower() != host:
+        raise HubError("forbidden", "拒绝跨站写入配置")
 
 
 def ensure_local(handler: Any) -> None:

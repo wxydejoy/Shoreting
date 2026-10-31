@@ -102,6 +102,7 @@ class Gate:
                 "command": limits.command_per_min,
                 "login": limits.login_per_min,
                 "read": limits.read_per_min,
+                "mirror": limits.mirror_per_min,
             }
         )
         return gate if gate._limiters else None

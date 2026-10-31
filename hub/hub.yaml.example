@@ -47,7 +47,7 @@ media:
 mini:
   enabled: true
   base_url: "http://127.0.0.1:17891"
-  token: helm-mini-weiekko
+  token: ""            # 填 mini/install-launchd.sh 打印出来的那枚，没有它 Mini 服务会拒绝启动
   pc_ms: 1000          # 电脑约 1 秒一次
   mijia_ms: 15000      # 米家约 15 秒一次
 
@@ -93,19 +93,6 @@ mini:
 #     base_url: "http://127.0.0.1:18100"
 #     timeout_sec: 20
 #     # deliver: true   # 才把 wav 交给手机。默认 false：Mini 本机出声
-#   # 泰缇斯：Mini 上 Hermes API（复杂任务）。见 companion/tethys/README.md
-#   tethys:
-#     enabled: true
-#     base_url: "http://127.0.0.1:8642/v1"
-#     model: hermes-agent
-#     api_key: "与 Hermes API_SERVER_KEY 相同"
-#     timeout_sec: 120
-#     polish: true
-#     speak: true
-#     ack: "好。"
-#     weixin_notify: true          # 复杂任务全文同步微信；false 关闭
-#     session_key: tethys:wanderer # Hermes 记忆范围，不要和微信 session 混用
-#     # notify_url: "http://10.83.22.121:8643/v1/weixin"  # 默认从 base_url 推 :8643
 
 # 主屏那一个温度源（只允许一个；不要就整段删掉）
 temperature:
@@ -267,3 +254,18 @@ devices:
 # calendar:
 #   url: "https://example.com/calendar.ics"
 #   name: "我的日历"
+#
+# 访客模式（F26）：有外人时说一句「有客人」，/chats /diary /week /memory 连
+# 页面带接口一起藏起来，这期间的对话也不落盘、不记事。「客人走了」恢复。
+# 默认开着，6 小时没等到「客人走了」也会自己恢复；guest: false 整个关掉。
+# guest: false
+# guest:
+#   hours: 4
+#
+# 灯光氛围（F17）：灯带亮度跟着「桌面在干嘛」走——番茄钟在走抬到专注档，
+# 睡前朗读在念降到睡前档，结束回到原来那档。被手动关掉就不再抢。
+# 硬件只有亮度，没有颜色/色温，所以没有「变色」。device 不写就是关着。
+# ambience:
+#   device: desk-led
+#   timer_brightness: 60     # 专注档
+#   reading_brightness: 15   # 睡前档

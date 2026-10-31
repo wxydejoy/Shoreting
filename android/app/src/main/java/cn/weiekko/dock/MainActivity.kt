@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
                 intent.getStringExtra(WakeWordService.EXTRA_TEXT).orEmpty(),
                 intent.getBooleanExtra(WakeWordService.EXTRA_SETTLED, false),
                 intent.getStringExtra(WakeWordService.EXTRA_TURN).orEmpty(),
+                intent.getStringExtra(WakeWordService.EXTRA_SPEAKER).orEmpty(),
             )
         }
     }
@@ -187,6 +188,8 @@ class MainActivity : ComponentActivity() {
                             composable("home") {
                                 HomeScreen(
                                     state = state,
+                                    media = viewModel.media,
+                                    voice = viewModel.voice,
                                     onOpenSettings = { navController.navigate("settings") },
                                     onPower = viewModel::setPower,
                                     onWinClick = viewModel::tapWinApp,
@@ -218,6 +221,13 @@ class MainActivity : ComponentActivity() {
                                     onSetWeatherCity = viewModel::setWeatherCity,
                                     onSetWakeWord = viewModel::setWakeWord,
                                     onSetDeskPresence = viewModel::setDeskPresence,
+                                    onSetVoiceprint = viewModel::setVoiceprintEnabled,
+                                    onStartVoiceprintEnroll = viewModel::startVoiceprintEnroll,
+                                    onCancelVoiceprintEnroll = viewModel::cancelVoiceprintEnroll,
+                                    onDeleteVoiceprintSpeaker = viewModel::deleteVoiceprintSpeaker,
+                                    onLoadVoiceprint = viewModel::loadVoiceprintSpeakers,
+                                    onSetMirrorEnabled = viewModel::setMirrorEnabled,
+                                    onSetMirrorApps = viewModel::setMirrorApps,
                                     onLoadMemory = viewModel::loadMemory,
                                     onDeleteMemory = viewModel::deleteMemory,
                                     onSetHubEnabled = viewModel::setHubEnabled,

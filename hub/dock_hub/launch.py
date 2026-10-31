@@ -3,11 +3,18 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from dock_hub.config import DeviceConfig
 from dock_hub.errors import HubError
+
+SCAN_TTL = 1.5
+_scan_lock = threading.Lock()
+_scan_at = 0.0
+_scan_names: set[str] = set()
 
 GENERIC_PROCESS_NAMES = {
     "cmd.exe",
@@ -62,7 +69,30 @@ def process_names(cfg: DeviceConfig) -> list[str]:
     return [leaf]
 
 
-def running_image_names() -> set[str]:
+def running_image_names(*, force: bool = False) -> set[str]:
+    """本机进程名快照。手机每 3 秒轮询一次，一次 snapshot 里还会问两遍，
+    所以留 1.5 秒缓存：一轮只有一个调用真的去扫进程表。"""
+
+    global _scan_at, _scan_names
+    with _scan_lock:
+        now = time.monotonic()
+        if not force and _scan_at and now - _scan_at < SCAN_TTL:
+            return set(_scan_names)
+        names = _scan_images()
+        _scan_at = time.monotonic()
+        _scan_names = names
+        return set(names)
+
+
+def invalidate_running_cache() -> None:
+    """刚拉起程序时叫一声，下一轮立刻重新扫，别拿旧快照说没开。"""
+
+    global _scan_at
+    with _scan_lock:
+        _scan_at = 0.0
+
+
+def _scan_images() -> set[str]:
     names: set[str] = set()
     try:
         import psutil

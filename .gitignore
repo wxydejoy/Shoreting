@@ -25,6 +25,7 @@ android/local.properties
 android/app/libs/*.aar
 android/app/src/main/assets/kws/*.onnx
 android/app/src/main/assets/asr/*.onnx
+android/app/src/main/assets/voiceprint/*.onnx
 .idea/
 .DS_Store
 /1.mp4

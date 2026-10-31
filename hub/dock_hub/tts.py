@@ -34,6 +34,11 @@ NOISE_TIMEOUT_SEC = 3.0
 # 本地电台开关：同上
 MUSIC_TIMEOUT_SEC = 3.0
 
+# TTS 连续几次没应答就先别逐句去试：cue 每句要等满 3s 超时，5 句就是 15s，
+# 用户那边只感觉「小岸反应特别慢」。冷却期内只出字幕不发音。
+TTS_FAIL_LIMIT = 2
+TTS_SKIP_SEC = 60.0
+
 Log = Callable[..., None]
 
 
@@ -49,14 +54,19 @@ class Tts:
         deliver: bool = False,
         timeout_sec: float = 20.0,
         speed: float = 1.0,
+        token: str = "",
         log: Log | None = None,
     ) -> None:
         self.base_url = (base_url or "").strip().rstrip("/")
         self.deliver = bool(deliver)
         self.timeout_sec = float(timeout_sec)
         self.speed = round(float(speed or 1.0), 2)
+        self.token = (token or "").strip()
         # 打点回调：真的用了才传（Companion 传 _latency），单独测时不传
         self.log = log
+        # 熔断（F 收尾）：cue 这条路连着不应答就歇 60s，别每句都等满超时
+        self._fails = 0
+        self._skip_until = 0.0
 
     @classmethod
     def from_config(cls, config: Any, *, log: Log | None = None) -> Tts:
@@ -65,6 +75,7 @@ class Tts:
             deliver=bool(getattr(config, "tts_deliver", False)),
             timeout_sec=float(getattr(config, "tts_timeout_sec", 20.0) or 20.0),
             speed=float(getattr(config, "voice_speed", 1.0) or 1.0),
+            token=str(getattr(config, "tts_token", "") or ""),
             log=log,
         )
 
@@ -72,16 +83,43 @@ class Tts:
     def configured(self) -> bool:
         return bool(self.base_url)
 
+    def _headers(self, *, accept: str = "application/json", content_type: str | None = None) -> dict[str, str]:
+        headers = {"Accept": accept}
+        if content_type:
+            headers["Content-Type"] = content_type
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
+
     def _note(self, turn: str, stage: str, **fields: Any) -> None:
         if self.log is not None:
             self.log(turn, stage, **fields)
+
+    def _quiet(self) -> bool:
+        """冷却中：TTS 刚才连着不应答，这一轮只出字幕。"""
+        return self._skip_until > time.monotonic()
+
+    def _fail(self, turn: str) -> None:
+        self._fails += 1
+        if self._fails < TTS_FAIL_LIMIT:
+            return
+        self._fails = 0
+        self._skip_until = time.monotonic() + TTS_SKIP_SEC
+        print(
+            f"TTS 连续 {TTS_FAIL_LIMIT} 次没应答，{int(TTS_SKIP_SEC)}s 内只出字幕不发音",
+            flush=True,
+        )
+        self._note(turn, "tts_muted", sec=int(TTS_SKIP_SEC))
+
+    def _ok(self) -> None:
+        self._fails = 0
 
     def ping(self) -> bool:
         """TTS 在不在、模型加载完没有。0.4 秒就放弃：这是探活，不是干活。"""
         if not self.configured:
             return False
         try:
-            req = urllib.request.Request(join_url(self.base_url, "/health"), method="GET")
+            req = urllib.request.Request(join_url(self.base_url, "/health"), method="GET", headers=self._headers())
             with urllib.request.urlopen(req, timeout=0.4) as resp:
                 if not (200 <= resp.status < 300):
                     return False
@@ -102,7 +140,7 @@ class Tts:
             join_url(self.base_url, "/v1/stop"),
             data=b"{}",
             method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers=self._headers(content_type="application/json"),
         )
         try:
             with urllib.request.urlopen(req, timeout=STOP_TIMEOUT_SEC) as resp:
@@ -123,6 +161,10 @@ class Tts:
             return None
         if play_only is None:
             play_only = not self.deliver
+        if play_only and self._quiet():
+            # 冷却期：别再花 3s 去等一个明知道不会应答的服务
+            self._note(turn, "tts_skipped")
+            return None
         body: dict[str, Any] = {
             "text": text,
             "voice": "shorekeeper",
@@ -146,7 +188,7 @@ class Tts:
             join_url(self.base_url, "/v1/speak"),
             data=payload,
             method="POST",
-            headers={"Content-Type": "application/json", "Accept": accept},
+            headers=self._headers(accept=accept, content_type="application/json"),
         )
         started = time.monotonic()
         try:
@@ -154,7 +196,9 @@ class Tts:
                 raw = resp.read()
         except (urllib.error.URLError, TimeoutError, OSError):
             self._note(turn, "tts_error", ms=_ms(started))
+            self._fail(turn)
             return None
+        self._ok()
         if play_only:
             self._note(turn, "tts_cued", ms=_ms(started), bytes=len(raw))
             return None
@@ -181,7 +225,7 @@ class Tts:
             join_url(self.base_url, "/v1/noise"),
             data=payload,
             method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers=self._headers(content_type="application/json"),
         )
         try:
             with urllib.request.urlopen(req, timeout=NOISE_TIMEOUT_SEC) as resp:

@@ -10,6 +10,8 @@ import yaml
 
 from dock_hub import DEFAULT_PORT
 from dock_hub.errors import HubError
+from dock_hub.guest import DEFAULT_HOURS as _GUEST_DEFAULT_HOURS
+from dock_hub.guest import clamp_hours as _guest_clamp_hours
 
 ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -55,6 +57,8 @@ class LimitsConfig:
     command_per_min: int = 60
     login_per_min: int = 10
     read_per_min: int = 20
+    # 通知镜像（F35）：应用爱连发，桶给宽一点，别让正常消息撞墙
+    mirror_per_min: int = 30
     # 慢请求的并发名额（`*_lanes`）：等她说话、等音频合成时各占一个位子。
     # 满了回 503，不排队——排队只会让安卓一直转圈。0 表示不限。
     chat_lanes: int = 2
@@ -225,6 +229,7 @@ class CompanionConfig:
     num_ctx: int = 4096
     num_predict: int = 256
     tts_base_url: str | None = None
+    tts_token: str | None = None
     tts_timeout_sec: float = 20.0
     tts_deliver: bool = False
     persona: str | None = None
@@ -310,6 +315,21 @@ class AlarmConfig:
 
 
 @dataclass
+class AmbienceConfig:
+    """灯光氛围（F17）：灯带亮度跟着「桌面在干嘛」走。
+
+    番茄钟在走 → ``timer_brightness``（专注档）；睡前朗读在念 →
+    ``reading_brightness``（睡前档）；都没有 → 回到进来前那一档。
+    ``device`` 空 = 整条关着。硬件只有亮度没有颜色/色温，所以「变色」
+    在这条里就是「变亮变暗」。
+    """
+
+    device: str = ""
+    timer_brightness: int = 60
+    reading_brightness: int = 15
+
+
+@dataclass
 class ThemeConfig:
     """主题皮肤（F36）。日期归 Hub：生日、考试周；节日（春节等）内置。"""
 
@@ -330,6 +350,14 @@ class DiaryConfig:
 
     enabled: bool = True
     at: str = "21:30"
+
+
+@dataclass
+class GuestConfig:
+    """访客模式（F26）。有外人时一句话把记录收起来；guest: false 整个关掉。"""
+
+    enabled: bool = True
+    hours: float = _GUEST_DEFAULT_HOURS  # 忘了说「客人走了」到点自动恢复
 
 
 @dataclass
@@ -384,9 +412,11 @@ class HubConfig:
     focus: FocusConfig = field(default_factory=FocusConfig)
     dusk: DuskConfig = field(default_factory=DuskConfig)
     alarm: AlarmConfig = field(default_factory=AlarmConfig)
+    ambience: AmbienceConfig = field(default_factory=AmbienceConfig)
     theme: ThemeConfig = field(default_factory=ThemeConfig)
     wallpaper: WallpaperConfig = field(default_factory=WallpaperConfig)
     diary: DiaryConfig = field(default_factory=DiaryConfig)
+    guest: GuestConfig = field(default_factory=GuestConfig)
     # 日程订阅（F13）；None = 没配，「今天有什么事」就照实说不知道
     calendar: CalendarConfig | None = None
     # 回忆相框（F37）的图库目录；None = 没显式配（false 时 photos_off = True）
@@ -501,9 +531,11 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     focus = _parse_focus(raw.get("focus"), scenes)
     dusk = _parse_dusk(raw.get("dusk"), devices)
     alarm = _parse_alarm(raw.get("alarm"), devices)
+    ambience = _parse_ambience(raw.get("ambience"), devices)
     theme = _parse_theme(raw.get("theme"))
     wallpaper = _parse_wallpaper(raw.get("wallpaper"))
     diary = _parse_diary(raw.get("diary"))
+    guest = _parse_guest(raw.get("guest"))
     calendar = _parse_calendar(raw.get("calendar"))
     photos, photos_off = _parse_photos(raw.get("photos"), path)
 
@@ -527,9 +559,11 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         focus=focus,
         dusk=dusk,
         alarm=alarm,
+        ambience=ambience,
         theme=theme,
         wallpaper=wallpaper,
         diary=diary,
+        guest=guest,
         calendar=calendar,
         photos=photos,
         photos_off=photos_off,
@@ -1084,6 +1118,7 @@ def _parse_companion(raw: Any) -> CompanionConfig | None:
         num_ctx=int(llm.get("num_ctx") or 4096),
         num_predict=int(llm.get("num_predict") or 256),
         tts_base_url=tts_url,
+        tts_token=str(tts.get("token") or "").strip() or None,
         tts_timeout_sec=float(tts.get("timeout_sec") or 20),
         tts_deliver=bool(tts.get("deliver", False)),
         persona=persona or None,
@@ -1315,6 +1350,25 @@ def _parse_alarm(raw: Any, devices: list[DeviceConfig]) -> AlarmConfig:
     )
 
 
+def _parse_ambience(raw: Any, devices: list[DeviceConfig]) -> AmbienceConfig:
+    """灯光氛围（F17）：device 不写就是关着；写了就必须存在。"""
+    if raw is None or raw is False:
+        return AmbienceConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("ambience 必须是对象，或用 ambience: false 关掉")
+    device = str(raw.get("device") or "").strip()
+    if not device:
+        return AmbienceConfig()
+    known = {item.id for item in devices}
+    if device not in known:
+        raise ValueError(f"ambience.device 指向的设备 {device!r} 不存在")
+    return AmbienceConfig(
+        device=device,
+        timer_brightness=_dusk_int(raw, "timer_brightness", 60, 1, 100),
+        reading_brightness=_dusk_int(raw, "reading_brightness", 15, 1, 100),
+    )
+
+
 def _parse_wallpaper(raw: Any) -> WallpaperConfig:
     """一句话壁纸（F39）：不写或 true 开，false 关。"""
     if raw is None or raw is True:
@@ -1336,6 +1390,19 @@ def _parse_diary(raw: Any) -> DiaryConfig:
             return DiaryConfig()
         return DiaryConfig(at=parse_clock(at_val, "diary.at"))
     raise ValueError("diary 要是 false 或 {at: \"21:30\"}")
+
+
+def _parse_guest(raw: Any) -> GuestConfig:
+    """访客模式（F26）：不写或 true 开（6 小时自动恢复），false 关，对象可改 hours。"""
+    if raw is None or raw is True:
+        return GuestConfig()
+    if raw is False:
+        return GuestConfig(enabled=False)
+    if isinstance(raw, dict):
+        if raw.get("hours") is None:
+            return GuestConfig()
+        return GuestConfig(hours=_guest_clamp_hours(raw.get("hours")))
+    raise ValueError("guest 要是 false 或 {hours: 6}")
 
 
 def _parse_calendar(raw: Any) -> CalendarConfig | None:
@@ -1513,7 +1580,13 @@ def proactive_to_raw(config: ProactiveConfig) -> dict[str, Any]:
     return raw
 
 
-def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
+def hub_config_to_raw(config: HubConfig, *, mask_secrets: bool = False) -> dict[str, Any]:
+    """把配置导回 YAML 形状。
+
+    mask_secrets=True 用于配置向导的读接口：上游大模型密钥与探针口令只回
+    "已配置" 标记，不把原文发到浏览器。写接口仍然按字段为空即保留原值的
+    语义处理（见 setup_ui._payload_to_raw），所以脱敏不会把密钥抹掉。
+    """
     raw: dict[str, Any] = {
         "name": config.name,
         "host": config.host,
@@ -1548,6 +1621,12 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             "say": config.alarm.say,
             **({"device": config.alarm.device} if config.alarm.device else {}),
         }
+    if config.ambience.device:
+        raw["ambience"] = {
+            "device": config.ambience.device,
+            "timer_brightness": config.ambience.timer_brightness,
+            "reading_brightness": config.ambience.reading_brightness,
+        }
     if config.theme.birthday or config.theme.exam_weeks:
         raw["theme"] = {
             **({"birthday": config.theme.birthday} if config.theme.birthday else {}),
@@ -1559,6 +1638,10 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
         raw["diary"] = False
     elif config.diary.at != DiaryConfig().at:
         raw["diary"] = {"at": config.diary.at}
+    if not config.guest.enabled:
+        raw["guest"] = False
+    elif config.guest.hours != GuestConfig().hours:
+        raw["guest"] = {"hours": config.guest.hours}
     if config.calendar is not None:
         # 日程订阅（F13）：配了才写回，没配不占 yaml 一行。
         entry: dict[str, Any] = {"url": config.calendar.url}
@@ -1590,7 +1673,10 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
                 "timeout_sec": config.companion.timeout_sec,
             }
             if config.companion.llm_api_key:
-                llm["api_key"] = config.companion.llm_api_key
+                if mask_secrets:
+                    llm["api_key_set"] = True
+                else:
+                    llm["api_key"] = config.companion.llm_api_key
             if config.companion.num_ctx != 4096:
                 llm["num_ctx"] = config.companion.num_ctx
             if config.companion.num_predict != 256:
@@ -1598,6 +1684,8 @@ def hub_config_to_raw(config: HubConfig) -> dict[str, Any]:
             companion["llm"] = llm
             if config.companion.tts_base_url:
                 tts: dict[str, Any] = {"base_url": config.companion.tts_base_url}
+                if config.companion.tts_token:
+                    tts["token"] = config.companion.tts_token
                 if config.companion.tts_timeout_sec != 20.0:
                     tts["timeout_sec"] = config.companion.tts_timeout_sec
                 if config.companion.tts_deliver:

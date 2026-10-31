@@ -1571,8 +1571,36 @@
       el.style.display = 'block';
       setTimeout(() => el.style.display = 'none', 3200);
     }
-    function copy(id) {
+    function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      return Promise.resolve();
+    }
+    async function copy(id) {
       const el = document.getElementById(id);
+      if (id === 'token' && !el.value.trim()) {
+        // 页面上不再回显 token，只在用户主动复制时向后端要一次
+        try {
+          const r = await fetch('/setup/api/token/reveal', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.token) throw new Error(data.message || '读取失败');
+          await copyText(data.token);
+          toast('已复制 Token');
+        } catch (e) {
+          toast('复制失败：' + (e.message || e));
+        }
+        return;
+      }
       el.select();
       document.execCommand('copy');
       toast('已复制');
@@ -1761,7 +1789,11 @@
       loading = true;
       document.getElementById('lanIp').value = (data.lan_ips && data.lan_ips[0]) || '127.0.0.1';
       document.getElementById('port').value = data.config.port || 17890;
-      document.getElementById('token').value = data.config.token || '';
+      const tokenEl = document.getElementById('token');
+      tokenEl.value = data.config.token || '';
+      tokenEl.placeholder = data.token_masked
+        ? `已配置 ${data.token_masked}，留空则不改；复制请点按钮`
+        : '还没设置 Token';
       document.getElementById('name').value = data.config.name || 'study';
       document.getElementById('pcEnabled').checked = !!(data.config.pc && data.config.pc.enabled !== false);
       const t = data.config.temperature;

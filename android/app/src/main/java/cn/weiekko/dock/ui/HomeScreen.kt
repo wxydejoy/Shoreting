@@ -56,6 +56,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -101,6 +102,10 @@ import cn.weiekko.dock.data.WinApp
 import cn.weiekko.dock.data.defaultDockLayout
 import cn.weiekko.dock.data.deviceType
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -115,6 +120,8 @@ private val StatShadow = Shadow(color = Color.Black.copy(alpha = 0.95f), offset 
 @Composable
 fun HomeScreen(
     state: DockUiState,
+    media: StateFlow<MediaInfo>,
+    voice: StateFlow<VoiceState>,
     onOpenSettings: () -> Unit,
     onPower: (HubDevice, Boolean) -> Unit,
     onWinClick: (WinApp) -> Unit,
@@ -139,6 +146,11 @@ fun HomeScreen(
         Shadow()
     }
     val editing = state.editing
+    // 只订阅「有没有在听」：ASR 的半句交给下面的叶子节点自己收，
+    // 否则一句话里十几二十次 partial 会把整个主屏重新组合一遍。
+    val voiceListening by remember(voice) {
+        voice.map { it.listening }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = false)
     BackHandler(enabled = editing, onBack = onExitEdit)
 
     // F37 回忆相框：没有数据可看的时刻，整块屏幕交给一张慢慢换的照片
@@ -444,8 +456,8 @@ fun HomeScreen(
                     }
 
                     PlaceModule(DockModule.Media, edit) {
-                        MediaTile(
-                            media = state.media,
+                        LiveMediaTile(
+                            media = media,
                             interactive = !editing,
                             onAction = onMedia,
                             onLongPress = { onSelectModule(DockModule.Media) },
@@ -539,7 +551,7 @@ fun HomeScreen(
             }
 
             val captionText = when {
-                state.hubSleeping || state.voiceListening -> null
+                state.hubSleeping || voiceListening -> null
                 state.companionBusy -> "……"
                 !state.companionError.isNullOrBlank() -> state.companionError
                 !state.companionReply.isNullOrBlank() -> state.companionReply
@@ -556,7 +568,30 @@ fun HomeScreen(
                 )
             }
 
-            if (state.hubSleeping && !state.voiceListening) {
+            // 通知镜像（F35）：手机收到的重要消息在顶部亮一下，30 秒自己收走。
+            // 睡着了就别亮了——黑屏是让人休息的，不是让人看消息的。
+            val mirrorLine = state.mirrorText
+            if (mirrorLine != null && !state.hubSleeping && !state.editing) {
+                MirrorBanner(
+                    text = mirrorLine,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 10.dp)
+                        .zIndex(16f),
+                )
+            }
+
+            // 访客模式（F26）：开着的时候她自己知道收着点，屏上留个角标提醒主人
+            if (state.snapshot?.guest != null && !state.hubSleeping && !state.editing) {
+                GuestBadge(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 10.dp, end = 14.dp)
+                        .zIndex(16f),
+                )
+            }
+
+            if (state.hubSleeping && !voiceListening) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -586,10 +621,9 @@ fun HomeScreen(
                 )
             }
 
-            if (state.voiceListening) {
-                WakeListeningChip(
-                    text = state.voiceText,
-                    settled = state.voiceSettled,
+            if (voiceListening) {
+                LiveWakeListeningChip(
+                    voice = voice,
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = 20.dp, bottom = 16.dp, end = 80.dp)
@@ -1432,6 +1466,33 @@ private fun WinTile(
     }
 }
 
+/** 每秒一次的媒体状态只在这里收，主屏本体不跟着重组。 */
+@Composable
+private fun LiveMediaTile(
+    media: StateFlow<MediaInfo>,
+    interactive: Boolean,
+    onAction: (String) -> Unit,
+    onLongPress: () -> Unit = {},
+) {
+    val info by media.collectAsStateWithLifecycle()
+    MediaTile(
+        media = info,
+        interactive = interactive,
+        onAction = onAction,
+        onLongPress = onLongPress,
+    )
+}
+
+/** ASR 半句只在这里收，只有这颗胶囊随它重组。 */
+@Composable
+private fun LiveWakeListeningChip(
+    voice: StateFlow<VoiceState>,
+    modifier: Modifier = Modifier,
+) {
+    val state by voice.collectAsStateWithLifecycle()
+    WakeListeningChip(text = state.text, settled = state.settled, modifier = modifier)
+}
+
 @Composable
 private fun WakeListeningChip(
     text: String,
@@ -1498,6 +1559,53 @@ private fun CompanionCaption(
         style = TextStyle(shadow = StatShadow),
         modifier = modifier,
     )
+}
+
+/** 通知镜像（F35）：顶部一条窄横幅，亮一下就走。 */
+@Composable
+private fun MirrorBanner(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = Color.Black.copy(alpha = 0.55f),
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text,
+                color = Color.White.copy(alpha = 0.88f),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = TextStyle(shadow = StatShadow),
+            )
+        }
+    }
+}
+
+/** 访客模式（F26）：右上角一个小角标，记录都收着呢——主人的底气，不是访客的提示。 */
+@Composable
+private fun GuestBadge(
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = Color.Black.copy(alpha = 0.45f),
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Text(
+            "访客",
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 11.sp,
+            style = TextStyle(shadow = StatShadow),
+        )
+    }
 }
 
 /** 番茄钟细环（F9）：倒计时走环、正计时满环，中间是时间。 */
@@ -1575,9 +1683,10 @@ private fun HomePreview() {
                 prefsReady = true,
                 preview = true,
                 snapshot = DemoSnapshot.create(),
-                media = DemoSnapshot.media,
                 weather = DemoSnapshot.weather,
             ),
+            media = remember { MutableStateFlow(DemoSnapshot.media) },
+            voice = remember { MutableStateFlow(VoiceState()) },
             onOpenSettings = {},
             onPower = { _, _ -> },
             onWinClick = {},

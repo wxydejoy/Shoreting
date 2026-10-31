@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import cn.weiekko.dock.media.MirrorFilter
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
@@ -27,7 +28,9 @@ data class HubConnection(
     companion object {
         const val DEFAULT_HOST = "10.83.22.121"
         const val DEFAULT_PORT = 17890
-        const val DEFAULT_TOKEN = "knaksDr1lLdKiPJSokMttA3YbyMdeI9q1w7ULvoc_4g"
+
+        /** 出厂不预置口令：token 只存在于 hub.yaml，装机时从配置向导复制。 */
+        const val DEFAULT_TOKEN = ""
     }
 }
 
@@ -44,7 +47,9 @@ data class MiniConnection(
     companion object {
         const val DEFAULT_HOST = "10.83.22.121"
         const val DEFAULT_PORT = 17891
-        const val DEFAULT_TOKEN = "helm-mini-weiekko"
+
+        /** Mini 监控的口令由 install-launchd.sh 生成，不写进 APK。 */
+        const val DEFAULT_TOKEN = ""
     }
 }
 
@@ -150,9 +155,35 @@ class HubPreferences(private val context: Context) {
         prefs[KEY_DESK_PRESENCE] ?: false
     }
 
+    /** 声纹（F5）：默认关。开了也只在手机本地比对，音频不出设备。 */
+    val voiceprintEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_VOICEPRINT] ?: false
+    }
+
     /** 递话去重（F33/F4）：已经发过通知的最大 notify id。 */
     val lastNotifyId: Flow<Int> = context.dataStore.data.map { prefs ->
         prefs[KEY_LAST_NOTIFY_ID] ?: 0
+    }
+
+    /** 通知镜像（F35）：默认关——「哪些消息值得打断」很难调，宁可一开始不亮。 */
+    val mirrorEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MIRROR_ENABLED] ?: false
+    }
+
+    /** 通知镜像白名单：包名列表，设置页按分隔符随手填。 */
+    val mirrorApps: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        MirrorFilter.parseAppList(prefs[KEY_MIRROR_APPS].orEmpty())
+    }
+
+    /** 镜像去重（F35）：已经亮过的最大 mirror id。 */
+    val lastMirrorId: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[KEY_LAST_MIRROR_ID] ?: 0
+    }
+
+    suspend fun saveLastMirrorId(id: Int) {
+        context.dataStore.edit { prefs ->
+            if (id > (prefs[KEY_LAST_MIRROR_ID] ?: 0)) prefs[KEY_LAST_MIRROR_ID] = id
+        }
     }
 
     suspend fun saveLastNotifyId(id: Int) {
@@ -263,6 +294,24 @@ class HubPreferences(private val context: Context) {
         }
     }
 
+    suspend fun saveVoiceprintEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_VOICEPRINT] = enabled
+        }
+    }
+
+    suspend fun saveMirrorEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MIRROR_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveMirrorApps(raw: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MIRROR_APPS] = MirrorFilter.parseAppList(raw).joinToString(",")
+        }
+    }
+
     companion object {
         private val KEY_HOST = stringPreferencesKey("host")
         private val KEY_PORT = intPreferencesKey("port")
@@ -289,7 +338,11 @@ class HubPreferences(private val context: Context) {
         private val KEY_WAKE_WORD = booleanPreferencesKey("wake_word")
         private val KEY_HUB_ENABLED = booleanPreferencesKey("hub_enabled")
         private val KEY_DESK_PRESENCE = booleanPreferencesKey("desk_presence")
+        private val KEY_VOICEPRINT = booleanPreferencesKey("voiceprint")
         private val KEY_LAST_NOTIFY_ID = intPreferencesKey("last_notify_id")
+        private val KEY_MIRROR_ENABLED = booleanPreferencesKey("mirror_enabled")
+        private val KEY_MIRROR_APPS = stringPreferencesKey("mirror_apps")
+        private val KEY_LAST_MIRROR_ID = intPreferencesKey("last_mirror_id")
 
         const val DEFAULT_HUB_SLEEP_DELAY_SEC = 60
         const val DEFAULT_HUB_RECONNECT_SEC = 15

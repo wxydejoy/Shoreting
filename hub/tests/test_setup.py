@@ -9,9 +9,38 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from dock_hub.config import hub_config_to_raw, parse_config, save_config_raw
+from dock_hub.errors import HubError
 from dock_hub.server import make_handler
 from dock_hub.service import DockHub
-from dock_hub.setup_ui import is_local_client
+from dock_hub.setup_ui import guard_write, is_local_client
+
+
+class CsrfGuardTest(unittest.TestCase):
+    def _handler(self, content_type: str = "application/json", origin: str | None = None):
+        class Fake:
+            headers = {
+                "Content-Type": content_type,
+                "Host": "127.0.0.1:17890",
+            }
+
+        if origin is not None:
+            Fake.headers["Origin"] = origin
+        return Fake()
+
+    def test_rejects_non_json_content_type(self) -> None:
+        # 跨站简单请求只能用 text/plain，必须挡在解析之前
+        with self.assertRaises(HubError) as ctx:
+            guard_write(self._handler(content_type="text/plain"))
+        self.assertEqual(ctx.exception.status, 415)
+
+    def test_rejects_cross_origin(self) -> None:
+        with self.assertRaises(HubError) as ctx:
+            guard_write(self._handler(origin="http://evil.example"))
+        self.assertEqual(ctx.exception.status, 403)
+
+    def test_allows_same_origin_and_curl(self) -> None:
+        guard_write(self._handler(origin="http://127.0.0.1:17890"))
+        guard_write(self._handler())
 
 
 class SetupWizardTest(unittest.TestCase):
@@ -131,6 +160,15 @@ class SetupWizardTest(unittest.TestCase):
                 "port": 0,
                 "devices": [],
                 "mini": False,
+                "companion": {
+                    "enabled": True,
+                    "llm": {
+                        "base_url": "https://example.com/compatible-mode/v1",
+                        "model": "qwen3.8-flash",
+                        "api_key": "sk-test-placeholder",
+                    },
+                    "tts": {"base_url": "http://127.0.0.1:9"},
+                },
             }
         )
         hub = DockHub(cfg)
@@ -149,8 +187,26 @@ class SetupWizardTest(unittest.TestCase):
         conn.request("GET", "/setup/api/state")
         resp = conn.getresponse()
         self.assertEqual(resp.status, 200)
-        body = json.loads(resp.read().decode("utf-8"))
+        raw = resp.read().decode("utf-8")
+        body = json.loads(raw)
         self.assertEqual(body["config"]["name"], "study")
+        # 向导读接口不能把上游密钥原文发到浏览器
+        llm = body["config"]["companion"]["llm"]
+        self.assertNotIn("api_key", llm)
+        self.assertTrue(llm["api_key_set"])
+        self.assertNotIn("sk-test-placeholder", raw)
+        # Hub Token 不进浏览器：只给末 4 位，原文哪都别出现
+        self.assertEqual(body["config"]["token"], "")
+        self.assertEqual(body["token_masked"], "••••alue")
+        self.assertNotIn("secret-token-value", raw)
+        conn.close()
+
+        # 点「复制」时才取一次原文
+        conn = HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("POST", "/setup/api/token/reveal", body="{}", headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(json.loads(resp.read().decode("utf-8"))["token"], "secret-token-value")
         conn.close()
 
 

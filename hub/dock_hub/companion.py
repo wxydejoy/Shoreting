@@ -20,7 +20,7 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import yaml
@@ -31,6 +31,7 @@ from dock_hub.clarify import PendingClarify, clarify_for, take_answer
 from dock_hub.config import CompanionConfig, ID_RE
 from dock_hub.errors import HubError
 from dock_hub import logs
+from dock_hub.guest import parse_guest
 from dock_hub.memory import (
     MemoryStore,
     parse_forget as parse_memory_forget,
@@ -141,6 +142,10 @@ from dock_hub.tts import Tts
 
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
+# F 收尾：慢慢关灯。12 秒从当前亮度收到 1 再断电，不经过模型
+SLOW_DIM_SEC = 12.0
+SLOW_DIM_STEPS = 12
+_SLOW_DIM = re.compile(r"(慢慢|渐渐|缓缓|一点点).{0,8}(关|暗|灭)|渐暗|淡出")
 
 # 白噪音没放成时的统一口径（_handle_desk 里用它判断 ok）
 _NOISE_FAIL_SPOKEN = ("这次没动成。", "这台 Mini 还不能放白噪音。")
@@ -164,6 +169,58 @@ _POWER_YES_RE = re.compile(r"^(?:好的?|好呀|行|嗯+|对呀?|是的?|要)[�
 _POWER_CANCEL_RE = re.compile(r"算了|不用|取消|别弄|不弄|先不|不关|不锁|不睡")
 
 
+class _TurnCancelled(Exception):
+    """这一轮已经被下一轮顶掉。别再写字幕、别再进记忆。"""
+# LLM / TTS 探活结果的有效期。过期后由后台线程刷新，读的人永远只拿缓存，
+# 免得 3s 一次的 /v1/snapshot 被一个卡住的探活拖住。
+PROBE_SEC = 5.0
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_ACTION_RE = re.compile(r"^\s*ACTION:\s*\S+\s*$", re.MULTILINE)
+_ACTION_PARSE = re.compile(r"^\s*ACTION:\s*(\S+?)\.(on|off|run)\s*$", re.IGNORECASE | re.MULTILINE)
+_ACTION_BRI = re.compile(
+    r"^\s*ACTION:\s*(\S+?)\.(?:bri|brightness)\.(\d{1,3})\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ACTION_TEMP = re.compile(
+    r"^\s*ACTION:\s*(\S+?)\.(?:temp|temperature)\.(\d{1,2})\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_CONTROL_HINT = re.compile(
+    r"(打开|关掉|关闭|关上|开启|开一下|关一下|开灯|关灯|开空调|关空调|启动|"
+    r"无畏契约|valorant|打瓦|开黑|打游戏|玩游戏|启动游戏|开游戏|wegame|"
+    r"抖音|亮一点|调亮|暗一点|调暗|调到|调成|设成|设为|设定|再亮|再暗|灯带|台灯|挂灯|"
+    r"暂停|下一首|上一首|切歌|继续播放|继续放|静音|音量|声音大|声音小|"
+    r"叫我|提醒我|喊我)"
+)
+_QUERY_TIME = re.compile(r"(几点|几号|星期几|周几|礼拜几|什么日子|现在.*时间)")
+_QUERY_TEMP = re.compile(
+    r"(多少度|几度|室温|潮不潮|湿度|屋里.*(?:度|温|热|潮|湿)|室内.*(?:度|温|热|潮|湿))"
+)
+_QUERY_PC = re.compile(r"(热|忙|卡|占用|cpu|内存|显卡)", re.IGNORECASE)
+_QUERY_LIGHT = re.compile(r"(开了没|亮着吗|开着吗|关了没|亮着没有)")
+_QUERY_MEDIA = re.compile(r"(在播什么|放的什么|在放什么|现在放的|播放的是什么|放什么歌)")
+_QUERY_LAST = re.compile(r"(刚才那句|刚才你说|刚才说了什么|上一句|你刚说)")
+_QUERY_MINI = re.compile(r"(mac\s*mini|mini|麦金塔|迷你|咪妮|麦克迷)", re.IGNORECASE)
+_MEDIA_NEXT = re.compile(r"(下一首|切歌|换一首|下一曲)")
+_MEDIA_PREV = re.compile(r"(上一首|上一曲)")
+_MEDIA_PAUSE = re.compile(r"(暂停|停下|别放了)")
+_MEDIA_RESUME = re.compile(r"(继续放|继续播放|接着放)")
+_VOLUME_UP = re.compile(r"(声音大|音量大|大声点|大声一)")
+_VOLUME_DOWN = re.compile(r"(声音小|音量小|小声点|小声一)")
+_VOLUME_UNMUTE = re.compile(r"(取消静音|打开声音)")
+_VOLUME_MUTE = re.compile(r"(静音)")
+_ACTION_MEDIA = re.compile(
+    r"^\s*ACTION:\s*media\.(toggle|next|previous)\s*$", re.IGNORECASE | re.MULTILINE
+)
+_ACTION_VOLUME = re.compile(
+    r"^\s*ACTION:\s*volume\.(up|down|mute)\s*$", re.IGNORECASE | re.MULTILINE
+)
+_ACTION_TIMER = re.compile(
+    r"^\s*ACTION:\s*timer\.(\d{1,3})\s*$", re.IGNORECASE | re.MULTILINE
+)
+_RECENT_TURNS = 4
+_RECENT_CLIP = 72
 PRESENCE_SEC = 90
 
 
@@ -181,9 +238,13 @@ class Companion:
         self._voice = False
         self._ready_at = 0.0
         self._voice_at = 0.0
+        self._probe_at = 0.0
+        self._probing = False
         self._speaking = False
         self._seq = 0
         self._lock = threading.Lock()
+        # 在飞那一轮的取消令牌：新一轮进来就 set，旧的流式循环立刻收手
+        self._turn_cancel = threading.Event()
         self._clips: OrderedDict[str, bytes] = OrderedDict()
         self._skills: list[dict[str, str]] = []
         self._run_skill = None
@@ -196,6 +257,8 @@ class Companion:
         self._recent: deque[tuple[str, str]] = deque(maxlen=5)
         self._timer: threading.Timer | None = None
         self.timers = TimerBoard()
+        self._dim_gen = 0
+        self._dim_thread: threading.Thread | None = None
         self._extra_llm_headers: dict[str, str] = {}
         self._k20_seen_at = 0.0
         self._story_books = None
@@ -207,6 +270,12 @@ class Companion:
         self._pending_clarify: PendingClarify | None = None
         # F21 电源动作：问过「真的要吗」、等「确认」的那一下（动作, 问的时刻）
         self._pending_power: tuple[str, float] | None = None
+        # F26 访客模式：真就一句话——现在该不该把对话藏起来（不落盘、不记事）
+        self._guest_hidden: Callable[[], bool] = lambda: False
+
+    def set_guest_gate(self, gate: Callable[[], bool] | None) -> None:
+        """F26：传进来一个「现在是不是访客模式」的问法。None = 永远不是。"""
+        self._guest_hidden = gate or (lambda: False)
 
     def configure(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
@@ -215,10 +284,14 @@ class Companion:
         self._voice = False
         self._ready_at = 0.0
         self._voice_at = 0.0
+        self._probe_at = 0.0
         with self._lock:
             self._speaking = False
             self._seq += 1
+            self._dim_gen += 1
             self._clips.clear()
+            # 换配置后要重新探活：冷启动那条同步路径会再走一次
+            self._probing = False
         self._cancel_timer()
         self._recent.clear()
 
@@ -272,15 +345,60 @@ class Companion:
         }
         return body
 
+    def _probe_once(self) -> None:
+        try:
+            ready = self._ping_llm()
+            voice = self.tts.ping() if self.config.tts_base_url else False
+        finally:
+            with self._lock:
+                self._probing = False
+        self._ready = ready
+        self._voice = voice
+        self._ready_at = time.monotonic()
+        self._voice_at = self._ready_at
+        self._probe_at = self._ready_at
+
+    def _refresh_probes(self) -> None:
+        """把「探活」从读路径上摘出去。
+
+        `/v1/snapshot` 是 3s 一次的轮询，而 ready()/voice() 原来会在过期时
+        同步 ping 一次 LLM（openai 模式超时 2s）和 TTS。大脑卡住的时候，主屏
+        每个轮询都要陪着等；这里改成：冷启动同步探一次（要如实报状态），
+        之后过期就丢给后台线程，读的人只拿上一次的结果。
+        """
+        if not self.config.enabled:
+            return
+        if time.monotonic() - self._probe_at < PROBE_SEC:
+            return
+        with self._lock:
+            if self._probing:
+                return
+            self._probing = True
+        if self._probe_at <= 0:
+            self._probe_once()
+            return
+        threading.Thread(target=self._probe_once, name="companion-probe", daemon=True).start()
+
     def ready(self) -> bool:
         if not self.config.enabled:
             return False
-        now = time.monotonic()
-        if now - self._ready_at < 5:
-            return self._ready
-        self._ready = self._ping_llm()
-        self._ready_at = now
+        self._refresh_probes()
         return self._ready
+
+    def _begin_turn(self) -> tuple[int, threading.Event]:
+        """开新一轮，顺便把还在想的那一轮顶掉。
+
+        安卓重试、连着说两句话都会让两条 chat 并行：旧的那条不但继续烧
+        模型额度，回复回来还会抢字幕、抢记忆。seq 只能挡住「已经生成完」的
+        那一步，流式途中的句子仍在往外 cue，所以额外给每轮发一个取消令牌。
+        """
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+            self._turn_cancel.set()
+            cancel = threading.Event()
+            self._turn_cancel = cancel
+        return seq, cancel
 
     def chat(self, body: dict[str, Any], facts: str = "") -> dict[str, Any]:
         if not self.config.enabled:
@@ -291,22 +409,32 @@ class Companion:
         if not heard:
             raise HubError("bad_request", "text 不能为空")
         text = fold_game_asr(heard)
+        speaker = _clean_speaker(body.get("speaker"))
         turn = _turn_id(body)
         started = time.monotonic()
         _latency(turn, "chat_recv", chars=len(heard))
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
+        seq, cancel = self._begin_turn()
         self.tts.stop()
         pending = self._pop_clarify()
         power_pending = self._pop_power()
-        taught = self._remember_skill(text)
+        hidden = self._guest_hidden()
+        taught = None if hidden else self._remember_skill(text)
+        if hidden and (
+            taught or is_teach_attempt(text) or parse_memory_teach(text) is not None
+        ):
+            # F26：客人在场不学新东西——口令和事实都不收，主人想教就先把模式关了
+            spoken = "客人在这儿，先不记这个。"
+            self._prepare_mood(text, control=False)
+            self._commit_reply(spoken)
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
+            )
         if taught or is_teach_attempt(text):
             spoken = taught or "这个只能绑已经配好的灯或启动项，不能自己加程序。"
             self._prepare_mood(text, control=False)
             self._commit_reply(spoken)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         # F28：「记住，……」当场落盘并短确认，不绕模型——记忆这事确定性比文采重要
         memo = parse_memory_teach(text)
@@ -317,7 +445,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "memory_teach", ok=1 if key else 0)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         memo_forget = parse_memory_forget(text)
         if memo_forget is not None and self._memory is not None:
@@ -327,7 +455,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "memory_forget", ok=1 if gone else 0)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         control = looks_like_control(text)
         mood_extra = self._prepare_mood(text, control=control)
@@ -339,7 +467,7 @@ class Companion:
                 self._commit_reply(spoken)
                 _latency(turn, "clarify", chars=len(spoken))
                 return self._finish_spoken(
-                    spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
+                    spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=skills
                 )
         asked = query_kind(text)
         if asked:
@@ -347,7 +475,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "query", kind=asked)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         scene = self._handle_scene(text, turn)
         if scene:
@@ -355,7 +483,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "scene", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=events
             )
         leaving = self._handle_leaving(text, turn)
         if leaving:
@@ -363,7 +491,15 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "leave", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=events
+            )
+        guest = self._handle_guest(text, turn)
+        if guest:
+            spoken, events = guest
+            self._commit_reply(spoken)
+            _latency(turn, "guest", act=events[0].get("action") if events else "")
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=events
             )
         desk = self._handle_desk(text, turn)
         if desk:
@@ -371,7 +507,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "desk", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=skills
             )
         relay = self._handle_relay(text, turn)
         if relay:
@@ -379,7 +515,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "relay", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=skills
             )
         # 泰缇斯 / Hermes 已移除：不再做「简单还是复杂」的路由判定，
         # 所有对话直接交给伴侣模型（顺带省掉每次一条分类请求）。
@@ -391,7 +527,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "power", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=events
             )
         # F3：像开关指令却解不出设备的话，先问一句，别把「帮我关了」扔给模型瞎猜。
         question = (
@@ -404,25 +540,33 @@ class Companion:
             self._commit_reply(question.asked)
             _latency(turn, "clarify_ask", chars=len(question.asked))
             return self._finish_spoken(
-                question.asked, turn, seq, started, cue_llm=False, user=heard
+                question.asked, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         catalog = skill_prompt(self._skills)
         memory = recent_prompt(self._recent)
         desk_facts = desk_facts_prompt(_call_world(self._world.get("desk")))
         extra = "\n".join(
-            part for part in (catalog, mood_extra, memory, facts, desk_facts) if part.strip()
+            part
+            for part in (catalog, mood_extra, memory, facts, speaker_prompt(speaker), desk_facts)
+            if part.strip()
         )
         messages = build_messages(text, extra, self.config.persona)
         llm_at = time.monotonic()
         cue_as_we_go = self.tts.configured and not self.tts.deliver
         try:
             if cue_as_we_go:
-                raw = self._stream_and_cue(messages, turn, seq)
+                raw = self._stream_and_cue(messages, turn, seq, cancel)
             else:
                 raw = self._complete(messages)
+            if cancel.is_set():
+                raise _TurnCancelled()
+        except _TurnCancelled:
+            _latency(turn, "barge_in", ms=_ms(llm_at))
+            self._record_turn(turn, heard, "", _ms(started), [], "被下一轮顶掉", speaker=speaker)
+            return {"text": "", "audio_id": None}
         except HubError as exc:
             _latency(turn, "ollama_error", ms=_ms(llm_at))
-            self._record_turn(turn, heard, "", _ms(started), [], exc.message)
+            self._record_turn(turn, heard, "", _ms(started), [], exc.message, speaker=speaker)
             raise
         spoken = _clean_reply(raw)
         spoken = enforce_ask_budget(spoken, bool(self._mood.get("allow_ask")))
@@ -435,12 +579,12 @@ class Companion:
             filled = True
         if not spoken:
             _latency(turn, "ollama_empty", ms=_ms(llm_at))
-            self._record_turn(turn, heard, "", _ms(started), skills, "大脑没有说出话")
+            self._record_turn(turn, heard, "", _ms(started), skills, "大脑没有说出话", speaker=speaker)
             raise HubError("companion_unavailable", "大脑没有说出话")
         _latency(turn, "ollama_done", ms=_ms(llm_at), chars=len(spoken))
         self._commit_reply(spoken)
         return self._finish_spoken(
-            spoken, turn, seq, started, filled=filled, user=heard, skills=skills
+            spoken, turn, seq, started, filled=filled, user=heard, speaker=speaker, skills=skills
         )
 
     def _finish_spoken(
@@ -453,6 +597,7 @@ class Companion:
         filled: bool = False,
         cue_llm: bool = True,
         user: str = "",
+        speaker: str = "",
         skills: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         self._ready = True
@@ -463,7 +608,7 @@ class Companion:
             with self._lock:
                 if seq != self._seq:
                     _latency(turn, "barge_in", ms=_ms(started))
-                    self._record_turn(turn, user, spoken, _ms(started), skills or [])
+                    self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
                     return {"text": spoken, "audio_id": None}
             audio_id = self._maybe_speak(spoken, turn)
         else:
@@ -474,7 +619,7 @@ class Companion:
             elif filled or not cue_llm:
                 self._cue_sentence(spoken, turn, seq)
         _latency(turn, "chat_total", ms=_ms(started), audio=1 if audio_id else 0)
-        self._record_turn(turn, user, spoken, _ms(started), skills or [])
+        self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
         self._remember(user, spoken)
         return {"text": spoken, "audio_id": audio_id}
 
@@ -486,11 +631,13 @@ class Companion:
         ms: int,
         skills: list[dict[str, Any]],
         error: str | None = None,
+        speaker: str = "",
     ) -> None:
-        if not self._chat_log:
+        # F26：访客模式下这轮对话不落盘——跟客人的话更不该被记着
+        if not self._chat_log or self._guest_hidden():
             return
         self._chat_log.append(
-            turn=turn, user=user, reply=reply, ms=ms, skills=skills, error=error
+            turn=turn, user=user, reply=reply, ms=ms, skills=skills, error=error, speaker=speaker
         )
 
     def set_story_books(self, books: Any) -> None:
@@ -526,6 +673,8 @@ class Companion:
         with self._lock:
             self._seq += 1
             self._speaking = False
+            self._turn_cancel.set()
+            self._dim_gen += 1
         self.reads.cancel_all()
         self.tts.stop()
         _latency("-", "stop")
@@ -721,11 +870,7 @@ class Companion:
     def voice(self) -> bool:
         if not self.config.enabled or not self.tts.configured:
             return False
-        now = time.monotonic()
-        if now - self._voice_at < 5:
-            return self._voice
-        self._voice = self.tts.ping()
-        self._voice_at = now
+        self._refresh_probes()
         return self._voice
 
     def _remember_skill(self, user_text: str) -> str | None:
@@ -854,7 +999,32 @@ class Companion:
         _latency(turn, "leave_ok", ok=1 if result.get("ok") else 0, left=len(result.get("left") or []))
         return spoken, [{"id": "leave", "leave": True, "ok": bool(result.get("ok"))}]
 
+    def _handle_guest(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """「有客人」「客人走了」（F26）：把记录收起来、再放回来。
+
+        world 里没挂 guest（配置 guest: false）时就不认识这句话，让它落到
+        闲聊里去——「有客人」本来也可能是在聊天。
+        """
+        act = parse_guest(text)
+        if act is None:
+            return None
+        toggle = self._world.get("guest")
+        if not callable(toggle):
+            return None
+        try:
+            result = toggle(act)
+        except HubError as exc:
+            _latency(turn, "guest_error", code=exc.code)
+            return "这会儿没动成。", [{"id": "guest", "action": act, "ok": False}]
+        _latency(turn, "guest_ok", act=act)
+        return str(result.get("spoken") or "好。"), [
+            {"id": "guest", "action": act, "ok": bool(result.get("ok"))}
+        ]
+
     def _handle_desk(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        dimmed = self._run_slow_dim(text, turn)
+        if dimmed:
+            return dimmed
         act = parse_stopwatch_action(text)
         if act is None:
             if parse_stopwatch_start(text):
@@ -904,6 +1074,103 @@ class Companion:
         if climate:
             return climate
         return None
+
+    def _run_slow_dim(
+        self, text: str, turn: str
+    ) -> tuple[str, list[dict[str, Any]]] | None:
+        """「慢慢关灯」：不啪一下黑掉，用十几秒把亮度收到底再关。"""
+        if not self._skills or self._run_skill is None:
+            return None
+        if not _SLOW_DIM.search(text or ""):
+            return None
+        targets = self._slow_dim_targets(text)
+        if not targets:
+            return None
+        getter = self._world.get("device")
+        with self._lock:
+            self._dim_gen += 1
+            gen = self._dim_gen
+        events: list[dict[str, Any]] = []
+        workers: list[threading.Thread] = []
+        for item in targets:
+            ident = str(item["id"])
+            name = str(item.get("name") or ident)
+            if not item.get("brightness"):
+                # 不能调亮度就老实关掉，别假装在暗
+                try:
+                    self._run_skill(ident, False)
+                except HubError as exc:
+                    events.append({"id": ident, "name": name, "ok": False, "code": exc.code})
+                    continue
+                _latency(turn, "skill_ok", id=ident, on=0)
+                events.append({"id": ident, "name": name, "on": False, "ok": True})
+                continue
+            start: int | None = None
+            already_off = False
+            if callable(getter):
+                state = getter(ident)
+                if isinstance(state, dict):
+                    if isinstance(state.get("brightness"), int):
+                        start = int(state["brightness"])
+                    already_off = state.get("on") is False
+            if already_off:
+                continue
+            worker = threading.Thread(
+                target=self._dim_worker,
+                args=(ident, start if start and start > 1 else 60, gen),
+                name=f"slow-dim-{ident}",
+                daemon=True,
+            )
+            worker.start()
+            workers.append(worker)
+            _latency(turn, "skill_ok", id=ident, on=0, slow=1)
+            events.append({"id": ident, "name": name, "on": False, "slow": True, "ok": True})
+        if not events:
+            return None
+        self._dim_thread = workers[-1] if workers else None
+        _latency(turn, "slow_dim", n=len(events))
+        return "好，灯慢慢暗。", events
+
+    def _slow_dim_targets(self, text: str) -> list[dict[str, Any]]:
+        picked: list[dict[str, Any]] = []
+        for token, on in infer_control(text, self._skills, self._aliases):
+            if on:
+                continue
+            ident = resolve_skill(token, self._skills)
+            item = next((row for row in self._skills if row["id"] == ident), None)
+            if item is not None and item.get("kind") == "toggle":
+                picked.append(item)
+        if picked:
+            return picked
+        # 只说「慢慢关灯」时，把正开着、能调亮度的灯都算上
+        getter = self._world.get("device")
+        if not callable(getter):
+            return []
+        for item in self._skills:
+            if item.get("kind") != "toggle" or not item.get("brightness"):
+                continue
+            state = getter(item["id"])
+            if isinstance(state, dict) and state.get("on"):
+                picked.append(item)
+        return picked
+
+    def _dim_worker(self, ident: str, start: int, gen: int) -> None:
+        step_wait = max(0.02, SLOW_DIM_SEC / max(1, SLOW_DIM_STEPS))
+        for step in range(1, SLOW_DIM_STEPS + 1):
+            if gen != self._dim_gen:
+                return
+            level = max(1, int(round(start * (1 - step / SLOW_DIM_STEPS))))
+            try:
+                self._run_skill(ident, True, brightness=level)
+            except HubError:
+                return
+            time.sleep(step_wait)
+        if gen != self._dim_gen:
+            return
+        try:
+            self._run_skill(ident, False)
+        except HubError:
+            pass
 
     def _run_launch(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         return launch_apps(
@@ -1152,7 +1419,11 @@ class Companion:
         if not spoken or not heard:
             return
         self._recent.append((heard, spoken))
-        if self._memory is not None and not looks_like_control(heard):
+        if (
+            self._memory is not None
+            and not looks_like_control(heard)
+            and not self._guest_hidden()
+        ):
             # F28：闲聊里捞候选事实。失败不影响本轮对话，留一行痕迹就好
             try:
                 learned = self._memory.note_turn(heard)
@@ -1292,7 +1563,13 @@ class Companion:
             raise HubError("companion_unavailable", "大脑返回无法解析")
         return str(message.get("content") or "")
 
-    def _stream_and_cue(self, messages: list[dict[str, str]], turn: str, seq: int) -> str:
+    def _stream_and_cue(
+        self,
+        messages: list[dict[str, str]],
+        turn: str,
+        seq: int,
+        cancel: threading.Event | None = None,
+    ) -> str:
         openai = openai_mode(self.config)
         path = "/chat/completions" if openai else "/api/chat"
         accept = "text/event-stream" if openai else "application/x-ndjson"
@@ -1311,6 +1588,8 @@ class Companion:
                 if not (200 <= resp.status < 300):
                     raise HubError("companion_unavailable", "大脑拒绝请求")
                 for raw_line in resp:
+                    if cancel is not None and cancel.is_set():
+                        raise _TurnCancelled()
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
                         continue
@@ -1490,6 +1769,20 @@ def _turn_id(body: dict[str, Any]) -> str:
     if raw and ID_RE.match(raw) and len(raw) <= 64:
         return raw
     return uuid.uuid4().hex[:12]
+
+
+def _clean_speaker(raw: Any) -> str:
+    """声纹认出来的人（F5）：只留一个短称呼，别把识别结果整段带进来。"""
+    name = re.sub(r"\s+", "", str(raw or ""))
+    name = re.sub(r"^[，。！？!?,.、·:：\-—]+|[，。！？!?,.、·:：\-—]+$", "", name)
+    return name[:12]
+
+
+def speaker_prompt(name: str) -> str:
+    """F5 声纹：知道是谁在说话就带一句进提示词——称呼自然用上，别句句报名字。"""
+    if not name:
+        return ""
+    return f"现在跟你说话的人：{name}。称呼可以自然用上，但别每句都提。"
 
 
 def _ms(started: float) -> int:

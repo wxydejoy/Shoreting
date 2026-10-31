@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from dock_hub.chat_log import ChatLog
+from dock_hub.chat_log import TAIL_BLOCK, ChatLog
 
 
 class ChatLogTest(unittest.TestCase):
@@ -45,3 +47,59 @@ class ChatLogTest(unittest.TestCase):
         log.append(turn="x", user="hi", reply="yo")
         self.assertEqual(log.list(), [])
         self.assertEqual(log.days(), [])
+
+    def test_large_file_reads_only_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "companion-chats.jsonl"
+            filler = "垫" * 200
+            lines = [
+                json.dumps({"turn": str(i), "user": filler, "reply": filler}, ensure_ascii=False)
+                for i in range(4000)
+            ]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self.assertGreater(path.stat().st_size, TAIL_BLOCK * 4)
+
+            log = ChatLog(path)
+            tail = log._tail_text(3)
+            self.assertLess(len(tail.encode("utf-8")), path.stat().st_size // 2)
+            self.assertTrue(tail.rstrip("\n").endswith(lines[-1]))
+
+            items = log.list(limit=3)
+            self.assertEqual([item["turn"] for item in items], ["3997", "3998", "3999"])
+
+    def test_tail_of_file_without_trailing_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "companion-chats.jsonl"
+            filler = "垫" * 200
+            lines = [
+                json.dumps({"turn": str(i), "user": filler, "reply": filler}, ensure_ascii=False)
+                for i in range(2000)
+            ]
+            path.write_text("\n".join(lines), encoding="utf-8")
+
+            log = ChatLog(path)
+            items = log.list(limit=2)
+            self.assertEqual([item["turn"] for item in items], ["1998", "1999"])
+
+    def test_search_still_scans_everything(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "companion-chats.jsonl"
+            filler = "垫" * 200
+            rows = [{"turn": str(i), "user": filler, "reply": filler} for i in range(3000)]
+            rows[5] = {"turn": "old", "user": "很久以前开过灯", "reply": "嗯。"}
+            path.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            log = ChatLog(path)
+            found = log.list(limit=5, query="开过灯")
+            self.assertEqual(len(found), 1)
+            self.assertEqual(found[0]["turn"], "old")
+
+    def test_query_bypasses_tail_reader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = ChatLog(Path(tmp) / "companion-chats.jsonl")
+            log.append(turn="a", user="开灯", reply="好。")
+            with patch.object(ChatLog, "_tail_text", side_effect=AssertionError("不该尾读")):
+                self.assertEqual(len(log.list(query="开灯")), 1)

@@ -6,7 +6,6 @@ import signal
 import sys
 import threading
 
-from helm_mini import DEFAULT_TOKEN
 from helm_mini.sampler import MiniSampler
 from helm_mini.server import lan_ips, serve
 from helm_mini.telemetry import TelemetryStore
@@ -20,7 +19,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sample-ms", type=int, default=int(os.environ.get("HELM_MINI_SAMPLE_MS", "1000")))
     args = parser.parse_args(argv)
 
-    token = os.environ.get("HELM_MINI_TOKEN", DEFAULT_TOKEN).strip() or DEFAULT_TOKEN
+    token = os.environ.get("HELM_MINI_TOKEN", "").strip()
+    if not token:
+        print(
+            "helm-mini: 拒绝启动 —— 需要 HELM_MINI_TOKEN。"
+            "跑 ./install-launchd.sh 会生成一枚并写进 LaunchAgent。",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
     sampler = MiniSampler(sample_ms=args.sample_ms)
     sampler.start()
     store = TelemetryStore()

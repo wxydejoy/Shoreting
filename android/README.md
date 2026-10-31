@@ -17,11 +17,12 @@ Hub 健康检查 `service=dock-hub` 且 `name=study`。`name=mini` 会被拒绝�
 
 ## 构建
 
-需要 JDK 17（Android Studio 自带 JBR 即可）和一次网络，用来拉唤醒词 / ASR 模型（不进 git）。
+需要 JDK 17（Android Studio 自带 JBR 即可）和一次网络，用来拉唤醒词 / ASR / 声纹模型（不进 git）。
 
 ```bash
 cd android
 ./fetch-wake-word.sh
+./fetch-voiceprint.sh   # F5 声纹认人用的 CAM++ 模型（28MB）；不拉也能构建，只是她不认人
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   ./gradlew :app:assembleDebug
 ./gradlew :app:testDebugUnitTest
@@ -36,7 +37,11 @@ APK：`android/app/build/outputs/apk/debug/app-debug.apk`。装到横屏设备�
 ## 语音
 
 - 唤醒词「小岸」（sherpa-onnx zipformer KWS）
-- 听写：流式 zipformer transducer（`2025-06-30` int8，encoder 约 154MB）+ `modified_beam_search` + 热词（词表里有的字才会加权，如台灯/空调；小岸等靠模型本身）
+- 唤醒词先上线，ASR 模型在后台线程装：开机就能叫醒，装好之前叫醒的那一句会等模型（最多 1.2s）再识别
+- 听写：流式 zipformer transducer（`2025-06-30` int8，encoder 约 154MB）
+- 热词：基础词表（开灯/关灯/台灯/空调…）+ snapshot 里的设备名，写到 `cacheDir/asr-hotwords.txt` 交给 sherpa；热词只在 `modified_beam_search` 下生效，所以有词表时用它，没有就退回 `greedy_search`
+- 词表里模型不认识的字会被剔掉（否则整表失效）；设备名变一次，语音服务在两句之间重装一份识别器（下一句生效）
+- 带热词装不起来会退回不带热词的 greedy，不会为了准确率把语音搞哑
 - 听完由 `UtteranceGate`：结束静音 1s、最短句 1.5s
 - 字幕等 `POST /v1/companion/chat` 全文；声音由 Mini TTS 出，本机不播守岸人 wav
 - 她正在说时再喊「小岸」：`POST /v1/companion/stop` 后重新听

@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dock_hub.config import parse_config
+from dock_hub.media import MediaSession
 from dock_hub.server import make_handler
 from dock_hub.service import DockHub
 
@@ -106,6 +107,16 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn("playing", body["media"])
         self.assertIn("companion", body)
         self.assertIsNone(body["companion"])
+
+    def test_snapshot_payload_is_stable_between_polls(self) -> None:
+        # 主屏 3s 一轮询：什么都没变时 payload 必须一模一样，否则客户端每次都
+        # 得重建整份状态、整屏重组一遍。时间戳是最常见的「假变化」来源。
+        _status, first = self._request("GET", "/v1/snapshot")
+        _status, second = self._request("GET", "/v1/snapshot")
+        self.assertEqual(
+            json.dumps(first, sort_keys=True),
+            json.dumps(second, sort_keys=True),
+        )
 
     def test_action_run(self) -> None:
         with patch("dock_hub.service.launch") as mocked:
@@ -352,6 +363,55 @@ devices:
                     ],
                 }
             )
+
+    def test_snapshot_reads_cache_instead_of_mijia(self) -> None:
+        """主屏 3s 轮询不能每轮都同步打米家云：只有冷启动那次真拉。"""
+        cfg = parse_config(
+            {
+                "name": "study",
+                "token": "secret-token-value",
+                "devices": [{"id": "lamp", "name": "台灯", "type": "light", "mijia_name": "台灯"}],
+                "mini": False,
+            }
+        )
+        hub = DockHub(cfg)
+        self.addCleanup(hub.pc.stop)
+        self.addCleanup(hub.reporter.stop)
+        calls: list[int] = []
+
+        def counted():
+            calls.append(1)
+            return (
+                "ok",
+                None,
+                None,
+                [{"id": "lamp", "name": "台灯", "type": "light", "on": False, "online": True}],
+            )
+
+        with patch.object(hub, "_mijia_status", return_value=("ok", None)):
+            with patch.object(hub, "_mijia_desk_slice", side_effect=counted):
+                snap = hub.snapshot()
+                hub.snapshot()
+                hub.snapshot()
+        self.assertEqual([item["id"] for item in snap["devices"]], ["lamp"])
+        self.assertEqual(len(calls), 1)
+
+    def test_media_updated_at_only_moves_when_playing_changes(self) -> None:
+        # updated_at 是「状态什么时候变的」，不是「你什么时候问的」
+        with patch("dock_hub.media.utc_now", return_value="2026-01-01T00:00:00Z"):
+            media = MediaSession(enabled=True)
+        first = media.snapshot()
+        self.assertEqual(first["updated_at"], "2026-01-01T00:00:00Z")
+        with patch("dock_hub.media.utc_now", return_value="2026-01-01T00:00:09Z"):
+            again = media.snapshot()
+        self.assertEqual(again["updated_at"], first["updated_at"])
+
+        with patch.object(media, "_send"), patch(
+            "dock_hub.media.utc_now", return_value="2026-01-01T00:00:12Z"
+        ):
+            media.command("toggle")
+        self.assertTrue(media.snapshot()["playing"])
+        self.assertEqual(media.snapshot()["updated_at"], "2026-01-01T00:00:12Z")
 
     def test_media_disabled_is_null(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

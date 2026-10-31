@@ -21,10 +21,15 @@ data class Snapshot(
     val companion: CompanionStatus? = null,
     val devices: List<HubDevice> = emptyList(),
     val notify: NotifyState? = null,
+    val mirror: MirrorState? = null,
+    /** 访客模式（F26）：开着的时候对话记录都收起来了，屏上留一个小标记。 */
+    val guest: GuestState? = null,
     val alarm: AlarmStatus? = null,
     val theme: ThemeStatus? = null,
     val photos: PhotoIds? = null,
     val wallpaper: WallpaperStatus? = null,
+    /** Hub 的状态版本号；旧版 Hub 没有这个字段，就用不了长轮询。 */
+    val seq: Int? = null,
 )
 
 /** 一句话壁纸（F39）：今天那句，画在背景上，淡。 */
@@ -76,6 +81,30 @@ data class NotifyItem(
     val at: String = "",
 )
 
+/** 通知镜像（F35）：白名单应用的通知名单，安卓拿自增 id 去重，见新的就亮一下。 */
+@Serializable
+data class MirrorState(
+    val lastId: Int = 0,
+    val items: List<MirrorItem> = emptyList(),
+)
+
+/** 访客模式（F26）：Hub 一句话开、一句话关、到点自己恢复；这里只管亮个标记。 */
+@Serializable
+data class GuestState(
+    val since: String = "",
+    val until: String? = null,
+    val hours: Double = 0.0,
+)
+
+@Serializable
+data class MirrorItem(
+    val id: Int,
+    val app: String,
+    val title: String = "",
+    val text: String,
+    val at: String = "",
+)
+
 @Serializable
 data class HubStatus(
     val name: String,
@@ -101,7 +130,25 @@ data class PcStatus(
     val memory: PcMemory? = null,
     val gpu: PcGpu? = null,
     val fps: Double? = null,
-)
+) {
+    // updatedAt 是采样时刻：每次轮询都会前进，但画面可能一模一样（CPU 还是 12%）。
+    // 让它参与相等性判断，DockUiState 就每 2～3 秒「变」一次，Compose 只能整屏重组。
+    override fun equals(other: Any?): Boolean = other is PcStatus &&
+        online == other.online &&
+        cpu == other.cpu &&
+        memory == other.memory &&
+        gpu == other.gpu &&
+        fps == other.fps
+
+    override fun hashCode(): Int {
+        var result = online.hashCode()
+        result = 31 * result + (cpu?.hashCode() ?: 0)
+        result = 31 * result + (memory?.hashCode() ?: 0)
+        result = 31 * result + (gpu?.hashCode() ?: 0)
+        result = 31 * result + (fps?.hashCode() ?: 0)
+        return result
+    }
+}
 
 @Serializable
 data class PcCpu(
@@ -135,6 +182,23 @@ data class MediaInfo(
     val app: String? = null,
     val updatedAt: String,
 ) {
+    // 同 PcStatus：updatedAt 每次采样都前进，内容没变就不该算「新状态」。
+    override fun equals(other: Any?): Boolean = other is MediaInfo &&
+        online == other.online &&
+        playing == other.playing &&
+        title == other.title &&
+        artist == other.artist &&
+        app == other.app
+
+    override fun hashCode(): Int {
+        var result = online.hashCode()
+        result = 31 * result + playing.hashCode()
+        result = 31 * result + (title?.hashCode() ?: 0)
+        result = 31 * result + (artist?.hashCode() ?: 0)
+        result = 31 * result + (app?.hashCode() ?: 0)
+        return result
+    }
+
     companion object {
         fun phoneIdle(): MediaInfo = MediaInfo(
             online = true,

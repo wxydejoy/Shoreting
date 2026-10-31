@@ -9,9 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from dock_hub.assets import read_asset
+
 MAX_TEXT = 4000
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_RETURN = 500
+TAIL_BLOCK = 64 * 1024
 
 
 def chat_log_path(config_path: Path | None) -> Path | None:
@@ -34,6 +37,7 @@ class ChatLog:
         ms: int = 0,
         skills: list[dict[str, Any]] | None = None,
         error: str | None = None,
+        speaker: str = "",
     ) -> None:
         if self.path is None:
             return
@@ -45,6 +49,8 @@ class ChatLog:
             "ms": max(0, int(ms)),
             "skills": list(skills or []),
             "error": _clip(error) if error else None,
+            # F5 声纹：谁在说话（安卓认出来的），没认出来就不占这个字段
+            "speaker": _clip(speaker) if speaker else None,
         }
         line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
         with self._lock:
@@ -60,7 +66,11 @@ class ChatLog:
         needle = query.strip().lower()
         day = day.strip()[:10]
         with self._lock:
-            raw = self.path.read_text(encoding="utf-8", errors="replace")
+            raw = (
+                self.path.read_text(encoding="utf-8", errors="replace")
+                if needle
+                else self._tail_text(cap)
+            )
         items: list[dict[str, Any]] = []
         for line in raw.splitlines():
             line = line.strip()
@@ -78,6 +88,34 @@ class ChatLog:
                 continue
             items.append(obj)
         return items[-cap:]
+
+    def _tail_text(self, cap: int) -> str:
+        """只看文件尾部：记录攒到 8MB 也不必为最后 200 条把全文读进来。"""
+
+        assert self.path is not None
+        size = self.path.stat().st_size
+        if size <= TAIL_BLOCK:
+            return self.path.read_text(encoding="utf-8", errors="replace")
+        chunks: list[bytes] = []
+        pos = size
+        breaks = 0
+        with self.path.open("rb") as handle:
+            while pos > 0:
+                step = min(TAIL_BLOCK, pos)
+                pos -= step
+                handle.seek(pos)
+                block = handle.read(step)
+                chunks.append(block)
+                breaks += block.count(b"\n")
+                # 末行可能没换行，多要一行兜底
+                if breaks > cap:
+                    break
+        raw = b"".join(reversed(chunks))
+        if pos > 0:
+            cut = raw.find(b"\n")
+            if cut >= 0:
+                raw = raw[cut + 1 :]
+        return raw.decode("utf-8", errors="replace")
 
     def days(self) -> list[str]:
         """记过话的日子（YYYY-MM-DD，旧→新）。时间线一天一档，翻旧账用。"""
@@ -121,8 +159,8 @@ def asset_page_html(name: str) -> bytes:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         bundled = Path(sys._MEIPASS) / name  # type: ignore[attr-defined]
         if bundled.is_file():
-            return bundled.read_bytes()
-    return (Path(__file__).resolve().parent / "assets" / name).read_bytes()
+            return read_asset(bundled)
+    return read_asset(Path(__file__).resolve().parent / "assets" / name)
 
 
 def chats_page_html() -> bytes:

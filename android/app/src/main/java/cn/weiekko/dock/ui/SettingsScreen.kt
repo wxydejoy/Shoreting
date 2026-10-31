@@ -99,6 +99,13 @@ fun SettingsScreen(
     onSetWeatherCity: (String) -> Unit = {},
     onSetWakeWord: (Boolean) -> Unit = {},
     onSetDeskPresence: (Boolean) -> Unit = {},
+    onSetVoiceprint: (Boolean) -> Unit = {},
+    onStartVoiceprintEnroll: (String) -> Unit = {},
+    onCancelVoiceprintEnroll: () -> Unit = {},
+    onDeleteVoiceprintSpeaker: (String) -> Unit = {},
+    onLoadVoiceprint: () -> Unit = {},
+    onSetMirrorEnabled: (Boolean) -> Unit = {},
+    onSetMirrorApps: (String) -> Unit = {},
     onLoadMemory: () -> Unit = {},
     onDeleteMemory: (String) -> Unit = {},
     onSetHubEnabled: (Boolean) -> Unit = {},
@@ -115,7 +122,7 @@ fun SettingsScreen(
     var token by rememberSaveable { mutableStateOf(state.connection.token) }
     var miniHost by rememberSaveable { mutableStateOf(state.miniConnection.host.ifBlank { MiniConnection.DEFAULT_HOST }) }
     var miniPort by rememberSaveable { mutableStateOf(state.miniConnection.port.toString()) }
-    var miniToken by rememberSaveable { mutableStateOf(state.miniConnection.token.ifBlank { MiniConnection.DEFAULT_TOKEN }) }
+    var miniToken by rememberSaveable { mutableStateOf(state.miniConnection.token) }
     var weatherCity by rememberSaveable { mutableStateOf(state.weatherCity) }
     val context = LocalContext.current
     val pickVideo = rememberLauncherForActivityResult(
@@ -143,6 +150,8 @@ fun SettingsScreen(
     }
     // F28：进设置页拉一次「她记得的事」
     LaunchedEffect(Unit) { onLoadMemory() }
+    // F5：花名册在本地文件里，进页拉一次；注册完成后 VM 会自己刷
+    LaunchedEffect(Unit) { onLoadVoiceprint() }
     val colors = MaterialTheme.colorScheme
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = colors.primary,
@@ -900,6 +909,143 @@ fun SettingsScreen(
                             checkedThumbColor = colors.onPrimary,
                             checkedTrackColor = colors.primary,
                         ),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        // F5 声纹：谁在说话。音频不出设备，只把本地认出的称呼发给 Hub。
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = colors.surface,
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("声纹（谁在说话）", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (state.voiceprintEnabled) {
+                                "已开。认出是你还是家里人，她的称呼就换着来。需要语音唤醒开着。"
+                            } else {
+                                "已关。打开后手机在本地比对声纹，只把认出的称呼发给 Hub，声音不出设备。"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    Switch(
+                        checked = state.voiceprintEnabled,
+                        onCheckedChange = onSetVoiceprint,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.onPrimary,
+                            checkedTrackColor = colors.primary,
+                        ),
+                    )
+                }
+                if (state.voiceprintEnabled) {
+                    // 记忆必须可见可撤销——声纹同理，能看能删才不吓人
+                    state.voiceprintSpeakers.forEach { name ->
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { onDeleteVoiceprintSpeaker(name) }) { Text("删除") }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    val enroll = state.voiceprintEnroll
+                    if (enroll == null) {
+                        var nameDraft by remember { mutableStateOf("") }
+                        OutlinedTextField(
+                            value = nameDraft,
+                            onValueChange = { nameDraft = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            placeholder = { Text("称呼，例如 妈妈") },
+                            trailingIcon = {
+                                TextButton(
+                                    onClick = {
+                                        onStartVoiceprintEnroll(nameDraft)
+                                        nameDraft = ""
+                                    },
+                                ) { Text("注册") }
+                            },
+                        )
+                    } else {
+                        Text(
+                            when {
+                                enroll.saved -> "记住了：${enroll.name}"
+                                enroll.error != null -> "${enroll.error}（${enroll.collected}/${enroll.need}）"
+                                else -> "对着书桌正常说 ${enroll.need} 句话，例如「今天天气不错」。(${enroll.collected}/${enroll.need})"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                        )
+                        TextButton(onClick = onCancelVoiceprintEnroll) {
+                            Text(if (enroll.saved) "完成" else "取消")
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        // F35 通知镜像：默认关。「哪些消息值得打断」很难调，白名单一个一个填。
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = colors.surface,
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("通知镜像", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (state.mirrorEnabled) {
+                                "已开。白名单应用来通知时，书桌顶部亮一下，30 秒自己收走。只亮不念。"
+                            } else {
+                                "已关。屏幕全屏当摆件时，系统的横幅根本看不见；开了才会把白名单应用的通知亮出来。"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    Switch(
+                        checked = state.mirrorEnabled,
+                        onCheckedChange = onSetMirrorEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.onPrimary,
+                            checkedTrackColor = colors.primary,
+                        ),
+                    )
+                }
+                if (state.mirrorEnabled) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "白名单（包名，逗号或换行分开），例如 com.tencent.mm",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    var mirrorDraft by remember(state.mirrorAppsRaw) { mutableStateOf(state.mirrorAppsRaw) }
+                    OutlinedTextField(
+                        value = mirrorDraft,
+                        onValueChange = { mirrorDraft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 1,
+                        maxLines = 3,
+                        placeholder = { Text("com.tencent.mm, com.yourapp") },
+                        trailingIcon = {
+                            TextButton(onClick = { onSetMirrorApps(mirrorDraft) }) { Text("保存") }
+                        },
                     )
                 }
             }

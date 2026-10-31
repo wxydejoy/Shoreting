@@ -187,6 +187,18 @@ class ProbeTelemetryTest(unittest.TestCase):
         self.assertFalse(cursor["online"])
         self.assertFalse(cursor["on"])
 
+    def test_stale_pc_keeps_the_last_sample_time(self) -> None:
+        # 离线时也得报「最后一份样本的时刻」：打当前时间 = 每次轮询都变一份 payload
+        clock = {"t": 1000.0}
+        with patch("dock_hub.service.time.monotonic", side_effect=lambda: clock["t"]):
+            self.hub.ingest_telemetry(
+                {"pc": {"online": True, "updated_at": "2026-01-01T00:00:01Z"}}
+            )
+            clock["t"] += 5
+            snap = self.hub.snapshot()
+        self.assertFalse(snap["pc"]["online"])
+        self.assertEqual(snap["pc"]["updated_at"], "2026-01-01T00:00:01Z")
+
     def test_no_telemetry_yet_is_offline(self) -> None:
         snap = self.hub.snapshot()
         self.assertFalse(snap["pc"]["online"])

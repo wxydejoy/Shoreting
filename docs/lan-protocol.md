@@ -39,6 +39,9 @@ Hub 用配置文件**白名单**暴露米家设备和可启动的程序。没写
 | 版本 | URL 前缀 `/v1`，JSON 里同时带 `"protocol": 1` |
 | 时间 | ISO-8601 UTC，例如 `2026-08-15T15:30:01Z` |
 | 数字 | JSON number；温度保留一位小数即可 |
+| 连接 | keep-alive；空闲 20 秒没请求就断开。Hub 同时最多处理 32 条连接，满了回 `503 busy` |
+| 缓存 | `/v1` 与页面一律 `Cache-Control: no-store`；只有 `/assets/*.css|js` 带 `ETag` 与 `max-age=3600`，可回 `304` |
+| 压缩 | JSON 与 HTML 超过 512 字节时，若请求带 `Accept-Encoding: gzip` 就回 `Content-Encoding: gzip`；安卓用 OkHttp 的话默认已带上，不用自己解 |
 
 Hub 必须在启动时打印本机局域网 IP 和端口，方便在安卓里填写，例如：
 
@@ -193,7 +196,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `online` | 是 | 本轮采样是否成功。Hub 进程在但采样失败 → `false` |
-| `updated_at` | 是 | 该样本采集时间（UTC） |
+| `updated_at` | 是 | 该样本采集时间（UTC）。离线时给**最后一份样本**的时间，不要打当前时间 |
 | `cpu` | `online` 时建议有 | 见下表 |
 | `memory` | `online` 时建议有 | 见下表 |
 | `gpu` | 否 | 整段省略 = 无独立 GPU / 读不到 |
@@ -242,7 +245,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 |---|---|---|
 | `online` | 是 | 能否向系统媒体会话发键。Hub 进程在即可为 `true` |
 | `playing` | 是 | 是否正在播放。读不到曲目时仍要给这个布尔值（可用上次命令的乐观值） |
-| `updated_at` | 是 | 该样本时间（UTC） |
+| `updated_at` | 是 | 播放状态**最后一次变化**的时间（UTC）；状态没变就保持不变 |
 | `title` | 否 | 曲名；读不到则**省略该键** |
 | `artist` | 否 | 艺人；读不到则省略 |
 | `app` | 否 | 短名，如 `Music`、`Spotify`；不要发可执行路径 |
@@ -573,6 +576,7 @@ Content-Type: application/json
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `text` | 是 | 用户这句话，UTF-8，去掉首尾空白后不能为空 |
+| `speaker` | 否 | F5 声纹：手机本地比对出的称呼（如「妈妈」），没认出来就不带这个字段。音频不出设备，Hub 只把它带进提示词和对话记录，超过 12 字截断 |
 | `weather` | 否 | 一期可忽略。二期给 Hub 室外天气，形状不在此冻结 |
 
 **200**
@@ -1015,6 +1019,22 @@ Content-Type: application/json
 - `line` 是周日晚 20:00（`proactive.weekly_at`）她会念的那句；台账空时是空串，她不开口。
 - 在桌时长按在场边沿积分，单段上限 2 小时（安卓断连卡状态最多虚记这么多）。
 
+### 6.17 snapshot.guest
+
+访客模式（F26）。没有新接口：开关走对话（「有客人」／「客人走了」），快照里带状态，**安卓要消费 `snapshot.guest`**——开着时右上角亮一个小角标，提醒主人「记录都收着呢」，不是给访客看的。
+
+```json
+"guest": {
+  "since": "2026-10-31T18:02:11+08:00",
+  "until": "2026-10-31T23:02:11+08:00",
+  "hours": 6
+}
+```
+
+- 关着时是 `null`。`until` 到点 Hub 自己恢复，不需要任何人操作；重复开是顺延，不重算。
+- 访客期间 `/chats` `/diary` `/week` `/memory` 连页面带接口（含 DELETE）一律 **404**——对访客来说这些页「不存在」，不是「无权访问」。对话不写 jsonl、闲聊不捞事实，「记住／忘掉」当场婉拒。
+- `guest: false`（hub.yaml）时整条口令不认识，快照里永远 `null`。状态只在内存，Hub 重启即清场。
+
 ---
 
 ## 7. 错误格式
@@ -1037,6 +1057,7 @@ Content-Type: application/json
 | `unsupported` | 400 | 该设备类型不支持该字段 |
 | `not_found` | 404 | 设备 id 不在白名单；或 companion 未开启 |
 | `offline` | 409 | 设备离线，无法控制 |
+| `busy` | 503 | Hub 同时在处理的连接已满，退避后重试即可 |
 | `login_required` | 503 | 米家需要扫码 |
 | `mijia_error` | 502 | 米家调用失败 |
 | `action_error` | 502 | 本机程序/脚本拉起失败 |
@@ -1402,16 +1423,16 @@ curl -s -o /dev/null -w "%{http_code}\n" http://HOST:17890/v1/snapshot
 
 Windows Hub 继续报 Win 的 CPU / 内存 / GPU。Mac Mini 另开一个小服务，手机**单独填 Mini 地址**轮询，数字画在主屏 CPU 块的**第二行**。不经过 Hub。
 
-- 默认 `http://10.83.22.121:17891`，Token `helm-mini-weiekko`（安卓与 Mini 服务同一套默认值）
-- snapshot 需要 Bearer。`/health` 仍无鉴权
+- 默认 `http://10.83.22.121:17891`，Token 由 `mini/install-launchd.sh` 生成并打印，需与 `hub.yaml` 的 `mini.token`、安卓「Mini CPU」栏一致
+- snapshot / desk / telemetry 都需要 Bearer。**服务没有配置 token 时拒绝启动**，`/health` 仍无鉴权
 - 实现见仓库 [`mini/`](../mini/README.md)，与 `dock_hub` 包分开
 
 | 方法 | 路径 | 鉴权 | 作用 |
 |---|---|---|---|
 | `GET` | `/health` | 否 | `service` 必须是 `helm-mini` |
-| `GET` | `/v1/snapshot` | Token 非空时要 | `{ "protocol": 1, "service": "helm-mini", "pc": { … } }` |
-| `GET` | `/v1/desk` | Token 非空时要 | `{ "protocol": 1, "service": "helm-mini", "desk": { windows, mini, updated_at } }` |
-| `POST` | `/v1/telemetry` | Token 非空时要 | Hub 上报 Windows `pc` / `media` / `devices` / `temperature`；响应 `desk` 为合并后的最新一份 |
+| `GET` | `/v1/snapshot` | 是 | `{ "protocol": 1, "service": "helm-mini", "pc": { … } }` |
+| `GET` | `/v1/desk` | 是 | `{ "protocol": 1, "service": "helm-mini", "desk": { windows, mini, updated_at } }` |
+| `POST` | `/v1/telemetry` | 是 | Hub 上报 Windows `pc` / `media` / `devices` / `temperature`；响应 `desk` 为合并后的最新一份 |
 
 `GET /v1/snapshot` **不要改形状**（安卓 CPU 第二行只认 `pc`）。书桌落盘是另一条口：Hub 约 **1 秒** POST 一次电脑状态，米家缓存约 **15 秒** 才刷新；Mini 把最新一份写到 `~/.config/helm-mini/desk-state.json`，按日 jsonl 留两天。守岸人对话读 Hub 内存里的 `desk`，不要在 chat 路径再 GET 米家或 Mini。
 
@@ -1420,9 +1441,9 @@ Windows Hub 继续报 Win 的 CPU / 内存 / GPU。Mac Mini 另开一个小服�
 ```bash
 curl -s http://MINI:17891/health
 curl -s http://MINI:17891/v1/snapshot \
-  -H "Authorization: Bearer helm-mini-weiekko"
+  -H "Authorization: Bearer $HELM_MINI_TOKEN"
 curl -s http://MINI:17891/v1/desk \
-  -H "Authorization: Bearer helm-mini-weiekko"
+  -H "Authorization: Bearer $HELM_MINI_TOKEN"
 ```
 
 通过标准：health 的 `service` 为 `helm-mini`；snapshot 有 `pc.cpu.percent`、`pc.memory.percent`；读得到则有 `pc.gpu`。`POST /v1/telemetry` 后 `GET /v1/desk` 能看到 `desk.windows` 与 `desk.mini`。

@@ -30,14 +30,17 @@ class _StorySpeaker:
 from dock_hub.config import DeviceConfig, HubConfig, MediaConfig, MiniLinkConfig, PcConfig, PropConfig, TemperatureConfig, default_config_path
 from dock_hub.dusk import DuskRamp
 from dock_hub.alarm import AlarmRamp
+from dock_hub.ambience import Ambience
 from dock_hub.system_volume import read_output_volume, write_output_volume
 from dock_hub.theme import birthday_text, occasions_for
 from dock_hub.wallpaper import wallpaper_line
 from dock_hub.photos import list_photos, photo_bytes as read_photo, resolve_photos_dir
 from dock_hub.errors import HubError
+from dock_hub.guest import GuestMode, parse_guest
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
 from dock_hub.notify import NotifyBoard, parse_relay, wechat_say_text
+from dock_hub.mirror import MirrorBoard
 from dock_hub.weekly import DailyLedger, weekly_line
 from dock_hub.diary import (
     DayMaterial,
@@ -47,7 +50,13 @@ from dock_hub.diary import (
     render_material,
 )
 from dock_hub.lanes import Lanes
-from dock_hub.launch import launch, launch_exists, launch_running, running_image_names
+from dock_hub.launch import (
+    invalidate_running_cache,
+    launch,
+    launch_exists,
+    launch_running,
+    running_image_names,
+)
 from dock_hub.ledstrip import apply_config, percent_to_raw, raw_to_percent, read_config
 from dock_hub.pc import PcSampler, utc_now
 from dock_hub.ratelimit import Gate
@@ -140,11 +149,17 @@ class DockHub:
         self.diary.configure(config.diary.enabled, config.diary.at)
         # F33/F4/F34：往手机递话的一条通道（对讲反向、语音留言、微信共用）
         self.notify = NotifyBoard()
+        # F35 通知镜像：手机（K20）收到的白名单通知，回到摆件屏幕上亮一下
+        self.mirror = MirrorBoard()
+        # F26 访客模式：有外人时把记录藏起来，落盘一起停
+        self.guest = GuestMode()
+        self.companion.set_guest_gate(self.guest.hiding)
         self._attach_books()
         self._desk_lock = threading.Lock()
         self._desk_temp: dict[str, Any] | None = None
         self._desk_devices: list[dict[str, Any]] = []
         self._mijia_at = 0.0
+        self._mijia_tried = 0.0
         self._refreshing_mijia = False
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
@@ -183,6 +198,8 @@ class DockHub:
         self._start_dusk()
         self._alarm: AlarmRamp | None = None
         self._start_alarm()
+        self._ambience: Ambience | None = None
+        self._start_ambience()
         self.reporter.start()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
         self.scheduler.start()
@@ -602,6 +619,9 @@ class DockHub:
         self._diary_stop.set()
         self.diary.configure(config.diary.enabled, config.diary.at)
         self._start_diary()
+        # 设备表变了，旧缓存里的 devices 不再对得上，下次取快照重新同步拉一次
+        self._mijia_at = 0.0
+        self._mijia_tried = 0.0
         self.reporter.stop()
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
@@ -609,6 +629,7 @@ class DockHub:
         self._start_focus()
         self._start_dusk()
         self._start_alarm()
+        self._start_ambience()
         self.reporter.start()
         self.scheduler.stop()
         self.scheduler = Scheduler(config.schedules, self._run_schedule)
@@ -713,7 +734,9 @@ class DockHub:
             sample = dict(self._remote_pc) if self._remote_pc else None
         if age is None or sample is None or age > stale:
             self._set_desk_pc_online(False)
-            return {"online": False, "updated_at": utc_now()}
+            # 报「最后一份样本的时刻」，不是「你问我的时刻」：主屏每 3s 一轮询，
+            # 打当前时间等于每次都给客户端一份新 payload，白白整屏重组。
+            return {"online": False, "updated_at": (sample or {}).get("updated_at") or ""}
         self._set_desk_pc_online(bool(sample.get("online")))
         return sample
 
@@ -737,9 +760,23 @@ class DockHub:
         self.note_change()
 
     def snapshot(self) -> dict[str, Any]:
+        """主屏每 3s 轮询一次，这条路径绝不能同步打米家云。
+
+        热路径只读缓存（后台按 mijia_ms 刷新），只有冷启动第一次同步拉一次，
+        否则安卓开机就是一段空白。米家没登录时本来就不发请求，直接走未绑定兜底。
+        """
         started = time.perf_counter()
-        status, message, temperature, devices = self._mijia_desk_slice()
-        body = self._snapshot_body(status, message, temperature, devices)
+        status, message = self._mijia_status()
+        if status == "login_required":
+            _status, _message, temperature, devices = self._mijia_desk_slice()
+            body = self._snapshot_body(status, message, temperature, devices)
+        else:
+            if self._mijia_tried <= 0:
+                self._refresh_mijia_blocking()
+            else:
+                self._refresh_mijia_async()
+            temperature, devices = self._desk_view()
+            body = self._snapshot_body(status, message, temperature, devices)
         # 手机每 3s 来一次，这是最容易拖慢体验的路径，所以只盯它一个
         METRICS.observe("hub_snapshot_ms", round((time.perf_counter() - started) * 1000.0, 1))
         return body
@@ -906,6 +943,8 @@ class DockHub:
                 "desk": self.reporter.snapshot,
                 "scene": self.run_scene,
                 "leave": self.leave_home,
+                # F26：配置关掉时这个口令整个不认识，别让「有客人」被她当闲聊接走
+                **({"guest": self.guest_command} if self.config.guest.enabled else {}),
                 "notify": self.relay_to_phone,
                 "power": self.power_action,
                 "noise": self.companion_noise,
@@ -1164,6 +1203,24 @@ class DockHub:
         item = self.relay_to_phone(said or text, source="wechat")
         return {"ok": True, "said": spoken, "notify_id": item["id"]}
 
+    def ingest_mirror(self, body: dict[str, Any]) -> dict[str, Any]:
+        """`POST /v1/mirror`（F35）：安卓监听器把白名单应用的通知送过来。
+
+        60 秒内的同一条不算新消息（应用爱在更新时反复 post），照实回它 id。
+        """
+        data = body or {}
+        app = str(data.get("app") or "").strip()
+        text = str(data.get("text") or "").strip()
+        title = str(data.get("title") or "").strip()
+        if not app or not text:
+            raise HubError("bad_request", "app 和 text 不能为空")
+        item = self.mirror.post(app, text, title)
+        if item is None:
+            snap = self.mirror.snapshot()
+            return {"ok": True, "id": snap["last_id"], "duplicate": True}
+        self.note_change()
+        return {"ok": True, "id": item["id"], "duplicate": False}
+
     def companion_memory(self) -> dict[str, Any]:
         """设置页「她记得的事」：列表 + 上限，前端渲染成可删的条目。"""
         return {"items": self.memory.entries(), "limit": MEMORY_LIMIT}
@@ -1289,6 +1346,25 @@ class DockHub:
             "left": [item["id"] for item in left],
             "spoken": spoken,
         }
+
+    def guest_command(self, action: str) -> dict[str, Any]:
+        """「有客人」/「客人走了」（F26）：把记录收起来、再放回来。
+
+        companion 的语音处理器走这里；配置里 guest: false 时整条语音开关
+        不认识（world 里不挂这个键），话会落到闲聊里去。
+        """
+        if action not in ("on", "off"):
+            raise HubError("bad_request", "action 只能是 on 或 off")
+        was = self.guest.hiding()
+        if action == "on":
+            state = self.guest.activate(self.config.guest.hours)
+            spoken = f"好，记录我先收起来，{state['hours']:g} 小时后自己恢复。"
+        else:
+            self.guest.deactivate()
+            spoken = "好，记录又看得见了。"
+        if was != self.guest.hiding():
+            self.note_change()
+        return {"ok": True, "active": self.guest.hiding(), "spoken": spoken}
 
     def report_presence(self, state: str, now: datetime | None = None) -> dict[str, Any]:
         """在场上报（F25）：手机连上 / 离开家里 WiFi。
@@ -1463,6 +1539,46 @@ class DockHub:
         state = self._companion_device_state(device_id)
         return bool(state is None or state.get("on") is not False)
 
+    def _device_brightness(self, device_id: str) -> int | None:
+        """灯现在的亮度百分比。拿不到就 None——氛围退场时不瞎猜原来多亮。"""
+        state = self._companion_device_state(device_id)
+        if not isinstance(state, dict):
+            return None
+        value = state.get("brightness")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return max(1, min(100, int(value)))
+
+    def _start_ambience(self) -> None:
+        """灯光氛围（F17）。没配 device 就不起线程；改了配置重建线程。"""
+        if self._ambience is not None:
+            self._ambience.stop()
+        self._ambience = None
+        if not self.config.ambience.device:
+            return
+        self._ambience = Ambience(
+            self.config.ambience,
+            timer_active=self._timer_active,
+            reading_active=self._reading_active,
+            set_brightness=self._dusk_set,
+            device_on=self._dusk_device_on,
+            read_brightness=self._device_brightness,
+        )
+        self._ambience.start()
+
+    def _timer_active(self) -> bool:
+        """番茄钟/倒计时在走（F17 专注档的开关）。正计时不算——记时长不是专注。"""
+        snap = self.companion.timers.snapshot()
+        return bool(snap and snap.get("mode") == "timer")
+
+    def _reading_active(self) -> bool:
+        """睡前朗读正在念（F17 睡前档的开关）。朗读挂了就当没在念。"""
+        try:
+            story = self.books.story()
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(isinstance(story, dict) and story.get("playing"))
+
     def _start_alarm(self) -> None:
         """起床闹钟（F11）。没配就不起线程；改了配置重建线程。"""
         if self._alarm is not None:
@@ -1563,6 +1679,7 @@ class DockHub:
                 self._probe_launch(cfg)
             else:
                 launch(cfg)
+                invalidate_running_cache()
         except HubError:
             raise
         except Exception as exc:
@@ -1937,6 +2054,8 @@ class DockHub:
             "presence": self._presence_payload(),
             "at_desk": self._at_desk_payload(),
             "notify": self.notify.snapshot(),
+            "mirror": self.mirror.snapshot(),
+            "guest": self.guest.state(),
             "alarm": self._alarm.snapshot() if self._alarm else None,
             "theme": self._theme_payload(),
             "photos": self._photos_payload(),
@@ -1945,35 +2064,52 @@ class DockHub:
         self._note_desk_snapshot(body)
         return body
 
-    def _note_desk_snapshot(self, snap: dict[str, Any]) -> None:
+    def _note_desk_snapshot(self, snap: dict[str, Any], *, from_mijia: bool = False) -> None:
         devices = snap.get("devices")
         temp = snap.get("temperature")
         with self._desk_lock:
             self._desk_temp = temp if isinstance(temp, dict) else None
             self._desk_devices = list(devices) if isinstance(devices, list) else []
-            self._mijia_at = time.monotonic()
+            if from_mijia:
+                self._mijia_at = time.monotonic()
 
-    def _maybe_refresh_mijia(self) -> None:
+    def _mijia_interval(self) -> float:
         cfg = self.config.mini or MiniLinkConfig()
-        interval = max(5.0, cfg.mijia_ms / 1000.0)
-        if self._mijia_at > 0 and time.monotonic() - self._mijia_at < interval:
-            return
-        if self._refreshing_mijia:
+        return max(5.0, cfg.mijia_ms / 1000.0)
+
+    def _should_refresh_mijia(self) -> bool:
+        if self._mijia_tried > 0 and time.monotonic() - self._mijia_tried < self._mijia_interval():
+            return False
+        return not self._refreshing_mijia
+
+    def _refresh_mijia_async(self) -> None:
+        """后台拉米家：主屏轮询和探针上报都不该等云端。"""
+        if not self._should_refresh_mijia():
             return
         self._refreshing_mijia = True
+        threading.Thread(target=self._mijia_worker, name="mijia-refresh", daemon=True).start()
+
+    def _refresh_mijia_blocking(self) -> None:
+        if not self._should_refresh_mijia():
+            return
+        self._refreshing_mijia = True
+        self._mijia_worker()
+
+    def _mijia_worker(self) -> None:
         try:
             self._pull_mijia_desk()
         except Exception as exc:  # noqa: BLE001 - 后台刷新失败不能拖垮请求线程
             logs.swallowed("后台刷新米家设备缓存", exc)
         finally:
+            self._mijia_tried = time.monotonic()
             self._refreshing_mijia = False
 
     def _pull_mijia_desk(self) -> None:
         _status, _message, temperature, devices = self._mijia_desk_slice()
-        self._note_desk_snapshot({"temperature": temperature, "devices": devices})
+        self._note_desk_snapshot({"temperature": temperature, "devices": devices}, from_mijia=True)
 
-    def _windows_payload(self) -> dict[str, Any]:
-        self._maybe_refresh_mijia()
+    def _desk_view(self) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        """缓存里的米家设备 + 现算的开程序状态，合成主屏要的那份 devices。"""
         running = self._running_names()
         with self._desk_lock:
             temperature = self._desk_temp
@@ -2003,6 +2139,11 @@ class DockHub:
         for item in cached:
             if isinstance(item, dict) and item.get("id") and item["id"] not in seen:
                 devices.append(item)
+        return temperature, devices
+
+    def _windows_payload(self) -> dict[str, Any]:
+        self._refresh_mijia_async()
+        temperature, devices = self._desk_view()
         return {
             "pc": self.pc_snapshot(),
             "media": self.media.snapshot(),

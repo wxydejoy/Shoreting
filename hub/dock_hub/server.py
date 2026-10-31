@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import gzip
 import hmac
 import json
 import math
 import os
 import re
 import socket
+import threading
 import time
 from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from dock_hub.accesslog import AccessLog
+from dock_hub.assets import etag_for
 from dock_hub.books import MAX_BOOK_BYTES
 from dock_hub.chat_log import asset_page_html, chats_page_html, diary_page_html, read_page_html, week_page_html
 from dock_hub.errors import HubError
@@ -22,6 +25,14 @@ from dock_hub.setup_ui import is_local_client
 MAX_BODY = 64 * 1024
 MAX_WAIT = 30.0
 _DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")  # F30 时间线：chats 的 day 参数
+GZIP_MIN = 512
+IDLE_TIMEOUT = 20.0
+MAX_CONNECTIONS = 32
+BUSY_TIMEOUT = 2.0
+_BUSY_BODY = json.dumps(
+    {"error": {"code": "busy", "message": "Hub 正忙，稍后再试"}},
+    ensure_ascii=False,
+).encode("utf-8")
 _STATIC = {
     "litera.min.css": "text/css; charset=utf-8",
     "shell.css": "text/css; charset=utf-8",
@@ -87,6 +98,15 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        # 手机常驻 keep-alive；不设超时，一条闲置连接就永远占一个线程
+        timeout = IDLE_TIMEOUT
+
+        def handle(self) -> None:
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError):
+                # 手机切后台、Wi-Fi 切换时会直接掐断，不该刷一屏 traceback
+                self.close_connection = True
 
         def handle_one_request(self) -> None:
             # 记一下开始时间，供访问日志算耗时。每条请求单独算，keep-alive 也对
@@ -112,7 +132,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     ctype = _STATIC.get(name)
                     if ctype is None:
                         raise HubError("not_found", "未知接口")
-                    self._html(200, asset_page_html(name), ctype)
+                    self._asset(asset_page_html(name), ctype)
                     return
                 if path.startswith("/setup"):
                     from dock_hub import setup_ui
@@ -153,6 +173,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self.end_headers()
                     return
                 if path == "/chats":
+                    self._guard_guest()
                     self._html(200, chats_page_html(), "text/html; charset=utf-8")
                     return
                 if path == "/read":
@@ -161,14 +182,17 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 if path == "/week":
                     # F27 桌面周报：这一周你在桌前多久、读了多少。页面本身不设防，
                     # 数据接口（/v1/companion/week）和 /chats 一样鉴权
+                    self._guard_guest()
                     self._html(200, week_page_html(), "text/html; charset=utf-8")
                     return
                 if path == "/diary":
                     # F29 守岸人日记：她傍晚写的那段。页面不设防，数据接口鉴权
+                    self._guard_guest()
                     self._html(200, diary_page_html(), "text/html; charset=utf-8")
                     return
                 if path == "/v1/companion/diary":
                     # F29：日记列表。鉴权口径与 /chats 相同——本机免 token
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     query = parse_qs(parsed.query)
@@ -182,6 +206,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._json(200, hub.companion_diary(limit=limit, day=day))
                     return
                 if path == "/v1/companion/week":
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_week())
@@ -200,6 +225,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._json(200, hub.books.story())
                     return
                 if path == "/v1/companion/chats":
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     query = parse_qs(parsed.query)
@@ -219,6 +245,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     return
                 if path == "/v1/companion/memory":
                     # F28：她记得的事。设置页读它，和 chats 一样走聊天鉴权
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_memory())
@@ -356,6 +383,12 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._limit("announce")
                     self._json(200, hub.ingest_wechat(self._read_json()))
                     return
+                if path == "/v1/mirror":
+                    # F35 通知镜像：安卓监听器把白名单应用的通知送来，书桌亮一下
+                    self._require_auth()
+                    self._limit("mirror")
+                    self._json(200, hub.ingest_mirror(self._read_json()))
+                    return
                 if path == "/v1/companion/read":
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
@@ -492,6 +525,15 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 return True
             return self._token_ok(self._cookie("helm_chats"))
 
+        def _guard_guest(self) -> None:
+            """F26 访客模式：对话记录连页面带接口一律 404。
+
+            给 404 不给 403：对访客来说这些页是「不存在」，比「无权访问」
+            少一句「那隐藏的是什么」的追问。
+            """
+            if hub.guest.hiding():
+                raise HubError("not_found", "访客模式下不展示")
+
         def _limit(self, bucket: str) -> None:
             """按来源 IP 扣一次额度，超了抛 429。
 
@@ -588,6 +630,21 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 raise HubError("bad_request", "JSON 必须是对象")
             return data
 
+        def _maybe_gzip(self, payload: bytes) -> bytes:
+            """文本类响应按需压一发：3 秒一轮的 snapshot 也能省掉大半流量。"""
+
+            if len(payload) < GZIP_MIN:
+                return payload
+            accepted = (self.headers.get("Accept-Encoding") or "").lower()
+            if "gzip" not in accepted:
+                return payload
+            body = gzip.compress(payload, 6)
+            if len(body) >= len(payload):
+                return payload
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+            return body
+
         def _json(
             self,
             status: int,
@@ -597,6 +654,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            data = self._maybe_gzip(data)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             for key, value in (headers or {}).items():
@@ -613,9 +671,28 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(data)
 
+        def _asset(self, payload: bytes, content_type: str) -> None:
+            """打包进来的 css/js 不会变，给浏览器留一份，省掉每次刷新的重下。"""
+
+            tag = etag_for(payload)
+            if (self.headers.get("If-None-Match") or "").strip() == tag:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.send_header("Cache-Control", "public, max-age=3600")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "public, max-age=3600")
+            self.send_header("ETag", tag)
+            self.end_headers()
+            self.wfile.write(payload)
+
         def _html(self, status: int, payload: bytes, content_type: str) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
+            payload = self._maybe_gzip(payload)
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -660,6 +737,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     key = unquote(path[len(memory_prefix) :])
                     if not key or "/" in key:
                         raise HubError("not_found", "未知接口")
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_memory_delete(key))
@@ -670,6 +748,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     day = unquote(path[len(diary_prefix) :])
                     if not _DAY_RE.fullmatch(day):
                         raise HubError("not_found", "未知接口")
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_diary_delete(day))
@@ -681,9 +760,55 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve(hub: DockHub, *, blocking: bool = True) -> ThreadingHTTPServer:
+class GuardedHTTPServer(ThreadingHTTPServer):
+    """连接数封顶：再多慢客户端也不会把线程堆到天上。"""
+
+    max_connections = MAX_CONNECTIONS
+    busy_timeout = BUSY_TIMEOUT
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._slots = threading.BoundedSemaphore(self.max_connections)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._slots.acquire(timeout=self.busy_timeout):
+            _reject_busy(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
+def _reject_busy(request: Any) -> None:
+    head = (
+        b"HTTP/1.1 503 Service Unavailable\r\n"
+        b"Content-Type: application/json; charset=utf-8\r\n"
+        b"Content-Length: " + str(len(_BUSY_BODY)).encode("ascii") + b"\r\n"
+        b"Cache-Control: no-store\r\n"
+        b"Connection: close\r\n\r\n"
+    )
+    try:
+        request.sendall(head + _BUSY_BODY)
+    except OSError:
+        pass
+    finally:
+        try:
+            request.close()
+        except OSError:
+            pass
+
+
+def serve(hub: DockHub, *, blocking: bool = True) -> GuardedHTTPServer:
     handler = make_handler(hub)
-    server = ThreadingHTTPServer((hub.config.host, hub.config.port), handler)
+    server = GuardedHTTPServer((hub.config.host, hub.config.port), handler)
     ips = lan_ips()
     print(f"岸亭 Hub v1  http://{ips[0]}:{hub.config.port}", flush=True)
     for extra in ips[1:]:

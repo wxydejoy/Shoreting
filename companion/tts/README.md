@@ -16,7 +16,9 @@ uv sync   # 首次
 bash ./install-launchd.sh
 ```
 
-探活：`curl -s http://127.0.0.1:18100/health`。需要 `ready: true`、`play: true`、`clone: true`。日志：`companion/tts/tts.log`。
+探活：`curl -s http://127.0.0.1:18100/health`。需要 `ready: true`、`play: true`、`clone: true`。
+
+模型加载失败时进程**不会退出**：`/health` 里 `ready: false` 并带 `error`，后台按 30s→15min 退避重试。以前是 `SystemExit(1)`，配 KeepAlive 就成了每 10 秒重读 2GB 模型的重启风暴。调试时要老行为，加 `--exit-on-load-error`。日志：`companion/tts/tts.log`。
 
 临时前台调试才用下面这组环境变量；平时不要在 Cursor 里挂着跑。
 

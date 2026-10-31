@@ -43,6 +43,8 @@ import cn.weiekko.dock.data.WeatherInfo
 import cn.weiekko.dock.data.WeatherPlaces
 import cn.weiekko.dock.data.TileLook
 import cn.weiekko.dock.data.TypeLook
+import cn.weiekko.dock.voice.VoiceprintBus
+import cn.weiekko.dock.voice.VoiceprintStore
 import cn.weiekko.dock.data.WinApp
 import cn.weiekko.dock.data.defaultDockLayout
 import cn.weiekko.dock.data.deviceType
@@ -54,6 +56,7 @@ import cn.weiekko.dock.data.toWinApp
 import cn.weiekko.dock.media.PhoneMedia
 import cn.weiekko.dock.power.PresenceWatch
 import cn.weiekko.dock.power.ScreenCommand
+import cn.weiekko.dock.voice.AsrHotwords
 import cn.weiekko.dock.voice.ConversationBus
 import cn.weiekko.dock.voice.ConversationWindow
 import cn.weiekko.dock.voice.CompanionVoice
@@ -102,7 +105,6 @@ data class DockUiState(
     val weatherError: String? = null,
     val winApps: List<WinApp> = DemoSnapshot.winApps,
     val selectedWinId: String? = null,
-    val media: MediaInfo = MediaInfo.phoneIdle(),
     val backgroundVideoUri: String? = null,
     val backgroundPageUrl: String? = null,
     val tileLook: TileLook = TileLook(),
@@ -113,11 +115,17 @@ data class DockUiState(
     val hubSleeping: Boolean = false,
     val deskPresenceEnabled: Boolean = false,
     val deskSleeping: Boolean = false,
+    // F5 声纹：谁在说话。开关在本地；花名册和注册进度只服务设置页
+    val voiceprintEnabled: Boolean = false,
+    val voiceprintSpeakers: List<String> = emptyList(),
+    val voiceprintEnroll: VoiceprintBus.EnrollState? = null,
+    val mirrorEnabled: Boolean = false,
+    val mirrorAppsRaw: String = "",
+    // F35 通知镜像：白名单应用的通知，亮在屏幕上，30 秒自己收走
+    val mirrorText: String? = null,
     val wakeWordEnabled: Boolean = true,
-    val voiceListening: Boolean = false,
+    // 免唤醒对话窗是冷状态（开关各一次），留在 UiState；热的听写走 voice 流
     val conversationOpen: Boolean = false,
-    val voiceText: String = "",
-    val voiceSettled: Boolean = false,
     val layout: DockLayout = DockLayout(),
     val editing: Boolean = false,
     val selectedModule: DockModule? = null,
@@ -133,6 +141,16 @@ data class DockUiState(
 ) {
     val configured: Boolean get() = connection.isConfigured
 }
+
+/**
+ * 语音这一路单独走一条流：ASR 每出半句就更新一次（一句话里十几二十次），
+ * 塞进 DockUiState 会让整棵界面跟着重组。同理 [DockViewModel.media] 每秒一次。
+ */
+data class VoiceState(
+    val listening: Boolean = false,
+    val text: String = "",
+    val settled: Boolean = false,
+)
 
 class DockViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = HubPreferences(application)
@@ -183,6 +201,13 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private val _ui = MutableStateFlow(DockUiState())
     val ui: StateFlow<DockUiState> = _ui.asStateFlow()
 
+    // 高频变的两块单独放，读的人只在叶子节点收集，别让主屏每秒重跑一遍
+    private val _media = MutableStateFlow(MediaInfo.phoneIdle())
+    val media: StateFlow<MediaInfo> = _media.asStateFlow()
+
+    private val _voice = MutableStateFlow(VoiceState())
+    val voice: StateFlow<VoiceState> = _voice.asStateFlow()
+
     private val _goHome = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val goHome: SharedFlow<Unit> = _goHome.asSharedFlow()
 
@@ -197,6 +222,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private var hubSleepJob: Job? = null
     private var listeningJob: Job? = null
     private var disconnectedAt: Long? = null
+    /** 上一次看到的 snapshot.seq；非空说明 Hub 支持长轮询。 */
+    private var hubSeq: Int? = null
     private var tileLookJob: Job? = null
     private var typeLookJob: Job? = null
     private var layoutJob: Job? = null
@@ -218,8 +245,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         registerNetworkWatch()
         viewModelScope.launch {
             while (isActive) {
-                val local = phoneMedia.snapshot()
-                _ui.update { it.copy(media = local) }
+                _media.value = phoneMedia.snapshot()
                 delay(PHONE_MEDIA_MS)
             }
         }
@@ -264,6 +290,29 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 _ui.update { it.copy(deskPresenceEnabled = enabled) }
                 if (!enabled) stopDeskWatch()
                 else startDeskWatch()
+            }
+        }
+        viewModelScope.launch {
+            prefs.mirrorEnabled.collect { enabled ->
+                _ui.update { it.copy(mirrorEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.mirrorApps.collect { apps ->
+                _ui.update { it.copy(mirrorAppsRaw = apps.joinToString(", ")) }
+            }
+        }
+        viewModelScope.launch {
+            prefs.voiceprintEnabled.collect { enabled ->
+                _ui.update { it.copy(voiceprintEnabled = enabled) }
+                VoiceprintBus.enabled = enabled
+                if (!enabled) cancelVoiceprintEnroll()
+            }
+        }
+        viewModelScope.launch {
+            VoiceprintBus.enroll.collect { state ->
+                _ui.update { it.copy(voiceprintEnroll = state) }
+                if (state?.saved == true) loadVoiceprintSpeakers()
             }
         }
         viewModelScope.launch {
@@ -323,7 +372,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 MiniConnection(
                     host = host.ifBlank { MiniConnection.DEFAULT_HOST },
                     port = MiniConnection.DEFAULT_PORT,
-                    token = MiniConnection.DEFAULT_TOKEN,
+                    // APK 里不再有默认口令：保存 Hub 时沿用手机上已有的 Mini 口令
+                    token = _ui.value.miniConnection.token,
                 ),
             )
         }
@@ -336,7 +386,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 MiniConnection(
                     host = host.ifBlank { MiniConnection.DEFAULT_HOST },
                     port = port,
-                    token = token.ifBlank { MiniConnection.DEFAULT_TOKEN },
+                    token = token.ifBlank { _ui.value.miniConnection.token },
                 ),
             )
         }
@@ -418,15 +468,9 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setWakeWord(enabled: Boolean) {
-        _ui.update {
-            it.copy(
-                wakeWordEnabled = enabled,
-                voiceListening = if (enabled) it.voiceListening else false,
-                voiceText = if (enabled) it.voiceText else "",
-                voiceSettled = if (enabled) it.voiceSettled else false,
-            )
-        }
+        _ui.update { it.copy(wakeWordEnabled = enabled) }
         if (!enabled) {
+            _voice.value = VoiceState()
             listeningJob?.cancel()
             closeConversation()
         }
@@ -439,6 +483,58 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun setDeskPresence(enabled: Boolean) {
         viewModelScope.launch {
             prefs.saveDeskPresenceEnabled(enabled)
+        }
+    }
+
+    /** 声纹（F5）总开关：默认关。开了也只在手机本地比对，音频不出设备。 */
+    fun setVoiceprintEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.saveVoiceprintEnabled(enabled)
+        }
+    }
+
+    /** 开始给一个称呼注册声纹：接下来对着书桌说几句就行。 */
+    fun startVoiceprintEnroll(raw: String) {
+        val name = raw.trim().take(12)
+        if (name.isEmpty()) return
+        VoiceprintBus.report(
+            VoiceprintBus.EnrollState(name, 0, VoiceprintBus.ENROLL_UTTERANCES),
+        )
+        VoiceprintBus.enrollName = name
+    }
+
+    fun cancelVoiceprintEnroll() {
+        VoiceprintBus.enrollName = null
+        VoiceprintBus.report(null)
+    }
+
+    fun deleteVoiceprintSpeaker(name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val store = VoiceprintStore(voiceprintFile())
+            store.save(store.load().without(name))
+            loadVoiceprintSpeakers()
+        }
+    }
+
+    fun loadVoiceprintSpeakers() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val names = VoiceprintStore(voiceprintFile()).load().names()
+            _ui.update { it.copy(voiceprintSpeakers = names) }
+        }
+    }
+
+    private fun voiceprintFile() = File(getApplication<Application>().filesDir, "voiceprint.json")
+
+    /** 通知镜像（F35）：开关与白名单。默认关。 */
+    fun setMirrorEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.saveMirrorEnabled(enabled)
+        }
+    }
+
+    fun setMirrorApps(raw: String) {
+        viewModelScope.launch {
+            prefs.saveMirrorApps(raw)
         }
     }
 
@@ -505,44 +601,33 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         listeningJob?.cancel()
         rememberTurn(turnId)
         val wasSleeping = _ui.value.hubSleeping
-        _ui.update {
-            it.copy(
-                voiceListening = true,
-                voiceText = "",
-                voiceSettled = false,
-                hubSleeping = false,
-            )
-        }
+        _voice.value = VoiceState(listening = true)
+        _ui.update { it.copy(hubSleeping = false) }
         if (wasSleeping || _ui.value.powerScreen) {
             _screenCommands.tryEmit(ScreenCommand.VoiceWake)
         }
         listeningJob = viewModelScope.launch {
             delay(VOICE_FALLBACK_MS)
-            val current = _ui.value
-            if (current.voiceListening && current.voiceText.isBlank()) {
-                _ui.update { it.copy(voiceListening = false) }
+            val current = _voice.value
+            if (current.listening && current.text.isBlank()) {
+                _voice.value = current.copy(listening = false)
                 if (_ui.value.powerScreen) noteDeskPc(_ui.value.snapshot?.pc?.online)
             }
         }
     }
 
-    fun onVoiceTranscript(text: String, settled: Boolean, turnId: String = "") {
+    fun onVoiceTranscript(text: String, settled: Boolean, turnId: String = "", speaker: String = "") {
         listeningJob?.cancel()
         rememberTurn(turnId)
-        _ui.update {
-            it.copy(
-                voiceListening = true,
-                voiceText = text,
-                voiceSettled = settled,
-            )
-        }
+        _voice.value = VoiceState(listening = true, text = text, settled = settled)
         if (!settled) return
         val spoken = text.trim()
         val now = HelmLatency.now()
         if (spoken.isNotEmpty() && companionReady()) {
             conversationWindow.onInput(now)
-            _ui.update { it.copy(voiceListening = false) }
-            hearCompanion(spoken)
+            _voice.value = _voice.value.copy(listening = false)
+            // 注册中：这几句话只喂声纹，别再当聊天发出去
+            if (VoiceprintBus.enrollName == null) hearCompanion(spoken, speaker)
             return
         }
         if (spoken.isEmpty()) {
@@ -552,7 +637,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         val hold = if (spoken.isEmpty()) VOICE_MISS_MS else VOICE_HOLD_MS
         listeningJob = viewModelScope.launch {
             delay(hold)
-            _ui.update { it.copy(voiceListening = false) }
+            _voice.value = _voice.value.copy(listening = false)
             if (_ui.value.powerScreen) noteDeskPc(_ui.value.snapshot?.pc?.online)
         }
     }
@@ -835,7 +920,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     fun testMiniConnection(host: String, portText: String, token: String) {
         val port = portText.toIntOrNull()
         val resolvedHost = host.ifBlank { MiniConnection.DEFAULT_HOST }
-        val resolvedToken = token.ifBlank { MiniConnection.DEFAULT_TOKEN }
+        val resolvedToken = token.ifBlank { _ui.value.miniConnection.token }
         if (resolvedHost.isBlank()) {
             _ui.update { it.copy(settingsStatus = "请填写 Mini 地址", settingsOk = false) }
             return
@@ -899,19 +984,15 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendMedia(action: String) {
         if (action !in MEDIA_ACTIONS) return
-        val before = _ui.value.media
+        val before = _media.value
         phoneMedia.dispatch(action)
-        _ui.update {
-            it.copy(
-                media = when (action) {
-                    "toggle" -> before.copy(playing = !before.playing)
-                    else -> before.copy(playing = true)
-                },
-            )
+        _media.value = when (action) {
+            "toggle" -> before.copy(playing = !before.playing)
+            else -> before.copy(playing = true)
         }
         viewModelScope.launch {
             delay(400)
-            _ui.update { it.copy(media = phoneMedia.snapshot()) }
+            _media.value = phoneMedia.snapshot()
         }
     }
 
@@ -996,13 +1077,13 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         _ui.update { it.copy(companionDraft = text, companionError = null) }
     }
 
-    fun hearCompanion(text: String) {
+    fun hearCompanion(text: String, speaker: String = "") {
         val spoken = text.trim()
         if (spoken.isEmpty()) return
-        sendCompanion(spoken)
+        sendCompanion(spoken, speaker)
     }
 
-    fun sendCompanion(text: String? = null) {
+    fun sendCompanion(text: String? = null, speaker: String = "") {
         val spoken = (text ?: _ui.value.companionDraft).trim()
         if (spoken.isEmpty()) return
         // 对讲捷径（F33 正向）：「对讲，饭好了」直接从书桌喇叭出声，不走 LLM
@@ -1070,7 +1151,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             HelmLatency.log(turn, "chat_http_start", "since_wake_ms=${HelmLatency.ms(voiceTurnAt)}")
             val started = HelmLatency.now()
             val result = withContext(Dispatchers.IO) {
-                runCatching { client.companionChat(connection, spoken, turn) }
+                runCatching { client.companionChat(connection, spoken, turn, speaker) }
             }
             result.fold(
                 onSuccess = { reply ->
@@ -1129,6 +1210,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     private fun interruptCompanion() {
         companionJob?.cancel()
         companionJob = null
+        // 协程取消停不下阻塞中的 execute()，把这条 HTTP 也掐掉
+        client.cancelActiveChat()
         companionVoice.stop()
         subtitleJob?.cancel()
         cueHubStop()
@@ -1222,8 +1305,30 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 通知镜像（F35）：比已亮过的 id 新的就亮一下，30 秒自己收走。 */
+    private var mirrorJob: Job? = null
+    private fun consumeMirror(snapshot: Snapshot) {
+        val mirror = snapshot.mirror ?: return
+        if (mirror.lastId <= 0) return
+        viewModelScope.launch {
+            val seen = prefs.lastMirrorId.first()
+            if (mirror.lastId > seen) prefs.saveLastMirrorId(mirror.lastId)
+            val newest = mirror.items.lastOrNull { it.id > seen } ?: return@launch
+            val text = if (newest.title.isBlank()) newest.text else "${newest.title}：${newest.text}"
+            _ui.update { it.copy(mirrorText = text) }
+            mirrorJob?.cancel()
+            mirrorJob = viewModelScope.launch {
+                delay(mirrorVisibleMs)
+                _ui.update { if (it.mirrorText == text) it.copy(mirrorText = null) else it }
+            }
+        }
+    }
+
     /** 对讲捷径（F33 正向）：说「对讲，饭好了」——话从书桌喇叭出来，不经大脑。 */
     private val intercomPrefix = Regex("^(?:对讲|广播|喇叭说)[，,：:.\\s]+(.+)$")
+
+    /** 通知镜像（F35）在屏上停多久：临时浮层 ≤30 秒，主屏信息层级的硬规矩。 */
+    private val mirrorVisibleMs = 30_000L
 
     private suspend fun sendAnnounce(message: String) {
         val connection = _ui.value.connection
@@ -1362,23 +1467,35 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         pollJob = viewModelScope.launch {
+            hubSeq = null
             pullSnapshot(connection, showLoading = _ui.value.snapshot == null)
             while (isActive) {
                 val down = disconnectedAt != null
-                val hasLive = _ui.value.snapshot?.pc != null
-                val wait = when {
-                    down -> _ui.value.hubReconnectSec.coerceIn(5, 120) * 1000L
-                    hasLive -> POLL_PC_MS
-                    else -> POLL_MS
-                }
-                delay(wait)
                 if (down) {
+                    delay(_ui.value.hubReconnectSec.coerceIn(5, 120) * 1000L)
                     val reachable = withContext(Dispatchers.IO) {
                         runCatching { client.health(connection) }.isSuccess
                     }
                     if (!reachable) continue
+                    pullSnapshot(connection, showLoading = false)
+                    continue
                 }
-                pullSnapshot(connection, showLoading = false)
+                val seq = hubSeq
+                if (seq == null) {
+                    // 旧版 Hub 不认 since/wait：老老实实按间隔轮询
+                    val hasLive = _ui.value.snapshot?.pc != null
+                    delay(if (hasLive) POLL_PC_MS else POLL_MS)
+                    pullSnapshot(connection, showLoading = false)
+                    continue
+                }
+                // 长轮询：Hub 状态一变就回；一直不变就挂到 wait 超时再回来
+                val started = SystemClock.elapsedRealtime()
+                pullSnapshot(connection, showLoading = false, since = seq, waitSec = LONG_POLL_SEC)
+                val spent = SystemClock.elapsedRealtime() - started
+                if (spent < LONG_POLL_MIN_GAP_MS) {
+                    // Hub 秒回（老版本把参数当空气、或 seq 抖了一下）时别打成忙等
+                    delay(LONG_POLL_MIN_GAP_MS - spent)
+                }
             }
         }
     }
@@ -1398,13 +1515,19 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun pullSnapshot(connection: HubConnection, showLoading: Boolean) {
+    private suspend fun pullSnapshot(
+        connection: HubConnection,
+        showLoading: Boolean,
+        since: Int? = null,
+        waitSec: Int = 0,
+    ) {
         if (showLoading) _ui.update { it.copy(loading = true) }
         val result = withContext(Dispatchers.IO) {
-            runCatching { client.snapshot(connection) }
+            runCatching { client.snapshot(connection, since = since, waitSec = waitSec) }
         }
         result.fold(
             onSuccess = { snapshot ->
+                hubSeq = snapshot.seq
                 val banner = when {
                     snapshot.hub.isLoginRequired() ->
                         snapshot.hub.message ?: "请在电脑上扫码登录米家"
@@ -1419,6 +1542,10 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 noteDeskPc(snapshot.pc?.online)
                 presenceReporter.onPoll(onWifi = onWifi(), reachable = true, nowMs = SystemClock.elapsedRealtime())
                 consumeRelay(snapshot)
+                consumeMirror(snapshot)
+                // 设备名进 ASR 热词：主屏上叫什么，嘴上就该听得懂什么。
+                // 词表变了语音服务会在下一句之间重装识别器，这里只管喂名字。
+                AsrHotwords.setExtra(snapshot.devices.map { it.name })
                 _ui.update {
                     it.copy(
                         snapshot = snapshot,
@@ -1631,6 +1758,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         const val POLL_MS = 20_000L
         const val POLL_PC_MS = 3_000L
+        const val LONG_POLL_SEC = 25
+        const val LONG_POLL_MIN_GAP_MS = 800L
         const val PHONE_MEDIA_MS = 1_000L
         const val FRAME_PHOTO_MS = 45_000L
         const val WEATHER_OK_MS = 20 * 60 * 1000L

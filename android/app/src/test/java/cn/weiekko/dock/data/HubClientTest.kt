@@ -3,6 +3,10 @@ package cn.weiekko.dock.data
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -134,6 +138,44 @@ class HubClientTest {
     }
 
     @Test
+    fun snapshotWithoutSeqMeansOldHub() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"protocol":1,"hub":{"name":"study","mijia":"ok"}}""",
+            ),
+        )
+        val snapshot = client.snapshot(connection)
+        assertNull(snapshot.seq)
+        assertTrue(server.takeRequest().path!!.endsWith("/v1/snapshot"))
+    }
+
+    @Test
+    fun snapshotLongPollSendsSinceAndWait() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"protocol":1,"seq":41,"hub":{"name":"study","mijia":"ok"}}""",
+            ),
+        )
+        val snapshot = client.snapshot(connection, since = 40, waitSec = 25)
+        assertEquals(41, snapshot.seq)
+        val request = server.takeRequest()
+        assertTrue(request.path!!.startsWith("/v1/snapshot?"))
+        assertTrue(request.path!!.contains("since=40"))
+        assertTrue(request.path!!.contains("wait=25"))
+    }
+
+    @Test
+    fun snapshotIgnoresWaitWithoutSince() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"protocol":1,"seq":7,"hub":{"name":"study","mijia":"ok"}}""",
+            ),
+        )
+        client.snapshot(connection, since = null, waitSec = 25)
+        assertEquals("/v1/snapshot", server.takeRequest().path)
+    }
+
+    @Test
     fun commandSendsPartialBody() {
         server.enqueue(
             MockResponse().setBody(
@@ -253,7 +295,7 @@ class HubClientTest {
                 """{"ok":true,"service":"helm-mini","protocol":1,"name":"mini"}""",
             ),
         )
-        val mini = MiniConnection(host = server.hostName, port = server.port, token = MiniConnection.DEFAULT_TOKEN)
+        val mini = MiniConnection(host = server.hostName, port = server.port, token = "mini-test-token")
         val health = client.miniHealth(mini)
         assertEquals("mini", health.name)
         assertEquals(0, server.takeRequest().headers["Authorization"]?.length ?: 0)
@@ -278,14 +320,61 @@ class HubClientTest {
                 """.trimIndent(),
             ),
         )
-        val mini = MiniConnection(host = server.hostName, port = server.port)
+        val mini = MiniConnection(host = server.hostName, port = server.port, token = "mini-test-token")
         val pc = client.miniSnapshot(mini)
         assertEquals(18.2, pc.cpu!!.percent, 0.01)
         assertEquals(8.0, pc.gpu!!.percent!!, 0.01)
         assertEquals("M4", pc.gpu!!.name)
         val request = server.takeRequest()
-        assertEquals("Bearer ${MiniConnection.DEFAULT_TOKEN}", request.getHeader("Authorization"))
+        assertEquals("Bearer mini-test-token", request.getHeader("Authorization"))
         assertTrue(request.path!!.endsWith("/v1/snapshot"))
+    }
+
+    @Test
+    fun apkShipsWithoutDefaultTokens() {
+        // 仓库是公开的：APK 里带 Hub / Mini 的默认口令等于把灯和开机键送出去
+        assertEquals("", HubConnection.DEFAULT_TOKEN)
+        assertEquals("", MiniConnection.DEFAULT_TOKEN)
+    }
+
+    @Test
+    fun cancelActiveChatReturnsTheThreadRightAway() {
+        // 阻塞的 execute() 不会因为协程 cancel 而停：打断时必须直接 cancel 这条 call，
+        // 否则那一轮要挂到 COMPANION_TIMEOUT_MS（90s）才还线程。
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val done = CountDownLatch(1)
+        var error: Throwable? = null
+        val worker = thread {
+            try {
+                client.companionChat(connection, "你好")
+            } catch (e: Throwable) {
+                error = e
+            } finally {
+                done.countDown()
+            }
+        }
+        server.takeRequest() // 等请求真的发出去
+        val started = System.currentTimeMillis()
+        client.cancelActiveChat()
+        assertTrue("cancel 之后应当立刻返回", done.await(3, TimeUnit.SECONDS))
+        assertTrue(System.currentTimeMillis() - started < 3_000)
+        assertTrue("取消应当抛网络异常，实际：$error", error is HubNetworkException)
+        worker.join(1_000)
+    }
+
+    @Test
+    fun newChatSupersedesThePreviousOne() {
+        // 两次 chat 撞在一起：旧的那条要被掐掉，只留最后一条在飞
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        server.enqueue(MockResponse().setBody("{\"ok\":true,\"text\":\"好\",\"turn_id\":\"t\"}"))
+        val first = thread {
+            runCatching { client.companionChat(connection, "第一句") }
+        }
+        server.takeRequest()
+        val reply = client.companionChat(connection, "第二句")
+        assertEquals("好", reply.text)
+        first.join(3_000)
+        assertEquals(false, first.isAlive)
     }
 
     @Test

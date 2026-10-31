@@ -9,17 +9,23 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class HubClient(
     private val http: OkHttpClient = defaultClient(),
     private val json: Json = defaultJson(),
 ) {
+    private val clients = ConcurrentHashMap<Long, OkHttpClient>()
+    private val activeChat = AtomicReference<Call?>(null)
+
     fun health(connection: HubConnection): Health {
         // 注意：Hub 完全可以就跑在 Mini 上（此时 Hub 的 host 与 Mini 的 host 相同）。
         // 以前这里用 IP 判断「填成 Mini 了」，结果在这种部署下必然抛异常，
@@ -69,9 +75,14 @@ class HubClient(
         return parsed.pc ?: PcStatus(online = false, updatedAt = "")
     }
 
-    fun snapshot(connection: HubConnection): Snapshot {
-        val request = authorized(connection, "/v1/snapshot").get().build()
-        val body = execute(request, readTimeoutMs = SNAPSHOT_TIMEOUT_MS)
+    fun snapshot(connection: HubConnection, since: Int? = null, waitSec: Int = 0): Snapshot {
+        // since + wait 是长轮询：Hub 状态没变就挂着，变了立刻回。
+        // 旧版 Hub 会忽略这两个参数、秒回一个没有 seq 的 snapshot，调用方据此回退到普通轮询。
+        val longPoll = since != null && waitSec > 0
+        val path = if (longPoll) "/v1/snapshot?since=$since&wait=$waitSec" else "/v1/snapshot"
+        val timeout = if (longPoll) (waitSec + 5) * 1000L else SNAPSHOT_TIMEOUT_MS
+        val request = authorized(connection, path).get().build()
+        val body = execute(request, readTimeoutMs = timeout)
         return decode(body)
     }
 
@@ -122,6 +133,7 @@ class HubClient(
         connection: HubConnection,
         text: String,
         turnId: String = "",
+        speaker: String = "",
     ): CompanionChatResponse {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) {
@@ -130,15 +142,32 @@ class HubClient(
         val payload = buildJsonObject {
             put("text", JsonPrimitive(trimmed))
             if (turnId.isNotBlank()) put("turn_id", JsonPrimitive(turnId.trim()))
+            // F5 声纹：只送本地认出的称呼，没认出来就不带这个字段
+            if (speaker.isNotBlank()) put("speaker", JsonPrimitive(speaker))
         }
         val request = authorized(connection, "/v1/companion/chat")
             .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))
             .build()
-        val body = execute(request, readTimeoutMs = COMPANION_TIMEOUT_MS)
-        return decode(body)
+        val call = clientFor(COMPANION_TIMEOUT_MS).newCall(request)
+        // 单飞：新一轮先把上一轮没回来的那条掐掉，别让两份 LLM 流同时回来抢字幕
+        activeChat.getAndSet(call)?.cancel()
+        try {
+            return decode(readText(call))
+        } finally {
+            activeChat.compareAndSet(call, null)
+        }
+    }
+
+    /**
+     * 打断时调用：`execute()` 是阻塞的，只 cancel 协程停不下这条 HTTP，
+     * 要等 90s 超时才还线程。这里直接 cancel 掉 call，线程立刻回来。
+     */
+    fun cancelActiveChat() {
+        activeChat.getAndSet(null)?.cancel()
     }
 
     fun companionStop(connection: HubConnection) {
+        cancelActiveChat()
         val request = authorized(connection, "/v1/companion/stop")
             .post("{}".toRequestBody(JSON))
             .build()
@@ -168,6 +197,22 @@ class HubClient(
             put("state", JsonPrimitive(state))
         }
         val request = authorized(connection, "/v1/presence")
+            .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))
+            .build()
+        execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
+    }
+
+    /**
+     * 通知镜像（F35）：把一条白名单通知送到 Hub，书桌屏幕亮一下。
+     * 失败会抛给调用方——监听器那边 runCatching 兜住就行，消息不值得连累服务。
+     */
+    fun mirror(connection: HubConnection, app: String, title: String, text: String) {
+        val payload = buildJsonObject {
+            put("app", JsonPrimitive(app.trim().take(80)))
+            put("title", JsonPrimitive(title.trim().take(60)))
+            put("text", JsonPrimitive(text.trim().take(200)))
+        }
+        val request = authorized(connection, "/v1/mirror")
             .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON))
             .build()
         execute(request, readTimeoutMs = COMMAND_TIMEOUT_MS)
@@ -247,17 +292,30 @@ class HubClient(
         return builder
     }
 
+    /** 每种超时复用同一个 client：newBuilder().build() 每次都会多一份连接池配置拷贝。 */
+    private fun clientFor(readTimeoutMs: Long): OkHttpClient =
+        clients.getOrPut(readTimeoutMs) {
+            http.newBuilder()
+                .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
+                .callTimeout(readTimeoutMs + 1_000, TimeUnit.MILLISECONDS)
+                .build()
+        }
+
     private fun execute(
         request: Request,
         readTimeoutMs: Long,
         expectAuthError: Boolean = true,
-    ): String {
-        val callClient = http.newBuilder()
-            .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
-            .callTimeout(readTimeoutMs + 1_000, TimeUnit.MILLISECONDS)
-            .build()
+    ): String = readText(clientFor(readTimeoutMs).newCall(request), expectAuthError)
+
+    private fun executeBytes(
+        request: Request,
+        readTimeoutMs: Long,
+        expectAuthError: Boolean = true,
+    ): ByteArray = readBytes(clientFor(readTimeoutMs).newCall(request), expectAuthError)
+
+    private fun readText(call: Call, expectAuthError: Boolean = true): String {
         val response = try {
-            callClient.newCall(request).execute()
+            call.execute()
         } catch (e: IOException) {
             throw HubNetworkException("连不上 Hub：${e.message ?: "网络错误"}", e)
         }
@@ -268,17 +326,9 @@ class HubClient(
         }
     }
 
-    private fun executeBytes(
-        request: Request,
-        readTimeoutMs: Long,
-        expectAuthError: Boolean = true,
-    ): ByteArray {
-        val callClient = http.newBuilder()
-            .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
-            .callTimeout(readTimeoutMs + 1_000, TimeUnit.MILLISECONDS)
-            .build()
+    private fun readBytes(call: Call, expectAuthError: Boolean = true): ByteArray {
         val response = try {
-            callClient.newCall(request).execute()
+            call.execute()
         } catch (e: IOException) {
             throw HubNetworkException("连不上 Hub：${e.message ?: "网络错误"}", e)
         }
