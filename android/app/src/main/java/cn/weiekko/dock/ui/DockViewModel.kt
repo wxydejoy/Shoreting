@@ -34,6 +34,7 @@ import cn.weiekko.dock.data.ModuleRect
 import cn.weiekko.dock.relay.RelayNotifier
 import cn.weiekko.dock.data.PcStatus
 import cn.weiekko.dock.data.PresenceReporter
+import cn.weiekko.dock.data.Scene
 import cn.weiekko.dock.data.Snapshot
 import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.ImageBitmap
@@ -92,6 +93,8 @@ data class DockUiState(
     val stale: Boolean = false,
     val banner: String? = null,
     val busyIds: Set<String> = emptySet(),
+    /** 正在跑的场景（F7）：跑着的按钮变省略号，再点忽略。 */
+    val sceneBusy: Set<String> = emptySet(),
     val settingsStatus: String? = null,
     val settingsOk: Boolean = false,
     val testing: Boolean = false,
@@ -1392,6 +1395,48 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 onFailure = { error ->
                     handleFailure(error)
                     _ui.update { it.copy(busyIds = it.busyIds - deviceId) }
+                },
+            )
+        }
+    }
+
+    /** 场景（F7）：点一下让 Hub 把一组设备一次做完。 */
+    fun runScene(scene: Scene) {
+        if (scene.id in _ui.value.sceneBusy) return
+        if (_ui.value.preview) {
+            _ui.update { it.copy(sceneBusy = it.sceneBusy + scene.id) }
+            viewModelScope.launch {
+                delay(600)
+                _ui.update { it.copy(sceneBusy = it.sceneBusy - scene.id) }
+            }
+            return
+        }
+        val connection = _ui.value.connection
+        if (!currentLink().pollsHub || !connection.isConfigured) return
+        _ui.update { it.copy(sceneBusy = it.sceneBusy + scene.id, banner = null) }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { client.runScene(connection, scene.id) }
+            }
+            result.fold(
+                onSuccess = { run ->
+                    val failed = run.actions.filter { !it.ok }
+                    _ui.update { state ->
+                        state.copy(
+                            sceneBusy = state.sceneBusy - scene.id,
+                            banner = when {
+                                run.ok -> null
+                                failed.isNotEmpty() ->
+                                    "${run.name}：${failed.first().message ?: "有一台没动成"}"
+                                else -> "${run.name}没动成"
+                            },
+                        )
+                    }
+                    pullSnapshot(connection, showLoading = false)
+                },
+                onFailure = { error ->
+                    _ui.update { it.copy(sceneBusy = it.sceneBusy - scene.id) }
+                    handleFailure(error)
                 },
             )
         }

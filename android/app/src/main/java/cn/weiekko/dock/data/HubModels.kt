@@ -20,6 +20,8 @@ data class Snapshot(
     val media: MediaInfo? = null,
     val companion: CompanionStatus? = null,
     val devices: List<HubDevice> = emptyList(),
+    /** 场景（F7）：hub.yaml 里配好的一组开关，主屏摆成按钮。 */
+    val scenes: List<Scene> = emptyList(),
     val notify: NotifyState? = null,
     val mirror: MirrorState? = null,
     /** 访客模式（F26）：开着的时候对话记录都收起来了，屏上留一个小标记。 */
@@ -30,6 +32,32 @@ data class Snapshot(
     val wallpaper: WallpaperStatus? = null,
     /** Hub 的状态版本号；旧版 Hub 没有这个字段，就用不了长轮询。 */
     val seq: Int? = null,
+)
+
+/** hub.yaml 里的一组开关（F7）；点一下就是一次 [SceneRun]。 */
+@Serializable
+data class Scene(
+    val id: String,
+    val name: String,
+)
+
+@Serializable
+data class SceneAction(
+    val id: String,
+    val on: Boolean? = null,
+    val brightness: Int? = null,
+    val ok: Boolean = true,
+    val code: String? = null,
+    val message: String? = null,
+)
+
+@Serializable
+data class SceneRun(
+    val id: String,
+    val name: String,
+    val ok: Boolean,
+    val said: Boolean = false,
+    val actions: List<SceneAction> = emptyList(),
 )
 
 /** 一句话壁纸（F39）：今天那句，画在背景上，淡。 */

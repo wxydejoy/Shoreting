@@ -138,6 +138,59 @@ class HubClientTest {
     }
 
     @Test
+    fun runScenePostsToScenePath() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"id":"bedtime","name":"晚安","ok":true,"said":true,"actions":[{"id":"lamp","on":false,"ok":true}]}""",
+            ),
+        )
+        val run = client.runScene(connection, "bedtime")
+        assertTrue(run.ok)
+        assertTrue(run.said)
+        assertEquals(1, run.actions.size)
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/v1/scenes/bedtime", request.path)
+        assertEquals("Bearer secret", request.headers["Authorization"])
+    }
+
+    @Test
+    fun runSceneKeepsPerDeviceFailure() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"id":"bedtime","name":"晚安","ok":false,"actions":[{"id":"lamp","on":false,"ok":false,"code":"offline","message":"台灯离线"},{"id":"plug","on":false,"ok":true}]}""",
+            ),
+        )
+        val run = client.runScene(connection, "bedtime")
+        assertEquals(false, run.ok)
+        assertEquals("offline", run.actions.first().code)
+        assertEquals("台灯离线", run.actions.first().message)
+    }
+
+    @Test
+    fun runSceneRejectsBlankId() {
+        try {
+            client.runScene(connection, "  ")
+            throw AssertionError("expected HubException")
+        } catch (e: HubException) {
+            assertEquals("bad_request", e.code)
+        }
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun snapshotReadsScenes() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"protocol":1,"hub":{"name":"study","mijia":"ok"},"scenes":[{"id":"work","name":"干活"}]}""",
+            ),
+        )
+        val snapshot = client.snapshot(connection)
+        assertEquals("work", snapshot.scenes.single().id)
+        assertEquals("干活", snapshot.scenes.single().name)
+    }
+
+    @Test
     fun snapshotWithoutSeqMeansOldHub() {
         server.enqueue(
             MockResponse().setBody(
