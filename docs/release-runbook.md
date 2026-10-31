@@ -49,8 +49,26 @@ TTS 旁边如果挂了白噪音服务（:18101），同样重启并 `curl` 一�
 ```bash
 cd android && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   ./gradlew assembleRelease
-adb install -r app/build/outputs/apk/release/app-release.apk   # 或手动传到 K20 安装
 ```
+
+产物是 **`app-release-unsigned.apk`**：仓库里没有 `signingConfigs`，直接 `adb install`
+会报 `INSTALL_PARSE_FAILED_NO_CERTIFICATES`。两种走法：
+
+```bash
+# A. 真机验收用 debug 包（已签名，能装能看日志，最省事）
+./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+# B. 要发出去的包，用 build-tools 的 apksigner 签（自用可复用 debug key）
+BT=$(ls -d ~/Library/Android/sdk/build-tools/*/ | tail -1)
+$BT/apksigner sign --ks ~/.android/debug.keystore \
+  --ks-pass pass:android --key-pass pass:android \
+  --out app-release-signed.apk app/build/outputs/apk/release/app-release-unsigned.apk
+adb install -r app-release-signed.apk
+```
+
+用 debug key 签的包以后换正式 keystore 会因签名不一致装不上（要先卸载，设置全丢）。
+正式分发前先建自己的 keystore，并把它排除在 git 之外。
 
 装上后先看三眼：主屏出时钟、`settings` 能连上 Hub、版本号显示 0.9.0。
 
@@ -106,3 +124,13 @@ Windows 的 Hub exe 只能在 Windows 上打，Mac 会自动跳过并提醒—�
   兜底（两种键都认），自己写配置时给键加引号 `"off":` 更稳。
 - **repo 里残留 hub/hub.yaml 会顶掉真配置**：搜索顺序是 cwd → hub/ → ~/.config，
   仓库工作树里那个占位 hub.yaml 必须挪走（已改名 hub.yaml.pre-0.9.0-bak 留档）。
+- **App 一启动就整进程退出（0.9.0 已修，见 753a72b）**：sherpa 有三处契约要同时对上，
+  任何一处不满足都是 native `exit(255)`，Java 侧 catch 不到、连日志都像是"莫名黑屏"：
+  ① `assetManager` 非 null 时它只按 asset 名找文件，热词是运行时绝对路径，必然打不开
+  （`Read binary file: Load ... failed`）→ 模型必须和热词同侧，现在模型解到 filesDir；
+  ② `modeling_unit` 在 `OnlineModelConfig` 上，不填就是空串（`EncodeHotwords` 直接退出）；
+  ③ 热词文件每行一个词，用 `/` 拼会让整行变成一个词，热词静默全失效
+  （`Cannot find ID for token /`）。改模型或热词逻辑后，先 `adb logcat | grep sherpa` 看这三条。
+- **换网段后 Hub 三处地址要跟着改**：`probe.url`（Windows 主机名或 IP）、灯带
+  `base_url`（ESP32 拿的是 DHCP，换路由必变）、以及 `temperature:` 段（整段丢了主屏就
+  没有室内温湿度，snapshot 里 `temperature: null`）。前两项只影响对应功能，第三项最隐蔽。
