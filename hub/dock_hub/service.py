@@ -13,6 +13,7 @@ from typing import Any
 from dock_hub import PROTOCOL, logs
 from dock_hub.chat_log import ChatLog, chat_log_path
 from dock_hub.companion import Companion
+from dock_hub.guest import GuestMode, parse_guest
 
 
 class _StorySpeaker:
@@ -36,6 +37,7 @@ from dock_hub.theme import birthday_text, occasions_for
 from dock_hub.wallpaper import wallpaper_line
 from dock_hub.photos import list_photos, photo_bytes as read_photo, resolve_photos_dir
 from dock_hub.errors import HubError
+from dock_hub.guest import GuestMode, parse_guest
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
 from dock_hub.notify import NotifyBoard, parse_relay, wechat_say_text
@@ -150,6 +152,9 @@ class DockHub:
         self.notify = NotifyBoard()
         # F35 通知镜像：手机（K20）收到的白名单通知，回到摆件屏幕上亮一下
         self.mirror = MirrorBoard()
+        # F26 访客模式：有外人时把记录藏起来，落盘一起停
+        self.guest = GuestMode()
+        self.companion.set_guest_gate(self.guest.hiding)
         self._attach_books()
         self._desk_lock = threading.Lock()
         self._desk_temp: dict[str, Any] | None = None
@@ -939,6 +944,8 @@ class DockHub:
                 "desk": self.reporter.snapshot,
                 "scene": self.run_scene,
                 "leave": self.leave_home,
+                # F26：配置关掉时这个口令整个不认识，别让「有客人」被她当闲聊接走
+                **({"guest": self.guest_command} if self.config.guest.enabled else {}),
                 "notify": self.relay_to_phone,
                 "power": self.power_action,
                 "noise": self.companion_noise,
@@ -1340,6 +1347,25 @@ class DockHub:
             "left": [item["id"] for item in left],
             "spoken": spoken,
         }
+
+    def guest_command(self, action: str) -> dict[str, Any]:
+        """「有客人」/「客人走了」（F26）：把记录收起来、再放回来。
+
+        companion 的语音处理器走这里；配置里 guest: false 时整条语音开关
+        不认识（world 里不挂这个键），话会落到闲聊里去。
+        """
+        if action not in ("on", "off"):
+            raise HubError("bad_request", "action 只能是 on 或 off")
+        was = self.guest.hiding()
+        if action == "on":
+            state = self.guest.activate(self.config.guest.hours)
+            spoken = f"好，记录我先收起来，{state['hours']:g} 小时后自己恢复。"
+        else:
+            self.guest.deactivate()
+            spoken = "好，记录又看得见了。"
+        if was != self.guest.hiding():
+            self.note_change()
+        return {"ok": True, "active": self.guest.hiding(), "spoken": spoken}
 
     def report_presence(self, state: str, now: datetime | None = None) -> dict[str, Any]:
         """在场上报（F25）：手机连上 / 离开家里 WiFi。
@@ -2030,6 +2056,7 @@ class DockHub:
             "at_desk": self._at_desk_payload(),
             "notify": self.notify.snapshot(),
             "mirror": self.mirror.snapshot(),
+            "guest": self.guest.state(),
             "alarm": self._alarm.snapshot() if self._alarm else None,
             "theme": self._theme_payload(),
             "photos": self._photos_payload(),

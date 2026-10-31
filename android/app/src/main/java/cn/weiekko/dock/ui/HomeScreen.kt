@@ -581,6 +581,16 @@ fun HomeScreen(
                 )
             }
 
+            // 访客模式（F26）：开着的时候她自己知道收着点，屏上留个角标提醒主人
+            if (state.snapshot?.guest != null && !state.hubSleeping && !state.editing) {
+                GuestBadge(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 10.dp, end = 14.dp)
+                        .zIndex(16f),
+                )
+            }
+
             if (state.hubSleeping && !voiceListening) {
                 Box(
                     modifier = Modifier
@@ -1575,6 +1585,26 @@ private fun MirrorBanner(
                 style = TextStyle(shadow = StatShadow),
             )
         }
+    }
+}
+
+/** 访客模式（F26）：右上角一个小角标，记录都收着呢——主人的底气，不是访客的提示。 */
+@Composable
+private fun GuestBadge(
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        color = Color.Black.copy(alpha = 0.45f),
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Text(
+            "访客",
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 11.sp,
+            style = TextStyle(shadow = StatShadow),
+        )
     }
 }
 

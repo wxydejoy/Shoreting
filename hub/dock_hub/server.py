@@ -173,6 +173,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self.end_headers()
                     return
                 if path == "/chats":
+                    self._guard_guest()
                     self._html(200, chats_page_html(), "text/html; charset=utf-8")
                     return
                 if path == "/read":
@@ -181,14 +182,17 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 if path == "/week":
                     # F27 桌面周报：这一周你在桌前多久、读了多少。页面本身不设防，
                     # 数据接口（/v1/companion/week）和 /chats 一样鉴权
+                    self._guard_guest()
                     self._html(200, week_page_html(), "text/html; charset=utf-8")
                     return
                 if path == "/diary":
                     # F29 守岸人日记：她傍晚写的那段。页面不设防，数据接口鉴权
+                    self._guard_guest()
                     self._html(200, diary_page_html(), "text/html; charset=utf-8")
                     return
                 if path == "/v1/companion/diary":
                     # F29：日记列表。鉴权口径与 /chats 相同——本机免 token
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     query = parse_qs(parsed.query)
@@ -202,6 +206,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._json(200, hub.companion_diary(limit=limit, day=day))
                     return
                 if path == "/v1/companion/week":
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_week())
@@ -220,6 +225,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._json(200, hub.books.story())
                     return
                 if path == "/v1/companion/chats":
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     query = parse_qs(parsed.query)
@@ -239,6 +245,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     return
                 if path == "/v1/companion/memory":
                     # F28：她记得的事。设置页读它，和 chats 一样走聊天鉴权
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_memory())
@@ -518,6 +525,15 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 return True
             return self._token_ok(self._cookie("helm_chats"))
 
+        def _guard_guest(self) -> None:
+            """F26 访客模式：对话记录连页面带接口一律 404。
+
+            给 404 不给 403：对访客来说这些页是「不存在」，比「无权访问」
+            少一句「那隐藏的是什么」的追问。
+            """
+            if hub.guest.hiding():
+                raise HubError("not_found", "访客模式下不展示")
+
         def _limit(self, bucket: str) -> None:
             """按来源 IP 扣一次额度，超了抛 429。
 
@@ -721,6 +737,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     key = unquote(path[len(memory_prefix) :])
                     if not key or "/" in key:
                         raise HubError("not_found", "未知接口")
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_memory_delete(key))
@@ -731,6 +748,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     day = unquote(path[len(diary_prefix) :])
                     if not _DAY_RE.fullmatch(day):
                         raise HubError("not_found", "未知接口")
+                    self._guard_guest()
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
                     self._json(200, hub.companion_diary_delete(day))

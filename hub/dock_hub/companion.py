@@ -20,7 +20,7 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import yaml
@@ -31,6 +31,7 @@ from dock_hub.clarify import PendingClarify, clarify_for, take_answer
 from dock_hub.config import CompanionConfig, ID_RE
 from dock_hub.errors import HubError
 from dock_hub import logs
+from dock_hub.guest import parse_guest
 from dock_hub.memory import (
     MemoryStore,
     parse_forget as parse_memory_forget,
@@ -269,6 +270,12 @@ class Companion:
         self._pending_clarify: PendingClarify | None = None
         # F21 电源动作：问过「真的要吗」、等「确认」的那一下（动作, 问的时刻）
         self._pending_power: tuple[str, float] | None = None
+        # F26 访客模式：真就一句话——现在该不该把对话藏起来（不落盘、不记事）
+        self._guest_hidden: Callable[[], bool] = lambda: False
+
+    def set_guest_gate(self, gate: Callable[[], bool] | None) -> None:
+        """F26：传进来一个「现在是不是访客模式」的问法。None = 永远不是。"""
+        self._guest_hidden = gate or (lambda: False)
 
     def configure(self, config: CompanionConfig | None) -> None:
         self.config = config or CompanionConfig(enabled=False)
@@ -409,7 +416,18 @@ class Companion:
         self.tts.stop()
         pending = self._pop_clarify()
         power_pending = self._pop_power()
-        taught = self._remember_skill(text)
+        hidden = self._guest_hidden()
+        taught = None if hidden else self._remember_skill(text)
+        if hidden and (
+            taught or is_teach_attempt(text) or parse_memory_teach(text) is not None
+        ):
+            # F26：客人在场不学新东西——口令和事实都不收，主人想教就先把模式关了
+            spoken = "客人在这儿，先不记这个。"
+            self._prepare_mood(text, control=False)
+            self._commit_reply(spoken)
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard
+            )
         if taught or is_teach_attempt(text):
             spoken = taught or "这个只能绑已经配好的灯或启动项，不能自己加程序。"
             self._prepare_mood(text, control=False)
@@ -471,6 +489,14 @@ class Companion:
             spoken, events = leaving
             self._commit_reply(spoken)
             _latency(turn, "leave", chars=len(spoken))
+            return self._finish_spoken(
+                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+            )
+        guest = self._handle_guest(text, turn)
+        if guest:
+            spoken, events = guest
+            self._commit_reply(spoken)
+            _latency(turn, "guest", act=events[0].get("action") if events else "")
             return self._finish_spoken(
                 spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
             )
@@ -602,7 +628,8 @@ class Companion:
         skills: list[dict[str, Any]],
         error: str | None = None,
     ) -> None:
-        if not self._chat_log:
+        # F26：访客模式下这轮对话不落盘——跟客人的话更不该被记着
+        if not self._chat_log or self._guest_hidden():
             return
         self._chat_log.append(
             turn=turn, user=user, reply=reply, ms=ms, skills=skills, error=error
@@ -966,6 +993,28 @@ class Companion:
         spoken = str(result.get("spoken") or "都关好了，路上小心。")
         _latency(turn, "leave_ok", ok=1 if result.get("ok") else 0, left=len(result.get("left") or []))
         return spoken, [{"id": "leave", "leave": True, "ok": bool(result.get("ok"))}]
+
+    def _handle_guest(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """「有客人」「客人走了」（F26）：把记录收起来、再放回来。
+
+        world 里没挂 guest（配置 guest: false）时就不认识这句话，让它落到
+        闲聊里去——「有客人」本来也可能是在聊天。
+        """
+        act = parse_guest(text)
+        if act is None:
+            return None
+        toggle = self._world.get("guest")
+        if not callable(toggle):
+            return None
+        try:
+            result = toggle(act)
+        except HubError as exc:
+            _latency(turn, "guest_error", code=exc.code)
+            return "这会儿没动成。", [{"id": "guest", "action": act, "ok": False}]
+        _latency(turn, "guest_ok", act=act)
+        return str(result.get("spoken") or "好。"), [
+            {"id": "guest", "action": act, "ok": bool(result.get("ok"))}
+        ]
 
     def _handle_desk(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         dimmed = self._run_slow_dim(text, turn)
@@ -1365,7 +1414,11 @@ class Companion:
         if not spoken or not heard:
             return
         self._recent.append((heard, spoken))
-        if self._memory is not None and not looks_like_control(heard):
+        if (
+            self._memory is not None
+            and not looks_like_control(heard)
+            and not self._guest_hidden()
+        ):
             # F28：闲聊里捞候选事实。失败不影响本轮对话，留一行痕迹就好
             try:
                 learned = self._memory.note_turn(heard)

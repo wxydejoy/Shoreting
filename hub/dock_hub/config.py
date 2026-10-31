@@ -10,6 +10,8 @@ import yaml
 
 from dock_hub import DEFAULT_PORT
 from dock_hub.errors import HubError
+from dock_hub.guest import DEFAULT_HOURS as _GUEST_DEFAULT_HOURS
+from dock_hub.guest import clamp_hours as _guest_clamp_hours
 
 ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -351,6 +353,14 @@ class DiaryConfig:
 
 
 @dataclass
+class GuestConfig:
+    """访客模式（F26）。有外人时一句话把记录收起来；guest: false 整个关掉。"""
+
+    enabled: bool = True
+    hours: float = _GUEST_DEFAULT_HOURS  # 忘了说「客人走了」到点自动恢复
+
+
+@dataclass
 class CalendarConfig:
     """日程订阅（F13）。一份 ICS 链接；问「今天有什么事」和早间简报用。"""
 
@@ -406,6 +416,7 @@ class HubConfig:
     theme: ThemeConfig = field(default_factory=ThemeConfig)
     wallpaper: WallpaperConfig = field(default_factory=WallpaperConfig)
     diary: DiaryConfig = field(default_factory=DiaryConfig)
+    guest: GuestConfig = field(default_factory=GuestConfig)
     # 日程订阅（F13）；None = 没配，「今天有什么事」就照实说不知道
     calendar: CalendarConfig | None = None
     # 回忆相框（F37）的图库目录；None = 没显式配（false 时 photos_off = True）
@@ -524,6 +535,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     theme = _parse_theme(raw.get("theme"))
     wallpaper = _parse_wallpaper(raw.get("wallpaper"))
     diary = _parse_diary(raw.get("diary"))
+    guest = _parse_guest(raw.get("guest"))
     calendar = _parse_calendar(raw.get("calendar"))
     photos, photos_off = _parse_photos(raw.get("photos"), path)
 
@@ -551,6 +563,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         theme=theme,
         wallpaper=wallpaper,
         diary=diary,
+        guest=guest,
         calendar=calendar,
         photos=photos,
         photos_off=photos_off,
@@ -1379,6 +1392,19 @@ def _parse_diary(raw: Any) -> DiaryConfig:
     raise ValueError("diary 要是 false 或 {at: \"21:30\"}")
 
 
+def _parse_guest(raw: Any) -> GuestConfig:
+    """访客模式（F26）：不写或 true 开（6 小时自动恢复），false 关，对象可改 hours。"""
+    if raw is None or raw is True:
+        return GuestConfig()
+    if raw is False:
+        return GuestConfig(enabled=False)
+    if isinstance(raw, dict):
+        if raw.get("hours") is None:
+            return GuestConfig()
+        return GuestConfig(hours=_guest_clamp_hours(raw.get("hours")))
+    raise ValueError("guest 要是 false 或 {hours: 6}")
+
+
 def _parse_calendar(raw: Any) -> CalendarConfig | None:
     """日程订阅（F13）：不写或 false 关，字符串就是 ICS 链接，对象可带名字。"""
     if raw is None or raw is False:
@@ -1612,6 +1638,10 @@ def hub_config_to_raw(config: HubConfig, *, mask_secrets: bool = False) -> dict[
         raw["diary"] = False
     elif config.diary.at != DiaryConfig().at:
         raw["diary"] = {"at": config.diary.at}
+    if not config.guest.enabled:
+        raw["guest"] = False
+    elif config.guest.hours != GuestConfig().hours:
+        raw["guest"] = {"hours": config.guest.hours}
     if config.calendar is not None:
         # 日程订阅（F13）：配了才写回，没配不占 yaml 一行。
         entry: dict[str, Any] = {"url": config.calendar.url}
