@@ -188,8 +188,23 @@ export type PhoneLayoutSnapshot = {
   modules?: Record<string, PhoneLayoutRect>;
 };
 
-export function fetchPhoneLayout(): Promise<PhoneLayoutSnapshot> {
-  return request<PhoneLayoutSnapshot>("/api/phone/layout");
+export async function fetchPhoneLayout(): Promise<PhoneLayoutSnapshot> {
+  // 手机快照里的 defaults / modules 是包了一层的 DockLayout（{version, modules}），
+  // 老版本 APK 发过平铺 map——两种都接住，编辑器一律拿平铺的 rect map。
+  const raw = await request<Record<string, unknown>>("/api/phone/layout");
+  const unwrap = (value: unknown): Record<string, PhoneLayoutRect> => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const inner = (value as { modules?: unknown }).modules;
+    if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+      return inner as Record<string, PhoneLayoutRect>;
+    }
+    return value as Record<string, PhoneLayoutRect>;
+  };
+  return {
+    ...(raw as PhoneLayoutSnapshot),
+    defaults: unwrap(raw.defaults),
+    modules: unwrap(raw.modules),
+  };
 }
 
 /** 上传走 multipart，不设 Content-Type（让浏览器自己写 boundary）。 */
