@@ -1,10 +1,10 @@
 @echo off
-REM 一键更新 Windows 探针：git pull -> 重启 pythonw(-m dock_hub --probe) -> 健康检查。
+REM 一键更新 Windows 端：git pull -> 重打 DockHub.exe -> 重启计划任务 -> 验活。
 REM 用法：双击，或在仓库任意位置运行 hub\update-probe.cmd
 setlocal
 cd /d "%~dp0"
 
-echo == 1/4 拉取最新代码
+echo == 1/3 拉取最新代码
 git pull --ff-only
 if errorlevel 1 (
     echo    --ff-only 失败，试 GitHub 直连（仓库是 public，不需要登录）
@@ -12,19 +12,16 @@ if errorlevel 1 (
     git merge --ff-only FETCH_HEAD || goto :fail
 )
 
-echo == 2/4 同步依赖（有 uv 才做，没有就跳过）
-where uv >nul 2>nul && (uv sync || goto :fail) || echo    未安装 uv，跳过
+echo == 2/3 重打 DockHub.exe（build-exe.ps1 含 uv sync，约 1 分钟）
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build-exe.ps1" || goto :fail
 
-echo == 3/4 重启探针进程
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" | Where-Object { $_.CommandLine -match 'dock_hub' -and $_.CommandLine -match '--probe' } | ForEach-Object { Write-Host ('    停掉 PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force }"
-start "" wscript.exe //nologo "%~dp0run-probe.vbs"
-
-echo == 4/4 健康检查
-timeout /t 3 /nobreak >nul
+echo == 3/3 重启并验活
+taskkill /f /im DockHub.exe >nul 2>nul
+schtasks /run /tn HelmDockHub
+timeout /t 6 /nobreak >nul
 curl -s -m 5 http://127.0.0.1:17892/health
 echo.
-echo 完成。如果上面没有 JSON，去任务管理器看 pythonw 是否在跑，或手动运行 run-probe.bat。
+echo 上面 JSON 的 revision 就是这次打包用的提交号。
 pause
 exit /b 0
 

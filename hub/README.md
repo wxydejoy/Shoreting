@@ -114,15 +114,14 @@ powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 
 重新打包前先退出托盘里的旧进程。改 `dock_hub/companion.py` 后必须重新打 exe：正在跑的是 `dist\DockHub.exe`，只拷 `.py` 不会生效。
 
-### 探针代码怎么更新（不重打 exe 的跑法）
+### 探针怎么更新
 
-探针也可以不起 exe，直接用仓库 checkout 跑：`hub\run-probe.bat`（内部走
-`run-probe.vbs` → `.venv\Scripts\pythonw.exe -m dock_hub --probe`，无窗口）。
-更新就一条命令：**双击 `hub\update-probe.cmd`**——它做四件事：
-`git pull --ff-only`（失败时直连 GitHub 的 https 地址再试）→ 有 uv 就 `uv sync`
-→ 找到 `pythonw` 里命令行含 `dock_hub --probe` 的进程杀掉并用 vbs 重新拉起
-→ `curl http://127.0.0.1:17892/health` 验活。注意它按端口 17892 验活，探针
-配置改过监听端口时要手动核对。`/health` 里带 `revision`（当前提交号：checkout
+Windows 端跑的是 `hub\dist\DockHub.exe`（计划任务 `HelmDockHub` 经
+`C:\Users\weiek\.config\dock-hub\start-hub.vbs` 拉起）。更新一条命令：
+**双击 `hub\update-probe.cmd`**——`git pull --ff-only`（失败时直连 GitHub 的
+https 地址再试）→ `build-exe.ps1` 重打 exe（含 `uv sync`，并把当前提交号烤进
+exe）→ 杀掉旧进程、`schtasks /run` 重启 → `curl /health` 验活。
+SSH 更新的话：`ssh weiek@win.lan`（免密已配）。`/health` 里带 `revision`（当前提交号：checkout
 跑法问 git，exe 是 build-exe.ps1 打包时烤进去的 `_revision.txt`）——想确认
 Windows 端更没更新，`curl http://win.lan:17892/health` 看一眼就知道。
 
