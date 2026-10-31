@@ -1,6 +1,6 @@
 # 安卓客户端（岸亭）
 
-横屏全屏摆件，包名 `cn.weiekko.dock`。当前 debug：**0.4.6**（`versionCode` 27）。设备方块铺满桌面，可重叠，长按拖动。
+横屏全屏摆件，包名 `cn.weiekko.dock`。当前 debug：**0.9.0**（`versionCode` 28）。设备方块铺满桌面，可重叠，长按拖动。
 
 未配置 Hub 时是预览模式（本地演示数据）。联机后只通过局域网 HTTP 跟 **Mac Mini Hub** 说话，不直连米家、Ollama、TTS。
 

@@ -49,7 +49,7 @@ Hub 在 Mini 上，`hub.yaml` 里 llm / tts 用 `127.0.0.1`。
 
 ## 安卓
 
-当前 debug 包 **versionName `0.4.6`**（`versionCode` 27）。主屏方块数量跟 Hub `devices[]` 一致，室内温湿度是传感器方块。
+当前 debug 包 **versionName `0.9.0`**（`versionCode` 28）。主屏方块数量跟 Hub `devices[]` 一致，室内温湿度是传感器方块。
 
 - 设置只填 Hub 的 host / port / token。不要填 LLM、TTS、在线 API Key
 - Hub 占位默认 Mini `10.83.22.121`；粘贴 `IP:端口` 时会丢掉端口，避免拼成双端口

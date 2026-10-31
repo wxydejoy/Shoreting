@@ -12,8 +12,8 @@ android {
         applicationId = "cn.weiekko.dock"
         minSdk = 25
         targetSdk = 36
-        versionCode = 27
-        versionName = "0.4.6"
+        versionCode = 28
+        versionName = "0.9.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
