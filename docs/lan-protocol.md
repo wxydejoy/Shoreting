@@ -147,7 +147,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `GET`/`POST` | `/v1/companion/books` | 是（本机可免） | 睡前朗读书架 / 上传一本 txt。**安卓不要打** |
 | `GET` | `/v1/companion/books/{id}` | 是（本机可免） | 打开一本书：章节索引 + 书签位置。**安卓不要打** |
 | `GET` | `/v1/companion/books/{id}/chapter/{index}` | 是（本机可免） | 一章的正文。**安卓不要打** |
-| `POST` | `/v1/companion/books/{id}/{action}` | 是（本机可免） | `play` / `pause` / `bookmark`。**安卓不要打** |
+| `POST` | `/v1/companion/books/{id}/{action}` | 是（本机可免） | `play` / `pause` / `bookmark` / `skip`。**安卓不要打** |
 | `GET` | `/v1/companion/story` | 是（本机可免） | 睡前朗读进度与定时。**安卓不要打** |
 | `POST` | `/v1/companion/story/timer` | 是（本机可免） | 睡前定时 0 / 15 / 30 / 45 / 60 分钟。**安卓不要打** |
 | `POST` | `/v1/scenes/{id}` | 是 | 一次开关一组设备（配置里的场景） |
@@ -724,6 +724,8 @@ POST /v1/companion/read/jobs/{id}/delete
 `GET /v1/companion/books/{id}` 返回章目录（`index`、`title`、`volume`、`start`、`end`）、书签、编码和 `problem_label`。`GET /v1/companion/books/{id}/chapter/{index}` 只返回这一章的正文。
 
 `POST /v1/companion/books/{id}/play` 从书签接着读；JSON 可以带 `offset` 用来跳章。正在读时再次调用是跳转，倒计时不重新给满。`POST /v1/companion/books/{id}/pause` 停喇叭并把书签留在当前段开头。`POST /v1/companion/books/{id}/bookmark` 只在没在读时移动书签。
+
+`POST /v1/companion/books/{id}/skip` 是句子级跳过（朗读页「上一句 / 跳过这句」按钮）：body `{"dir": 1}` 跳过当前句，`{"dir": -1}` 回上一句。正在读时跳过去接着读（与 play 跳转同路，倒计时不重新给满）；没在读时只挪书签不开口。切句规则与播放用的同一套（`next_slice`）。已经是第一句或最后一句时原地不动，返回 `200` 与当前 story，不报错；`dir` 缺省按 `1` 算，其他值 `400`。
 
 `GET /v1/companion/story` 返回是否在读、字偏移、章序号、当前句、`timer_min`、`timer_remaining_sec`、`stopped_by`。`POST /v1/companion/story/timer` 的 `minutes` 只能是 `0`、`15`、`30`、`45`、`60`。`0` 是关。默认 30 分钟。暂停会冻住剩余时间。到点或读完清掉倒计时，下一次播放才重新给满。
 

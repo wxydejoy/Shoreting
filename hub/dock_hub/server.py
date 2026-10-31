@@ -597,6 +597,8 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                 return hub.books.play(book_id, int(offset))
             if action == "pause":
                 return hub.books.pause()
+            if action == "skip":
+                return hub.books.skip(book_id, body.get("dir", 1))
             if action == "bookmark":
                 return hub.books.bookmark(book_id, int(body.get("offset") or 0))
             raise HubError("not_found", "未知接口")

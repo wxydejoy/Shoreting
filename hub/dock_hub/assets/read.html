@@ -33,6 +33,8 @@
           <div class="bar controls" style="margin-top:12px">
             <button id="storyPlay" type="button">播放</button>
             <button class="secondary" id="storyPause" type="button">暂停</button>
+            <button class="secondary" id="prevSentence" type="button">上一句</button>
+            <button class="secondary" id="nextSentence" type="button">跳过这句</button>
             <button class="secondary" id="prevChapter" type="button">上一章</button>
             <button class="secondary" id="nextChapter" type="button">下一章</button>
             <button class="secondary phone-only" id="tocToggle" type="button">目录</button>
@@ -76,7 +78,7 @@
           <label class="toggle"><input type="checkbox" id="autodl" /> 完成后自动下载</label>
         </div>
         </div>
-        <p class="hint wide-only">Ctrl/⌘ + Enter 播放 · Shift + Enter 生成 · Esc 停止</p>
+        <p class="hint wide-only">Ctrl/⌘ + Enter 播放 · Shift + Enter 生成 · Esc 停止 · 空格 播放/暂停 · ← → 跳句</p>
         <p id="status" class="ok"></p>
         <p id="err" class="err"></p>
       </section>
@@ -734,6 +736,25 @@
       xhr.send(file);
     }
 
+    async function skipSentence(dir) {
+      const id = (storyState && storyState.book_id) || (shelfBook && shelfBook.id);
+      if (!id) return;
+      const { resp, body, gated } = await api("/v1/companion/books/" + encodeURIComponent(id) + "/skip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dir }),
+      });
+      if (gated) return;
+      if (!resp.ok) {
+        errEl.textContent = (body.error && body.error.message) || "没跳过去。";
+        return;
+      }
+      errEl.textContent = "";
+      await applyStory(body);
+    }
+    document.getElementById("prevSentence").onclick = () => skipSentence(-1);
+    document.getElementById("nextSentence").onclick = () => skipSentence(1);
+
     document.getElementById("storyPlay").onclick = () => storyPlay(null);
     document.getElementById("storyPause").onclick = () => stopAll();
     document.getElementById("prevChapter").onclick = () => {
@@ -881,6 +902,16 @@
         e.preventDefault();
         if (storyState && storyState.playing) stopAll();
         else storyPlay(null);
+        return;
+      }
+      if (!typing && e.key === "ArrowRight" && !e.repeat) {
+        e.preventDefault();
+        skipSentence(1);
+        return;
+      }
+      if (!typing && e.key === "ArrowLeft" && !e.repeat) {
+        e.preventDefault();
+        skipSentence(-1);
         return;
       }
       if (typing && (e.ctrlKey || e.metaKey) && e.key === "Enter") {
