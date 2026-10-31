@@ -5,18 +5,25 @@ import android.net.Uri
 import android.util.Log
 import cn.weiekko.dock.data.HubConnection
 import cn.weiekko.dock.data.HubPreferences
+import cn.weiekko.dock.data.DockLayout
+import cn.weiekko.dock.data.ModuleCanvas
+import cn.weiekko.dock.data.ModuleCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 class BackgroundHost(private val context: Context) {
     val library = BackgroundLibrary(backgroundDir(context))
     private val prefs = HubPreferences(context)
     private val token = AtomicReference(HubConnection.DEFAULT_TOKEN)
     private val current = AtomicReference<String?>(null)
+    private val userLayout = AtomicReference(DockLayout())
     private val gate = BackgroundGate { token.get() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var server: BackgroundServer? = null
@@ -33,6 +40,9 @@ class BackgroundHost(private val context: Context) {
         scope.launch {
             prefs.videoUri.collect { stored -> current.set(library.currentId(stored)) }
         }
+        scope.launch {
+            prefs.layout.collect { userLayout.set(it) }
+        }
         try {
             server = BackgroundServer(
                 library = library,
@@ -48,6 +58,7 @@ class BackgroundHost(private val context: Context) {
                         prefs.saveVideoUri(stored)
                     }
                 },
+                layoutJson = ::layoutSnapshotJson,
                 port = BackgroundServer.PORT,
             )
         } catch (error: Exception) {
@@ -55,8 +66,67 @@ class BackgroundHost(private val context: Context) {
         }
     }
 
+    /**
+     * 网页布局编辑器要的快照。画布尺寸用 displayMetrics 减掉主屏那圈内边距
+     * （HomeScreen 的 20dp 横向 / 10dp 纵向），跟真实画布差个几像素没关系：
+     * 存布局存的是 0..1 的比例，编辑器也只提交用户真正动过的槽位，没动过的
+     * 槽位留空，手机端仍用自己的默认值。
+     */
+    private fun layoutSnapshotJson(): String? {
+        val metrics = context.resources.displayMetrics
+        if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) return null
+        val density = metrics.density.coerceAtLeast(1f)
+        val canvasW = (metrics.widthPixels - 20f * density * 2f).coerceAtLeast(1f)
+        val canvasH = (metrics.heightPixels - 10f * density * 2f).coerceAtLeast(1f)
+        val tileH = min(canvasH * 0.22f, 84f)
+        val tileW = min(canvasW * 0.20f, tileH * 1.7f)
+        val canvas = ModuleCanvas(canvasW, canvasH, tileW, tileH)
+        val defaults = DockLayout(modules = ModuleCatalog.defaultRects(canvas))
+        val merged = userLayout.get().mergedWith(defaults)
+        return buildString {
+            append("{\"ok\":true,\"canvas\":{\"w\":")
+            append(canvasW.roundToInt())
+            append(",\"h\":")
+            append(canvasH.roundToInt())
+            append("},\"slots\":[")
+            ModuleCatalog.all.forEachIndexed { index, slot ->
+                if (index > 0) append(',')
+                append("{\"id\":")
+                append(jsonString(slot.id))
+                append(",\"label\":")
+                append(jsonString(slot.label))
+                append('}')
+            }
+            append("],\"defaults\":")
+            append(LAYOUT_JSON.encodeToString(DockLayout.serializer(), defaults))
+            append(",\"modules\":")
+            append(LAYOUT_JSON.encodeToString(DockLayout.serializer(), merged))
+            append('}')
+        }
+    }
+
+    private fun jsonString(raw: String): String {
+        val out = StringBuilder("\"")
+        raw.forEach { ch ->
+            when (ch) {
+                '"' -> out.append("\\\"")
+                '\\' -> out.append("\\\\")
+                '\n' -> out.append("\\n")
+                '\r' -> out.append("\\r")
+                '\t' -> out.append("\\t")
+                else -> if (ch < ' ') out.append("\\u%04x".format(ch.code)) else out.append(ch)
+            }
+        }
+        return out.append('"').toString()
+    }
+
     companion object {
         private const val TAG = "BackgroundHost"
+
+        private val LAYOUT_JSON = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        }
 
         fun backgroundDir(context: Context): File {
             val parent = context.getExternalFilesDir(null) ?: context.filesDir

@@ -290,6 +290,47 @@ Hub 可选注册 mDNS，方便以后自动发现：
 - 禁止把模型路径、prompt、API key、参考音频路径放进 snapshot
 - 安卓只发用户这句话。Hub **不要**为 chat 先打 snapshot。灯/开关若要口头操作：模型写 `ACTION: {id}.on|off`，启动项写 `ACTION: {id}.run`，或用户话里带「关灯 / 开空调 / 关掉加湿器 / 启动无畏契约」时 Hub 兜底。米家登录后，账号里带 on 类属性的设备都会进口头技能，不必写进主屏 `hub.yaml`。口令可绑到这些 id，持久化到 `companion-aliases.yaml`。不要把当前开没开写进提示词。
 
+### 5.6 手机端外观 / 电源 / 天气 / 布局 `phone`
+
+这几项本来是手机自己的 DataStore（设置页「外观与字体 / 电源」），Hub 存一份权威副本下发，好让控制台能改。挂在 snapshot 顶层，**不是** `devices[]` 里的一项。
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `rev` | 是 | 外观版本号，整数，只增不减。控制台每保存一次外观 +1 |
+| `tile` | 是 | 方块外观：`{style, opacity, corner}` |
+| `tile.style` | 是 | `frost` / `ink` / `solid` / `line` |
+| `tile.opacity` | 是 | 0–100，百分比 |
+| `tile.corner` | 是 | 8–32，dp |
+| `type` | 是 | 字体与字号：`{font, clock, stats, tile, chip}` |
+| `type.font` | 是 | `system` / `sans` / `serif` / `mono` / `inter` / `outfit` / `jetbrains` / `smiley` |
+| `type.clock` | 是 | 时钟缩放百分比，60–140 |
+| `type.stats` | 是 | 监控数字字号，11–32 |
+| `type.tile` | 是 | 按钮字号，11–22 |
+| `type.chip` | 是 | 底部字号，11–22 |
+| `screen.keep_on` | 是 | 插电常亮（不因插拔电源锁屏） |
+| `screen.sleep_sec` | 是 | 电脑关机后多久压暗，15–600 秒 |
+| `weather.enabled` | 是 | 主屏是否显示天气 |
+| `weather.city` | 是 | 中文城市名，Hub 代取天气时用它 |
+| `layout` | 否 | 主屏布局，见下；没在控制台存过布局就不带这个键 |
+| `layout.rev` | 是 | 布局自己的版本号，**与外观的 `rev` 各走各的** |
+| `layout.modules` | 是 | 槽位 id → `{x, y, w, h, visible, chrome}`，全是 0–1 的画布比例 |
+
+`layout` 规则：
+
+- 槽位 id 是 APK 里 `ModuleCatalog` 的键（`Clock` / `Pc` / `Win0…2` / `Device0…1` / `Media` / `Weather` / `Indoor`）。Hub 不校验名单，不认识的槽位安卓渲染时自然跳过
+- `w` 或 `h` 小于 0.05 是**占位矩形**：位置用默认值，只认 `visible` / `chrome`。安卓存回 DataStore 前会把这类矩形归零
+- 安卓记着 `appliedLayoutRev`，`layout.rev` 变大才写 DataStore；手机上手动拖过的布局同样不会被轮询顶回去
+- 保存外观不动布局的 rev，保存布局也不动外观的 rev
+
+通用规则：
+
+- **`rev` 没变大就别动**。安卓记着自己套用到哪一版（`HubPreferences.appliedPhoneRev`），只有看到更大的 `rev` 才覆盖本地值。这样在手机上手动调过的字号、城市不会被每轮轮询顶回去
+- 没配过（`phone.rev == 0` 且 `layout.rev == 0`）→ snapshot 里**不带这个键**，别发一个全默认值的对象
+- 越界数值安卓按上表夹到边界，不报错也不崩；枚举不认识的（例如 `style: "glass"`）退回默认值
+- 这里只放外观和开关，**不要**塞 token、路径、日志
+
+视频背景不在这条链路上：手机自己起了一个背景管理页（`BackgroundServer`，端口 **17920**，用同一个 Hub Token 换 cookie），控制台的「视频背景」直接连它做列表 / 上传 / 选中 / 删除，`GET /api/layout` 也在这上面（网页布局编辑器读手机现状用；旧 APK 没有这个接口）。手机没连上 Wi-Fi 时这块读不出来，属于正常现象。
+
 ---
 
 ## 6. 接口定义
@@ -453,6 +494,7 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `devices[].icon` | 仅 `action`。短名；安卓 Remix Icon 映射见 §5.1。没有或不认识则画名称首字 |
 | `devices[].last_run_at` | 仅 `action`，可选。上次成功拉起的 UTC 时间 |
 | `scenes` | 配置里的场景，`[{id, name}]`，顺序同配置；没配就是空数组 |
+| `phone` | 控制台改的手机端外观 / 电源 / 天气 / 布局，见 §5.6；没在控制台改过（两个 rev 都是 0）时**不带这个键** |
 | 未登录时的 `devices` | 去掉所有米家设备，**保留**全部 `action`，以及 `ws2812` 灯带（对安卓仍报 `type: light`） |
 
 Hub 应对白名单设备**批量**读属性，不要一台一台串行请求米家。`pc` 用本机缓存，不要拖慢米家批量读。

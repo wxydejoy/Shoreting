@@ -265,6 +265,17 @@ class DockHub:
         today = datetime.now().astimezone().date()
         return {"text": wallpaper_line(today), "date": today.isoformat()}
 
+    def _phone_payload(self) -> dict[str, Any] | None:
+        """手机端外观/电源/天气（和布局）进 snapshot。
+
+        外观与布局两个 rev 都是 0 表示从没在控制台改过，整段不带——老配置的
+        yaml 一个字都不动。手机只在对应 rev 变大时才套用，所以这条路径也不会
+        跟手机上的手改打架。
+        """
+        if self.config.phone.rev <= 0 and self.config.phone.layout.rev <= 0:
+            return None
+        return self.config.phone.payload()
+
     def _theme_payload(self) -> dict[str, list[str]] | None:
         """今天是什么日子（F36）。没配生日和考试周、又不是节日，就不用带。"""
         occasions = occasions_for(datetime.now().astimezone().date(), self.config.theme)
@@ -2060,6 +2071,8 @@ class DockHub:
             "theme": self._theme_payload(),
             "photos": self._photos_payload(),
             "wallpaper": self._wallpaper_payload(),
+            # 手机端外观/电源/天气：控制台改的权威副本，rev 变了手机才套用
+            "phone": self._phone_payload(),
         }
         self._note_desk_snapshot(body)
         return body

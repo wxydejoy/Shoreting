@@ -137,3 +137,9 @@ Windows 的 Hub exe 只能在 Windows 上打，Mac 会自动跳过并提醒—�
   以及 `temperature:` 段（整段丢了主屏就没有室内温湿度，snapshot 里 `temperature: null`）。
   macOS 上如果 `.lan` 解析不了（默认路由是别的网卡），把 10.14.14.1 加到系统 DNS，或写一份
   `/etc/resolver/lan`（`nameserver 10.14.14.1`）。
+- **控制台改手机外观**：`phone:` 段是控制台写的，改完跟着 snapshot 下发，手机要**装新版 APK**
+  才认这段（旧 APK 直接忽略，不会有副作用）。判据：Android Studio 里看 `PhoneSync` 在不在，
+  或在控制台点一次保存后 `curl -H "Authorization: Bearer TOKEN" http://mini.lan:17890/v1/snapshot`
+  有没有 `phone` 字段——有字段而手机没变，就是 APK 还旧。
+- **视频背景**：控制台直连手机 `:17920`（手机自己的背景页），不走 Hub。手机上「岸亭」被杀了
+  或换了 Wi-Fi 就连不上，报错会明说。上传大小上限 200MB，走的是边收边转发，不占控制台内存。

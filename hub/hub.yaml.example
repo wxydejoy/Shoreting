@@ -23,6 +23,29 @@ nodes:
     host: k20.lan
     ip: 10.14.14.177
 
+# 手机端外观 / 电源 / 天气（控制台「三端配置 · 安卓」页改的就是这一段）。
+# 这几项原本只存在手机的 DataStore 里，控制台看不到；现在 Hub 存一份，挂在
+# /v1/snapshot 的 phone 段下发。**整段可以删掉**——删掉就是手机的默认值：
+#   - rev 是「控制台改过几次」的计数器，手机记着自己套用到哪一版，只有看到更大
+#     的 rev 才覆盖本地值。所以你在手机上手动调过的字号、城市不会被轮询顶回去。
+#   - 不写 rev（或 rev: 0）时，这一段不落盘、快照里也不带，等于没配过。
+#   - 控制台每保存一次自动 +1，不用手写。
+# phone:
+#   rev: 1
+#   tile: {style: ink, opacity: 42, corner: 20}   # frost / ink / solid / line
+#   type: {font: system, clock: 88, stats: 20, tile: 15, chip: 15}
+#   screen: {keep_on: true, sleep_sec: 60}        # 插电亮屏 / 电脑关机后多久压暗
+#   weather: {enabled: true, city: 上海}
+#   # 主屏布局（网页编辑器保存后出现）。槽位 id 是 APK 里的 ModuleCatalog：
+#   # Clock / Pc / Win0..2 / Device0..1 / Media / Weather / Indoor。坐标全是
+#   # 0..1 的画布比例；w、h 小于 0.05 表示占位——位置用默认值，只认显隐。
+#   # layout.rev 与外观的 rev 各算各的，互不顶。
+#   layout:
+#     rev: 1
+#     modules:
+#       Clock: {x: 0.28, y: 0.28, w: 0.44, h: 0.35}
+#       Media: {x: 0, y: 0, w: 0, h: 0, visible: false}   # 占位：只藏起来
+
 # 限流：按来源 IP + 端点各一个令牌桶，单位「每分钟几次」。
 # 整段删掉就是下面这组默认值；limits: false 全关；某一档写 0 只关那一档。
 # 一次 chat 是几千 token，这层是刷额度 / token 泄露时唯一还生效的止损点。

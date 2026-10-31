@@ -30,6 +30,8 @@ data class Snapshot(
     val theme: ThemeStatus? = null,
     val photos: PhotoIds? = null,
     val wallpaper: WallpaperStatus? = null,
+    /** 控制台改的手机端外观/电源/天气；rev 没变就不用管。 */
+    val phone: PhoneSettings? = null,
     /** Hub 的状态版本号；旧版 Hub 没有这个字段，就用不了长轮询。 */
     val seq: Int? = null,
 )
@@ -71,6 +73,69 @@ data class WallpaperStatus(
 @Serializable
 data class PhotoIds(
     val ids: List<String> = emptyList(),
+)
+
+/**
+ * 手机端外观 / 电源 / 天气（控制台「三端配置 · 安卓」改的就是这一段）。
+ *
+ * 这些值本身存在 DataStore 里，只在手机设置页改；Hub 存一份权威副本，挂在
+ * snapshot.phone 下发。**只有 [rev] 比本地记着的更大时才套用**——否则手机
+ * 上刚手动调过的字号，会被下一次 3 秒轮询原样顶回去。
+ */
+@Serializable
+data class PhoneTile(
+    val style: String = "ink",
+    val opacity: Int = 42,
+    val corner: Int = 20,
+)
+
+@Serializable
+data class PhoneType(
+    val font: String = "system",
+    val clock: Int = 88,
+    val stats: Int = 20,
+    val tile: Int = 15,
+    val chip: Int = 15,
+)
+
+@Serializable
+data class PhoneScreen(
+    val keepOn: Boolean = true,
+    val sleepSec: Int = 60,
+)
+
+@Serializable
+data class PhoneWeather(
+    val enabled: Boolean = true,
+    val city: String = "上海",
+)
+
+/** 主屏布局的一个槽位：0..1 的画布比例。w/h < 0.05 表示占位（位置用默认值）。 */
+@Serializable
+data class PhoneLayoutRect(
+    val x: Float = 0f,
+    val y: Float = 0f,
+    val w: Float = 0f,
+    val h: Float = 0f,
+    val visible: Boolean = true,
+    val chrome: Boolean = true,
+)
+
+/** 主屏布局。rev 与外观的 rev 各走各的：存布局不该顺带把字号也顶回去。 */
+@Serializable
+data class PhoneLayout(
+    val rev: Int = 0,
+    val modules: Map<String, PhoneLayoutRect> = emptyMap(),
+)
+
+@Serializable
+data class PhoneSettings(
+    val rev: Int = 0,
+    val tile: PhoneTile = PhoneTile(),
+    val type: PhoneType = PhoneType(),
+    val screen: PhoneScreen = PhoneScreen(),
+    val weather: PhoneWeather = PhoneWeather(),
+    val layout: PhoneLayout? = null,
 )
 
 /** 今天是什么日子（F36）：Hub 管日期（生日/节日/考试周），天气归手机自己。 */

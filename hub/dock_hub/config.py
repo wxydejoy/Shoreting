@@ -183,6 +183,141 @@ class NodesConfig:
         return getattr(self, key)
 
 
+# 手机端的外观 / 电源 / 天气。这些值本来只活在手机的 DataStore 里，控制台既
+# 看不见也改不了。现在 Hub 存一份权威副本，挂在 /v1/snapshot 的 phone 段下发：
+# 手机只在 rev 变了的时候套用，所以手工在设置页改过的值不会被每次轮询冲掉。
+PHONE_TILE_STYLES = ("frost", "ink", "solid", "line")
+PHONE_FONTS = ("system", "sans", "serif", "mono", "inter", "outfit", "jetbrains", "smiley")
+
+# (下限, 上限)。与安卓 data/TileLook.kt / data/TypeLook.kt 里的常量一一对应，
+# 改一边就得改另一边——手机侧 saveXxx 还会再 coerce 一次，这里拦住是为了给
+# 控制台一句像样的错误提示，而不是静默截断。
+PHONE_RANGES: dict[str, tuple[int, int]] = {
+    "opacity": (0, 100),
+    "corner": (8, 32),
+    "clock": (60, 140),
+    "stats": (11, 32),
+    "tile": (11, 22),
+    "chip": (11, 22),
+    "sleep_sec": (15, 600),
+}
+
+
+@dataclass
+class PhoneTileConfig:
+    """方块的样子：材质 / 透明度 / 圆角。"""
+
+    style: str = "ink"
+    opacity: int = 42
+    corner: int = 20
+
+
+@dataclass
+class PhoneTypeConfig:
+    """字体与四档字号。clock 是百分比，其余是 sp。"""
+
+    font: str = "system"
+    clock: int = 88
+    stats: int = 20
+    tile: int = 15
+    chip: int = 15
+
+
+@dataclass
+class PhoneScreenConfig:
+    """电源：插电常亮，以及 PC 关机后多久压暗。"""
+
+    keep_on: bool = True
+    sleep_sec: int = 60
+
+
+@dataclass
+class PhoneWeatherConfig:
+    enabled: bool = True
+    city: str = "上海"
+
+
+# 主屏布局的槽位矩形：0..1 的画布比例。w/h 小于 PLACEHOLDER_MIN 表示「位置用
+# 默认值，只存显隐」——与安卓 DockLayout.isPlaceholder() 的判定保持一致。
+PLACEHOLDER_MIN = 0.05
+LAYOUT_FIELDS = ("x", "y", "w", "h")
+
+
+def _parse_layout_rect(raw: Any, slot: str) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError(f"phone.layout.{slot} 必须是对象")
+    rect: dict[str, Any] = {}
+    for key in LAYOUT_FIELDS:
+        try:
+            value = float(raw.get(key) or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"phone.layout.{slot}.{key} 不是数字") from exc
+        rect[key] = min(max(value, 0.0), 1.0)
+    if rect["w"] < PLACEHOLDER_MIN or rect["h"] < PLACEHOLDER_MIN:
+        # 占位矩形：位置归零，手机端按默认位置摆，只认 visible / chrome
+        rect["w"] = 0.0
+        rect["h"] = 0.0
+    rect["visible"] = bool(raw.get("visible", True))
+    rect["chrome"] = bool(raw.get("chrome", True))
+    return rect
+
+
+@dataclass
+class PhoneLayoutConfig:
+    """主屏布局：槽位 id → 矩形。rev 与外观的 rev 各走各的计数器。
+
+    槽位目录（Clock / Pc / Win0…）定义在 APK 的 ModuleCatalog 里，Hub 不抄这份
+    名单——不认识的 id 手机渲染时本来就会跳过，这里只管数字形状对不对。
+    """
+
+    rev: int = 0
+    modules: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"rev": self.rev, "modules": self.modules}
+
+
+@dataclass
+class PhoneConfig:
+    """rev 是「控制台改过几次」的计数器。
+
+    手机记着自己套用到哪一版（HubPreferences.appliedPhoneRev），只有看到更大
+    的 rev 才覆盖本地值。0 表示还没从控制台改过，快照里整段不下发。
+    layout 是主屏布局，独立一套 rev（appliedLayoutRev）：保存布局不该顺带把
+    外观也顶一遍，反过来也一样。
+    """
+
+    rev: int = 0
+    tile: PhoneTileConfig = field(default_factory=PhoneTileConfig)
+    type: PhoneTypeConfig = field(default_factory=PhoneTypeConfig)
+    screen: PhoneScreenConfig = field(default_factory=PhoneScreenConfig)
+    weather: PhoneWeatherConfig = field(default_factory=PhoneWeatherConfig)
+    layout: PhoneLayoutConfig = field(default_factory=PhoneLayoutConfig)
+
+    def payload(self) -> dict[str, Any]:
+        """snapshot 里的形状。字段名与安卓 HubModels.PhoneSettings 对齐。"""
+        payload: dict[str, Any] = {
+            "rev": self.rev,
+            "tile": {
+                "style": self.tile.style,
+                "opacity": self.tile.opacity,
+                "corner": self.tile.corner,
+            },
+            "type": {
+                "font": self.type.font,
+                "clock": self.type.clock,
+                "stats": self.type.stats,
+                "tile": self.type.tile,
+                "chip": self.type.chip,
+            },
+            "screen": {"keep_on": self.screen.keep_on, "sleep_sec": self.screen.sleep_sec},
+            "weather": {"enabled": self.weather.enabled, "city": self.weather.city},
+        }
+        if self.layout.rev > 0:
+            payload["layout"] = self.layout.to_payload()
+        return payload
+
+
 @dataclass
 class PropConfig:
     id: str
@@ -451,6 +586,8 @@ class HubConfig:
     probe: ProbeConfig = field(default_factory=ProbeConfig)
     # 三端地址簿：域名 → IP，控制台的「三端配置」页直接改这里
     nodes: NodesConfig = field(default_factory=NodesConfig)
+    # 手机端外观/电源/天气：控制台改这里，跟着 snapshot 下发（见 PhoneConfig）
+    phone: PhoneConfig = field(default_factory=PhoneConfig)
     schedules: list[ScheduleConfig] = field(default_factory=list)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     # 除主 token 之外按设备分发的 token；删一条即吊销一台
@@ -562,6 +699,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     mini = _parse_mini(raw.get("mini"))
     probe = _parse_probe(raw.get("probe"))
     nodes = _parse_nodes(raw.get("nodes"))
+    phone = _parse_phone(raw.get("phone"))
     limits = _parse_limits(raw.get("limits"))
     tokens = _parse_tokens(raw.get("tokens"), token)
     proactive = _parse_proactive(raw.get("proactive"))
@@ -601,6 +739,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         mini=mini,
         probe=probe,
         nodes=nodes,
+        phone=phone,
         schedules=_parse_schedules(raw.get("schedules"), devices),
         limits=limits,
         tokens=tokens,
@@ -1143,6 +1282,104 @@ def nodes_to_raw(nodes: NodesConfig) -> dict[str, Any]:
         if entry:
             out[key] = entry
     return out
+
+
+def _parse_phone(raw: Any) -> PhoneConfig:
+    """手机端外观/电源/天气。整段没写就是默认值，写了只覆盖写到的字段。"""
+    phone = PhoneConfig()
+    if raw is None or raw is False:
+        return phone
+    if not isinstance(raw, dict):
+        raise ValueError("phone 必须是对象")
+    if "rev" in raw:
+        rev = int(raw.get("rev") or 0)
+        if rev < 0:
+            raise ValueError("phone.rev 不能是负数")
+        phone.rev = rev
+
+    tile = raw.get("tile")
+    if isinstance(tile, dict):
+        style = str(tile.get("style") or phone.tile.style).strip().lower()
+        if style not in PHONE_TILE_STYLES:
+            raise ValueError(f"phone.tile.style 只能是 {'/'.join(PHONE_TILE_STYLES)}")
+        phone.tile.style = style
+        phone.tile.opacity = _phone_int(tile.get("opacity"), "opacity", phone.tile.opacity)
+        phone.tile.corner = _phone_int(tile.get("corner"), "corner", phone.tile.corner)
+
+    type_raw = raw.get("type")
+    if isinstance(type_raw, dict):
+        font = str(type_raw.get("font") or phone.type.font).strip().lower()
+        if font not in PHONE_FONTS:
+            raise ValueError(f"phone.type.font 只能是 {'/'.join(PHONE_FONTS)}")
+        phone.type.font = font
+        phone.type.clock = _phone_int(type_raw.get("clock"), "clock", phone.type.clock)
+        phone.type.stats = _phone_int(type_raw.get("stats"), "stats", phone.type.stats)
+        phone.type.tile = _phone_int(type_raw.get("tile"), "tile", phone.type.tile)
+        phone.type.chip = _phone_int(type_raw.get("chip"), "chip", phone.type.chip)
+
+    screen = raw.get("screen")
+    if isinstance(screen, dict):
+        phone.screen.keep_on = bool(screen.get("keep_on", phone.screen.keep_on))
+        phone.screen.sleep_sec = _phone_int(
+            screen.get("sleep_sec"), "sleep_sec", phone.screen.sleep_sec
+        )
+
+    weather = raw.get("weather")
+    if isinstance(weather, dict):
+        phone.weather.enabled = bool(weather.get("enabled", phone.weather.enabled))
+        city = str(weather.get("city") or phone.weather.city).strip()
+        if city:
+            phone.weather.city = city
+
+    layout = raw.get("layout")
+    if isinstance(layout, dict):
+        if "rev" in layout:
+            rev = int(layout.get("rev") or 0)
+            if rev < 0:
+                raise ValueError("phone.layout.rev 不能是负数")
+            phone.layout.rev = rev
+        modules = layout.get("modules")
+        if isinstance(modules, dict):
+            phone.layout.modules = {
+                str(slot): _parse_layout_rect(rect, str(slot))
+                for slot, rect in modules.items()
+            }
+    return phone
+
+
+def _phone_int(value: Any, field: str, fallback: int) -> int:
+    """按 PHONE_RANGES 收口。写错范围直接报错，别把 0 或 999 悄悄发到手机上。"""
+    if value is None or value == "":
+        return fallback
+    number = int(value)
+    low, high = PHONE_RANGES[field]
+    if number < low or number > high:
+        raise ValueError(f"phone 的 {field} 要在 {low}..{high} 之间")
+    return number
+
+
+def phone_to_raw(phone: PhoneConfig) -> dict[str, Any]:
+    raw: dict[str, Any] = {
+        "rev": phone.rev,
+        "tile": {
+            "style": phone.tile.style,
+            "opacity": phone.tile.opacity,
+            "corner": phone.tile.corner,
+        },
+        "type": {
+            "font": phone.type.font,
+            "clock": phone.type.clock,
+            "stats": phone.type.stats,
+            "tile": phone.type.tile,
+            "chip": phone.type.chip,
+        },
+        "screen": {"keep_on": phone.screen.keep_on, "sleep_sec": phone.screen.sleep_sec},
+        "weather": {"enabled": phone.weather.enabled, "city": phone.weather.city},
+    }
+    # 布局没存过就不落盘，yaml 保持干净
+    if phone.layout.rev > 0 or phone.layout.modules:
+        raw["layout"] = phone.layout.to_payload()
+    return raw
 
 
 def _parse_pc(raw: Any) -> PcConfig | None:
@@ -1841,6 +2078,10 @@ def hub_config_to_raw(config: HubConfig, *, mask_secrets: bool = False) -> dict[
     nodes_raw = nodes_to_raw(config.nodes)
     if nodes_raw:
         raw["nodes"] = nodes_raw
+    # 手机端外观/电源/天气（和布局）整段照写（值都有意义，且控制台表单要读全量）。
+    # 两个 rev 都是 0 表示从没在控制台改过，这时不占 yaml 行，快照里也不下发。
+    if config.phone.rev > 0 or config.phone.layout.rev > 0:
+        raw["phone"] = phone_to_raw(config.phone)
     probe = config.probe
     if probe.url or probe.token or probe.stale_ms != 4000 or probe.hub_url != DEFAULT_PROBE_HUB_URL or probe.listen != DEFAULT_PROBE_LISTEN:
         dumped: dict[str, Any] = {}

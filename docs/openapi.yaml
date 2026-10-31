@@ -1228,6 +1228,112 @@ components:
           description: >
             通知镜像（F35）：白名单应用的通知名单。安卓拿自增 id 去重，
             见新的就在摆件界面亮一下（临时浮层，30 秒）。
+        phone:
+          allOf:
+            - $ref: "#/components/schemas/PhoneSettings"
+          nullable: true
+          description: >-
+            手机端外观 / 电源 / 天气 / 主屏布局。控制台改这里，Hub 存一份权威副本。
+            外观与布局的 rev 都是 0（从没在控制台改过）时整个键不出现。手机只在
+            对应 rev 变大时才套用，避免把设置页里手调的值顶回去。
+    PhoneSettings:
+      type: object
+      required: [rev, tile, type, screen, weather]
+      properties:
+        rev:
+          type: integer
+          minimum: 1
+          description: 控制台每保存一次 +1。手机记着上次套用的版本。
+        tile:
+          type: object
+          required: [style, opacity, corner]
+          properties:
+            style:
+              type: string
+              enum: [frost, ink, solid, line]
+            opacity:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: 方块透明度百分比。
+            corner:
+              type: integer
+              minimum: 8
+              maximum: 32
+              description: 圆角，dp。
+        type:
+          type: object
+          required: [font, clock, stats, tile, chip]
+          properties:
+            font:
+              type: string
+              enum: [system, sans, serif, mono, inter, outfit, jetbrains, smiley]
+            clock:
+              type: integer
+              minimum: 60
+              maximum: 140
+              description: 时钟缩放百分比。
+            stats:
+              type: integer
+              minimum: 11
+              maximum: 32
+              description: 监控数字字号。
+            tile:
+              type: integer
+              minimum: 11
+              maximum: 22
+              description: 按钮字号。
+            chip:
+              type: integer
+              minimum: 11
+              maximum: 22
+              description: 底部字号。
+        screen:
+          type: object
+          required: [keep_on, sleep_sec]
+          properties:
+            keep_on:
+              type: boolean
+              description: 插电常亮，插拔电源不锁屏。
+            sleep_sec:
+              type: integer
+              minimum: 15
+              maximum: 600
+              description: 电脑关机后多久压暗。
+        weather:
+          type: object
+          required: [enabled, city]
+          properties:
+            enabled:
+              type: boolean
+            city:
+              type: string
+              description: 中文城市名；天气由 Hub 代取。
+        layout:
+          type: object
+          description: >-
+            主屏布局（可省）。rev 与外观的 rev 各走各的：只保存布局时外观
+            不会被顶一遍，反过来也一样。
+          required: [rev, modules]
+          properties:
+            rev:
+              type: integer
+              minimum: 1
+              description: 布局版本号，手机记着 appliedLayoutRev，变大才套用。
+            modules:
+              type: object
+              additionalProperties:
+                type: object
+                description: >-
+                  槽位 id（APK 的 ModuleCatalog 键）→ 矩形。w/h < 0.05 表示
+                  占位：位置用默认值，只认 visible / chrome。
+                properties:
+                  x: {type: number, minimum: 0, maximum: 1}
+                  y: {type: number, minimum: 0, maximum: 1}
+                  w: {type: number, minimum: 0, maximum: 1}
+                  h: {type: number, minimum: 0, maximum: 1}
+                  visible: {type: boolean, default: true}
+                  chrome: {type: boolean, default: true}
     ThemeStatus:
       type: object
       required: [occasions]

@@ -22,10 +22,12 @@ from dock_hub.config import (
     DEFAULT_PROBE_PORT,
     NODE_KEYS,
     MiniLinkConfig,
+    PhoneConfig,
     ProbeConfig,
     default_config_path,
     device_to_raw,
     hub_config_to_raw,
+    phone_to_raw,
     save_config_raw,
 )
 from dock_hub.errors import HubError
@@ -214,6 +216,9 @@ def build_state(hub: DockHub) -> dict[str, Any]:
     companion_raw = config_raw.get("companion")
     if isinstance(companion_raw, dict) and isinstance(companion_raw.get("tts"), dict):
         companion_raw["tts"].pop("token", None)
+    # 手机端外观/电源/天气：yaml 里 rev==0 时整段不写，但控制台表单要读全量，
+    # 所以这里无条件塞一份完整值（默认值也照样给）。
+    config_raw["phone"] = phone_to_raw(hub.config.phone)
     return {
         "config": config_raw,
         "secrets": secrets,
@@ -488,6 +493,32 @@ def apply_save(hub: DockHub, payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "message": note, "port_changed": port_changed}
 
 
+def apply_phone(hub: DockHub, body: dict[str, Any]) -> dict[str, Any]:
+    """把手机端外观/电源/天气写进 hub.yaml，并立刻通知长轮询。
+
+    手机不监听端口，Hub 推不动它；这条链路是「Hub 存着，手机来问」。写完
+    note_change() 一下，挂着 /v1/snapshot?wait= 的那台会马上醒过来拿新 rev。
+    """
+    payload = body.get("phone") if isinstance(body.get("phone"), dict) else body
+    current = hub.config
+    phone_raw = _clean_phone(payload, current)
+    path = current.path or default_config_path()
+    raw = hub_config_to_raw(current)
+    raw["phone"] = phone_raw
+    cfg = save_config_raw(raw, path)
+    hub.reload_config(cfg)
+    hub.note_change()
+    if cfg.phone.layout.rev != current.phone.layout.rev:
+        note = f"已保存，等手机下次刷新就套用（布局第 {cfg.phone.layout.rev} 版）"
+    else:
+        note = f"已保存，等手机下次刷新就套用（第 {cfg.phone.rev} 版）"
+    return {
+        "ok": True,
+        "message": note,
+        "phone": phone_to_raw(cfg.phone),
+    }
+
+
 # ---------------------------------------------------------------- 表单字段清洗
 # 三端配置页能改的段落比以前多：Windows 的探针、Mini 的监控地址、三端地址簿。
 # 这些都是直接写进 yaml 的，所以每个字段都在这里过一遍，宁可报错也不写进半截 ip。
@@ -575,6 +606,58 @@ def _clean_nodes(value: Any) -> dict[str, Any]:
         if clean:
             out[key] = clean
     return out
+
+
+def _clean_phone(value: Any, current: Any) -> dict[str, Any]:
+    """手机端外观/电源/天气/布局：以当前值为底，覆盖提交到的字段，再自增 rev。
+
+    校验交给 config._parse_phone（枚举、上下限都在那里），这里只负责合并与
+    盖章。任何一项没通过都会整单拒绝——半截配置发到手机上比报错难受得多。
+    外观（tile/type/screen/weather）与布局（layout）是两个独立的 rev：只存
+    布局不该顺带把外观顶一遍，反过来也一样。
+    """
+    from dock_hub.config import _parse_phone
+
+    base = getattr(current, "phone", None) or PhoneConfig()
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("phone 必须是对象")
+    merged = phone_to_raw(base)
+    touched_look = False
+    for key in ("tile", "type", "screen", "weather"):
+        entry = value.get(key)
+        if entry is None:
+            continue
+        if not isinstance(entry, dict):
+            raise ValueError(f"phone.{key} 必须是对象")
+        merged[key].update({k: v for k, v in entry.items() if v is not None and v != ""})
+        touched_look = True
+    if touched_look:
+        merged["rev"] = max(int(base.rev) + 1, 1)
+
+    layout = value.get("layout")
+    touched_layout = False
+    if layout is not None:
+        if not isinstance(layout, dict):
+            raise ValueError("phone.layout 必须是对象")
+        modules = layout.get("modules")
+        if modules is None:
+            if "rev" in layout and int(layout.get("rev") or 0) <= int(base.layout.rev):
+                touched_layout = False  # 只是顺手带回来的旧值，不动
+            else:
+                modules = base.layout.modules  # 没给 modules：保持现有槽位
+        else:
+            if not isinstance(modules, dict):
+                raise ValueError("phone.layout.modules 必须是对象")
+            touched_layout = True  # 整包替换：编辑器发来的就是全部要存的槽位
+        if touched_layout:
+            merged["layout"] = {
+                "rev": max(int(base.layout.rev) + 1, 1),
+                "modules": modules,
+            }
+    _parse_phone(merged)  # 越界 / 枚举不对就在这里抛
+    return merged
 
 
 def _clean_probe(value: Any, current: Any) -> dict[str, Any]:
@@ -697,6 +780,8 @@ def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
             raw.pop("temperature", None)
     if "nodes" in payload:
         raw["nodes"] = _clean_nodes(payload.get("nodes"))
+    if "phone" in payload:
+        raw["phone"] = _clean_phone(payload.get("phone"), current)
     if "probe" in payload:
         raw["probe"] = _clean_probe(payload.get("probe"), current)
     if "mini" in payload:
@@ -821,6 +906,14 @@ def handle_setup_post(hub: DockHub, path: str, body: dict[str, Any], handler: An
     if path == "/setup/api/token/reveal":
         # 用户点「复制」时才取一次原文；调用方已过 ensure_local + CSRF 检查
         handler._json(200, {"token": hub.config.token})  # noqa: SLF001
+        return True
+    if path == "/setup/api/phone":
+        try:
+            result = apply_phone(hub, body)
+        except (ValueError, TypeError) as exc:
+            handler._json(400, {"ok": False, "message": str(exc)})  # noqa: SLF001
+            return True
+        handler._json(200, result)  # noqa: SLF001
         return True
     if path == "/setup/api/llm-models":
         base_url, _, api_key = _resolve_llm(hub, body)

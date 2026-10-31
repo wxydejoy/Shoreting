@@ -239,6 +239,36 @@ class HubPreferences(private val context: Context) {
         }
     }
 
+    /**
+     * 控制台下发的手机配置（snapshot.phone）已经套用到第几版。
+     *
+     * 只增不减：Hub 那边 rev 每次保存 +1，手机看到更大的才覆盖本地值，所以
+     * 在设置页手动调过的东西不会被打回。默认 0 = 从没套用过。
+     */
+    val appliedPhoneRev: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[KEY_APPLIED_PHONE_REV] ?: 0
+    }
+
+    suspend fun saveAppliedPhoneRev(rev: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_APPLIED_PHONE_REV] = rev
+        }
+    }
+
+    /**
+     * 布局的下发版本号，与 [appliedPhoneRev] 各记各的：控制台只存布局时
+     * 外观的 rev 不动，反过来也一样，两边互不顶。
+     */
+    val appliedLayoutRev: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[KEY_APPLIED_LAYOUT_REV] ?: 0
+    }
+
+    suspend fun saveAppliedLayoutRev(rev: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_APPLIED_LAYOUT_REV] = rev
+        }
+    }
+
     suspend fun saveHubSleepDelaySec(sec: Int) {
         context.dataStore.edit { prefs ->
             prefs[KEY_HUB_SLEEP_DELAY_SEC] = sec.coerceIn(15, 600)
@@ -330,6 +360,8 @@ class HubPreferences(private val context: Context) {
         private val KEY_TYPE_TILE = intPreferencesKey("type_tile")
         private val KEY_TYPE_CHIP = intPreferencesKey("type_chip")
         private val KEY_POWER_SCREEN = booleanPreferencesKey("power_screen")
+        private val KEY_APPLIED_PHONE_REV = intPreferencesKey("applied_phone_rev")
+        private val KEY_APPLIED_LAYOUT_REV = intPreferencesKey("applied_layout_rev")
         private val KEY_HUB_SLEEP_DELAY_SEC = intPreferencesKey("hub_sleep_delay_sec")
         private val KEY_HUB_RECONNECT_SEC = intPreferencesKey("hub_reconnect_sec")
         private val KEY_LAYOUT = stringPreferencesKey("home_layout")

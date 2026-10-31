@@ -1,18 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   Copy,
   Cpu,
+  Film,
   KeyRound,
   Laptop,
   Loader2,
   MonitorCog,
+  Palette,
   QrCode,
   RefreshCw,
   Save,
   Smartphone,
   Sparkles,
   Thermometer,
+  Trash2,
+  Upload,
   Volume2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -32,6 +36,15 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader, Section } from "@/components/page";
+import {
+  clearBackground,
+  deleteBackground,
+  fetchBackgrounds,
+  selectBackground,
+  uploadBackground,
+  type BackgroundList,
+} from "@/lib/api";
+import { PhoneLayoutEditor } from "@/pages/hub-phone-layout";
 import { HubNotice } from "@/pages/hub-notice";
 import { useConsole } from "@/lib/console-store";
 import { hubGet, hubPost, useHub } from "@/lib/hub";
@@ -76,6 +89,13 @@ type SetupState = {
     mini?: { enabled?: boolean; base_url?: string; pc_ms?: number; mijia_ms?: number } | null;
     probe?: { url?: string; stale_ms?: number; hub_url?: string; listen?: string } | null;
     nodes?: Record<string, NodeRaw>;
+    phone?: {
+      rev?: number;
+      tile?: { style?: string; opacity?: number; corner?: number };
+      type?: { font?: string; clock?: number; stats?: number; tile?: number; chip?: number };
+      screen?: { keep_on?: boolean; sleep_sec?: number };
+      weather?: { enabled?: boolean; city?: string };
+    } | null;
     companion?: { enabled?: boolean; tts?: { base_url?: string; deliver?: boolean } };
   };
   token_masked: string;
@@ -94,6 +114,22 @@ type SetupState = {
 type LlmResult = { ok?: boolean; message?: string; models?: string[]; count?: number; sample?: string };
 
 type NodeForm = { host: string; ip: string; port: string };
+
+/** 手机上「设置 → 外观与字体 / 电源」那几项。rev 由 Hub 管，表单里不碰。 */
+type PhoneForm = {
+  style: string;
+  opacity: string;
+  corner: string;
+  font: string;
+  clock: string;
+  stats: string;
+  tile: string;
+  chip: string;
+  keepOn: boolean;
+  sleepSec: string;
+  weatherOn: boolean;
+  city: string;
+};
 
 type Form = {
   name: string;
@@ -121,7 +157,41 @@ type Form = {
   speed: string;
   tempName: string;
   tempMijia: string;
+  phone: PhoneForm;
 };
+
+// 与安卓 data/TileLook.kt、data/TypeLook.kt 的枚举一一对应。改一边要改另一边。
+const TILE_STYLES = [
+  { value: "frost", label: "磨砂白" },
+  { value: "ink", label: "深色" },
+  { value: "solid", label: "实心" },
+  { value: "line", label: "细线" },
+];
+
+const DOCK_FONTS = [
+  { value: "system", label: "系统默认" },
+  { value: "sans", label: "系统黑体" },
+  { value: "serif", label: "系统宋体" },
+  { value: "mono", label: "系统等宽" },
+  { value: "inter", label: "Inter" },
+  { value: "outfit", label: "Outfit" },
+  { value: "jetbrains", label: "JetBrains Mono" },
+  { value: "smiley", label: "得意黑" },
+];
+
+/** 字节数说成人话：视频动辄几十 MB，光看数字没概念。 */
+function formatSize(bytes: number): string {
+  if (bytes >= 1 << 30) return `${(bytes / (1 << 30)).toFixed(1)} GB`;
+  if (bytes >= 1 << 20) return `${(bytes / (1 << 20)).toFixed(1)} MB`;
+  if (bytes >= 1 << 10) return `${Math.round(bytes / (1 << 10))} KB`;
+  return `${bytes} B`;
+}
+
+function formatDuration(sec: number): string {
+  const total = Math.round(sec);
+  if (total >= 60) return `${Math.floor(total / 60)}分${String(total % 60).padStart(2, "0")}秒`;
+  return `${total}秒`;
+}
 
 const NONE = "__none__";
 
@@ -183,6 +253,20 @@ function buildForm(state: SetupState): Form {
     speed: String(state.voice.speed),
     tempName: state.config.temperature?.name ?? "",
     tempMijia: state.config.temperature?.mijia_name || NONE,
+    phone: {
+      style: state.config.phone?.tile?.style ?? "ink",
+      opacity: String(state.config.phone?.tile?.opacity ?? 42),
+      corner: String(state.config.phone?.tile?.corner ?? 20),
+      font: state.config.phone?.type?.font ?? "system",
+      clock: String(state.config.phone?.type?.clock ?? 88),
+      stats: String(state.config.phone?.type?.stats ?? 20),
+      tile: String(state.config.phone?.type?.tile ?? 15),
+      chip: String(state.config.phone?.type?.chip ?? 15),
+      keepOn: state.config.phone?.screen?.keep_on ?? true,
+      sleepSec: String(state.config.phone?.screen?.sleep_sec ?? 60),
+      weatherOn: state.config.phone?.weather?.enabled ?? true,
+      city: state.config.phone?.weather?.city ?? "上海",
+    },
   };
 }
 
@@ -433,6 +517,146 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
       "tts",
       "朗读服务已保存",
     );
+  };
+
+  // ------------------------------------------------------------- 手机端那几项
+  // 走的是 /setup/api/phone：Hub 存一份、rev +1，手机下次轮询时自己来取。
+  const savePhone = async (
+    section: Record<string, unknown>,
+    key: string,
+    label: string,
+  ) => {
+    setSaving(key);
+    try {
+      const result = await hubPost<{ ok?: boolean; message?: string }>("/setup/api/phone", {
+        phone: section,
+      });
+      toast.success(result.message || label);
+      reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const patchPhone = <K extends keyof PhoneForm>(field: K, value: PhoneForm[K]) =>
+    setForm((prev) => (prev ? { ...prev, phone: { ...prev.phone, [field]: value } } : prev));
+
+  const saveLook = () => {
+    if (!form) return;
+    const p = form.phone;
+    void savePhone(
+      {
+        tile: { style: p.style, opacity: Number(p.opacity), corner: Number(p.corner) },
+        type: {
+          font: p.font,
+          clock: Number(p.clock),
+          stats: Number(p.stats),
+          tile: Number(p.tile),
+          chip: Number(p.chip),
+        },
+      },
+      "phone-look",
+      "外观已保存，手机上几秒内会变",
+    );
+  };
+
+  const saveScreen = () => {
+    if (!form) return;
+    void savePhone(
+      { screen: { keep_on: form.phone.keepOn, sleep_sec: Number(form.phone.sleepSec) } },
+      "phone-screen",
+      "电源已保存",
+    );
+  };
+
+  const saveWeather = () => {
+    if (!form) return;
+    void savePhone(
+      { weather: { enabled: form.phone.weatherOn, city: form.phone.city.trim() } },
+      "phone-weather",
+      "天气已保存",
+    );
+  };
+
+  // 视频背景不走 Hub：控制台直接问手机上的背景服务（dock_console/phone_bg.py）
+  const [backgrounds, setBackgrounds] = useState<BackgroundList | null>(null);
+  const [bgError, setBgError] = useState<string | null>(null);
+  const [bgBusy, setBgBusy] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+
+  const loadBackgrounds = async (quiet = false) => {
+    try {
+      const next = await fetchBackgrounds();
+      setBackgrounds(next);
+      setBgError(null);
+    } catch (err) {
+      setBackgrounds(null);
+      setBgError(err instanceof Error ? err.message : String(err));
+      if (!quiet) toast.error(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  useEffect(() => {
+    if (tab !== "android") return;
+    void loadBackgrounds(true);
+    // 只在这一页第一次打开时拉一次；之后靠按钮刷新
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  const pickBackground = async (id: string) => {
+    setBgBusy(id);
+    try {
+      const next = await selectBackground(id);
+      setBackgrounds((prev) => ({ ...(prev ?? { ok: true }), ...next }));
+      toast.success("已经换成这个背景");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBgBusy(null);
+    }
+  };
+
+  const removeBackground = async (id: string) => {
+    setBgBusy(id);
+    try {
+      const next = await deleteBackground(id);
+      setBackgrounds((prev) => ({ ...(prev ?? { ok: true }), ...next }));
+      toast.success("已删除");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBgBusy(null);
+    }
+  };
+
+  const clearBackgroundNow = async () => {
+    setBgBusy("clear");
+    try {
+      const next = await clearBackground();
+      setBackgrounds((prev) => ({ ...(prev ?? { ok: true }), ...next }));
+      toast.success("背景已清掉，主屏回到纯色");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBgBusy(null);
+    }
+  };
+
+  const uploadBackgroundFile = async (file: File) => {
+    setUploading(true);
+    try {
+      const next = await uploadBackground(file);
+      setBackgrounds((prev) => ({ ...(prev ?? { ok: true }), ...next }));
+      toast.success(`已上传并设为背景：${file.name}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
   };
 
   const saveTemperature = () => {
@@ -835,11 +1059,340 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
             </Section>
           ) : null}
 
+          <Section
+            title="外观与字体"
+            description="手机上「设置 → 外观与字体」这几项。保存后 Hub 记一版，手机下次轮询（几秒内）自己套用。"
+          >
+            <Card className="gap-0 py-0">
+              <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5">
+                <span className="flex items-center gap-1.5 text-[12.5px] font-medium">
+                  <Palette className="size-3.5 text-muted-foreground" />
+                  方块与字号
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={Boolean(saving) || !form}
+                  onClick={saveLook}
+                >
+                  {busy("phone-look") ? <Loader2 className="animate-spin" /> : <Save />}
+                  保存
+                </Button>
+              </div>
+              <div className="grid gap-4 p-4 sm:grid-cols-2">
+                <Field label="方块样式">
+                  <Select
+                    value={form?.phone.style ?? "ink"}
+                    onValueChange={(next) => patchPhone("style", next)}
+                  >
+                    <SelectTrigger size="sm" className="h-8 text-[12.5px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TILE_STYLES.map((item) => (
+                        <SelectItem key={item.value} value={item.value} className="text-[12.5px]">
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="字体">
+                  <Select
+                    value={form?.phone.font ?? "system"}
+                    onValueChange={(next) => patchPhone("font", next)}
+                  >
+                    <SelectTrigger size="sm" className="h-8 text-[12.5px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DOCK_FONTS.map((item) => (
+                        <SelectItem key={item.value} value={item.value} className="text-[12.5px]">
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label={`透明度 ${form?.phone.opacity ?? ""}%`} hint="0 = 全透，100 = 实心">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={form?.phone.opacity ?? ""}
+                    onChange={(event) => patchPhone("opacity", event.target.value)}
+                    className="h-8 text-[12.5px]"
+                  />
+                </Field>
+                <Field label={`圆角 ${form?.phone.corner ?? ""}dp`} hint="8 到 32">
+                  <Input
+                    type="number"
+                    min={8}
+                    max={32}
+                    value={form?.phone.corner ?? ""}
+                    onChange={(event) => patchPhone("corner", event.target.value)}
+                    className="h-8 text-[12.5px]"
+                  />
+                </Field>
+                <Field label={`时钟大小 ${form?.phone.clock ?? ""}%`} hint="60 到 140">
+                  <Input
+                    type="number"
+                    min={60}
+                    max={140}
+                    value={form?.phone.clock ?? ""}
+                    onChange={(event) => patchPhone("clock", event.target.value)}
+                    className="h-8 text-[12.5px]"
+                  />
+                </Field>
+                <Field label={`监控字号 ${form?.phone.stats ?? ""}`} hint="11 到 32">
+                  <Input
+                    type="number"
+                    min={11}
+                    max={32}
+                    value={form?.phone.stats ?? ""}
+                    onChange={(event) => patchPhone("stats", event.target.value)}
+                    className="h-8 text-[12.5px]"
+                  />
+                </Field>
+                <Field label={`按钮字号 ${form?.phone.tile ?? ""}`} hint="11 到 22">
+                  <Input
+                    type="number"
+                    min={11}
+                    max={22}
+                    value={form?.phone.tile ?? ""}
+                    onChange={(event) => patchPhone("tile", event.target.value)}
+                    className="h-8 text-[12.5px]"
+                  />
+                </Field>
+                <Field label={`底部字号 ${form?.phone.chip ?? ""}`} hint="11 到 22">
+                  <Input
+                    type="number"
+                    min={11}
+                    max={22}
+                    value={form?.phone.chip ?? ""}
+                    onChange={(event) => patchPhone("chip", event.target.value)}
+                    className="h-8 text-[12.5px]"
+                  />
+                </Field>
+              </div>
+            </Card>
+          </Section>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card className="gap-0 py-0">
+              <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5">
+                <span className="text-[12.5px] font-medium">电源</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={Boolean(saving) || !form}
+                  onClick={saveScreen}
+                >
+                  {busy("phone-screen") ? <Loader2 className="animate-spin" /> : <Save />}
+                  保存
+                </Button>
+              </div>
+              <div className="space-y-4 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[12.5px]">插电亮屏</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      开着的时候插拔电源不会锁屏；Windows 关机后会压暗，恢复后自己亮起来
+                    </div>
+                  </div>
+                  <Switch
+                    checked={form?.phone.keepOn ?? true}
+                    onCheckedChange={(next) => patchPhone("keepOn", next)}
+                  />
+                </div>
+                <Field label={`息屏时间 ${form?.phone.sleepSec ?? ""} 秒`} hint="电脑关机后多久压暗，15 到 600">
+                  <Input
+                    type="number"
+                    min={15}
+                    max={600}
+                    value={form?.phone.sleepSec ?? ""}
+                    onChange={(event) => patchPhone("sleepSec", event.target.value)}
+                    className="h-8 text-[12.5px]"
+                  />
+                </Field>
+              </div>
+            </Card>
+
+            <Card className="gap-0 py-0">
+              <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5">
+                <span className="text-[12.5px] font-medium">天气</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={Boolean(saving) || !form}
+                  onClick={saveWeather}
+                >
+                  {busy("phone-weather") ? <Loader2 className="animate-spin" /> : <Save />}
+                  保存
+                </Button>
+              </div>
+              <div className="space-y-4 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[12.5px]">显示天气</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      天气由 Hub 代取，手机连在只有局域网的 Wi-Fi 上也能看到
+                    </div>
+                  </div>
+                  <Switch
+                    checked={form?.phone.weatherOn ?? true}
+                    onCheckedChange={(next) => patchPhone("weatherOn", next)}
+                  />
+                </div>
+                <Field label="城市" hint="写中文城市名，例如 上海 / 杭州 / 深圳">
+                  <Input
+                    value={form?.phone.city ?? ""}
+                    onChange={(event) => patchPhone("city", event.target.value)}
+                    placeholder="上海"
+                    className="h-8 text-[12.5px]"
+                  />
+                </Field>
+              </div>
+            </Card>
+          </div>
+
+          <Section
+            title="主屏布局"
+            description="手机主屏那十来个磁贴摆在哪、多大、显不显示。拖动 / 缩放 / 显隐都在网页上做，保存后等手机下次刷新就套用；手机上手动拖过的布局不会被顶回去，除非再在这里保存一次。"
+          >
+            <PhoneLayoutEditor />
+          </Section>
+
+          <Section
+            title="视频背景"
+            description="手机上的背景库（图片和视频）。控制台直接连手机自己起的那个页面，不经过 Hub；手机没连 Wi-Fi 时这里读不出来。"
+          >
+            <Card className="gap-0 py-0">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-4 py-2.5">
+                <span className="flex items-center gap-1.5 text-[12.5px] font-medium">
+                  <Film className="size-3.5 text-muted-foreground" />
+                  {backgrounds?.items?.length
+                    ? `库里 ${backgrounds.items.length} 个`
+                    : "背景库"}
+                  {backgrounds?.current ? (
+                    <Badge variant="secondary" className="ml-1 text-[10px]">
+                      正在用：{backgrounds.current}
+                    </Badge>
+                  ) : null}
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  <input
+                    ref={fileInput}
+                    type="file"
+                    accept="video/*,image/*"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) void uploadBackgroundFile(file);
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={uploading}
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    {uploading ? <Loader2 className="animate-spin" /> : <Upload />}
+                    上传
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={bgBusy === "clear"}
+                    onClick={() => void clearBackgroundNow()}
+                  >
+                    {bgBusy === "clear" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                    清掉背景
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => void loadBackgrounds()}>
+                    <RefreshCw />
+                  </Button>
+                </div>
+              </div>
+
+              {bgError ? (
+                <div className="px-4 py-6 text-[12px] leading-relaxed text-muted-foreground">
+                  连不上手机上的背景服务：{bgError}
+                  <br />
+                  确认手机上「岸亭」还开着、和这台 Mac 在同一个 Wi-Fi；地址取自三端地址簿的安卓那一行。
+                </div>
+              ) : (
+                <div className="divide-y divide-border/60">
+                  {(backgrounds?.items ?? []).map((item) => {
+                    const current = backgrounds?.current === item.id;
+                    const metaBits = [
+                      item.kind === "video" ? "视频" : "图片",
+                      formatSize(item.bytes),
+                      item.duration ? formatDuration(item.duration) : "",
+                      item.width && item.height ? `${item.width}×${item.height}` : "",
+                    ].filter(Boolean);
+                    return (
+                      <div key={item.id} className="flex items-center gap-3 px-4 py-2.5">
+                        <img
+                          src={`/api/phone/backgrounds/${encodeURIComponent(item.id)}/thumb?kind=${item.kind}&size=${item.bytes}`}
+                          alt=""
+                          loading="lazy"
+                          className="h-14 w-10 shrink-0 rounded-md border border-border/60 object-cover"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[12.5px]">{item.name}</div>
+                          <div className="truncate text-[10.5px] text-muted-foreground">
+                            {metaBits.join(" · ")}
+                            {item.owner ? ` · ${item.owner}` : ""}
+                          </div>
+                        </div>
+                        {current ? (
+                          <Badge variant="outline" className="gap-1 text-[10px]">
+                            <Check className="size-3" />
+                            当前
+                          </Badge>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={bgBusy === item.id}
+                            onClick={() => void pickBackground(item.id)}
+                          >
+                            {bgBusy === item.id ? <Loader2 className="animate-spin" /> : <Check />}
+                            用它
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={bgBusy === item.id}
+                          onClick={() => void removeBackground(item.id)}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                  {!backgrounds ? (
+                    <div className="px-4 py-8 text-center text-[12px] text-muted-foreground">
+                      正在问手机……
+                    </div>
+                  ) : null}
+                  {backgrounds && !backgrounds.items?.length ? (
+                    <div className="px-4 py-8 text-center text-[12px] text-muted-foreground">
+                      手机上还没有视频或图片。点「上传」丢一个上去。
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </Card>
+          </Section>
+
           <div className="flex items-start gap-2.5 rounded-lg border bg-card px-4 py-3 text-[11.5px] leading-relaxed text-muted-foreground">
             <Smartphone className="mt-0.5 size-3.5 shrink-0" />
             <p>
-              还有几项只存在手机上，控制台改不到：视频背景、方块样式与圆角、字号、插电亮屏、息屏时间、天气城市。
-              它们在「岸亭 → 设置 → 外观 / 电源」里。
+              外观、电源、天气由 Hub 保存一版版本号，手机看到版本变了才套用——所以你在手机上手动调过的值，
+              不会被这里的旧值顶回去，除非再在这里点一次保存。
             </p>
           </div>
         </TabsContent>

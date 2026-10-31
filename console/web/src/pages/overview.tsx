@@ -1,9 +1,7 @@
-import { useState } from "react";
 import {
   ChevronRight,
   Cpu,
   Network,
-  RefreshCw,
   Server,
   Terminal,
   Volume2,
@@ -20,7 +18,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { PageHeader, Section } from "@/components/page";
 import { PowerActions, ServiceActions } from "@/components/service-actions";
 import { ServiceDot, StateBadge } from "@/components/service-state";

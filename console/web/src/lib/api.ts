@@ -117,3 +117,99 @@ export async function saveFeature(key: string, value: unknown): Promise<Result> 
     body: JSON.stringify({ key, value }),
   });
 }
+
+/**
+ * 手机上的视频背景库。控制台把请求转给手机自己起的背景服务（:17920），
+ * 手机没开 / 不在同一个 Wi-Fi 时这些函数会抛一句人话。
+ */
+export type BackgroundItem = {
+  id: string;
+  name: string;
+  kind: "image" | "video";
+  bytes: number;
+  modified?: number;
+  owner?: string;
+  /** 抽过帧的视频顺手带上；没抽过就没有 */
+  duration?: number;
+  width?: number;
+  height?: number;
+};
+
+export type BackgroundList = {
+  ok: boolean;
+  current?: string | null;
+  items?: BackgroundItem[];
+  address?: string | null;
+  message?: string;
+};
+
+export function fetchBackgrounds(): Promise<BackgroundList> {
+  return request<BackgroundList>("/api/phone/backgrounds");
+}
+
+export function selectBackground(id: string): Promise<BackgroundList> {
+  return request<BackgroundList>(`/api/phone/backgrounds/${encodeURIComponent(id)}/select`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function deleteBackground(id: string): Promise<BackgroundList> {
+  return request<BackgroundList>(`/api/phone/backgrounds/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function clearBackground(): Promise<BackgroundList> {
+  return request<BackgroundList>("/api/phone/backgrounds/clear", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+/**
+ * 手机主屏布局：网页编辑器靠它还原手机现状。模块坐标是 0..1 的画布比例。
+ * 手机 APK 没更新到带 /api/layout 的版本时会得到一句「版本太旧」。
+ */
+export type PhoneLayoutRect = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  visible: boolean;
+  chrome: boolean;
+};
+
+export type PhoneLayoutSnapshot = {
+  ok: boolean;
+  canvas?: { w: number; h: number };
+  slots?: { id: string; label: string }[];
+  defaults?: Record<string, PhoneLayoutRect>;
+  modules?: Record<string, PhoneLayoutRect>;
+};
+
+export function fetchPhoneLayout(): Promise<PhoneLayoutSnapshot> {
+  return request<PhoneLayoutSnapshot>("/api/phone/layout");
+}
+
+/** 上传走 multipart，不设 Content-Type（让浏览器自己写 boundary）。 */
+export async function uploadBackground(file: File): Promise<BackgroundList> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const response = await fetch("/api/phone/backgrounds", { method: "POST", body: form });
+  const text = await response.text();
+  let payload: unknown = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(text.slice(0, 160) || `控制台回了 ${response.status}`);
+  }
+  if (!response.ok) {
+    const message =
+      payload && typeof payload === "object" && "message" in payload
+        ? String((payload as { message?: unknown }).message ?? "")
+        : "";
+    throw new Error(message || `上传失败（${response.status}）`);
+  }
+  return payload as BackgroundList;
+}

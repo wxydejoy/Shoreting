@@ -17,6 +17,7 @@ class BackgroundServer(
     private val pageHtml: String,
     private val currentId: () -> String?,
     private val onCurrent: (String?) -> Unit,
+    private val layoutJson: () -> String? = { null },
     port: Int,
     bindHost: String = "0.0.0.0",
 ) : AutoCloseable {
@@ -113,6 +114,17 @@ class BackgroundServer(
                 }
                 if (removingCurrent) onCurrent(null)
                 writeBytes(output, 200, JSON, indexJson().toByteArray(UTF_8))
+            }
+            head.method == "GET" && head.path == "/api/layout" -> {
+                // 控制台的网页布局编辑器靠这个读手机现状：画布尺寸、槽位目录、
+                // 默认布局和用户已经存过的那份。空表示还没算出来（极少见）。
+                if (!authorized(head, output)) return
+                val json = layoutJson()
+                if (json == null) {
+                    writeBytes(output, 503, JSON, errorJson("布局还没就绪，稍后再试"))
+                    return
+                }
+                writeBytes(output, 200, JSON, json.toByteArray(UTF_8))
             }
             head.method == "GET" && parts.size == 5 && parts[1] == "api" && parts[2] == "backgrounds" && parts[4] == "media" -> {
                 if (!authorized(head, output)) return

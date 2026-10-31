@@ -31,6 +31,8 @@ import cn.weiekko.dock.data.MemoryEntry
 import cn.weiekko.dock.data.MiniConnection
 import cn.weiekko.dock.data.ModuleRect
 import cn.weiekko.dock.relay.RelayNotifier
+import cn.weiekko.dock.data.PhoneSettings
+import cn.weiekko.dock.data.PhoneSync
 import cn.weiekko.dock.data.PcStatus
 import cn.weiekko.dock.data.PresenceReporter
 import cn.weiekko.dock.data.Scene
@@ -1296,6 +1298,39 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 控制台改的手机端外观 / 电源 / 天气。
+     *
+     * snapshot.phone 是 Hub 存的权威副本，但**只有 rev 变大时才套用**：在手机
+     * 设置页手调过的字号、城市，不该被下一次 3 秒轮询顶回去。写完 rev 记账，
+     * DataStore 的 Flow 会自己把界面刷新过来。
+     */
+    private suspend fun applyPhoneConfig(remote: PhoneSettings?) {
+        val applied = prefs.appliedPhoneRev.first()
+        val patch = PhoneSync.plan(remote, applied)
+        if (patch != null) {
+            patch.tile?.let { prefs.saveTileLook(it) }
+            patch.type?.let { prefs.saveTypeLook(it) }
+            patch.powerScreen?.let { prefs.savePowerScreen(it) }
+            patch.sleepSec?.let { prefs.saveHubSleepDelaySec(it) }
+            patch.weatherEnabled?.let { prefs.saveWeatherEnabled(it) }
+            patch.weatherCity?.let { prefs.saveWeatherCity(it) }
+            prefs.saveAppliedPhoneRev(PhoneSync.nextRev(remote, applied))
+        }
+        applyPhoneLayout(remote)
+    }
+
+    /**
+     * 控制台网页编辑器改的主屏布局。与外观各走各的 rev：只存布局时字号、
+     * 城市那些不会被碰。写入 DataStore 后 layout Flow 自己刷新主屏。
+     */
+    private suspend fun applyPhoneLayout(remote: PhoneSettings?) {
+        val applied = prefs.appliedLayoutRev.first()
+        val layout = PhoneSync.layoutPlan(remote, applied) ?: return
+        prefs.saveLayout(layout)
+        prefs.saveAppliedLayoutRev(PhoneSync.nextLayoutRev(remote, applied))
+    }
+
     /** 递话通知（F33/F4）：比本地已响过的 id 新的就发通知，然后记账。 */
     private fun consumeRelay(snapshot: Snapshot) {
         val notify = snapshot.notify ?: return
@@ -1550,6 +1585,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 presenceReporter.onPoll(onWifi = onWifi(), reachable = true, nowMs = SystemClock.elapsedRealtime())
                 consumeRelay(snapshot)
                 consumeMirror(snapshot)
+                applyPhoneConfig(snapshot.phone)
                 // 设备名进 ASR 热词：主屏上叫什么，嘴上就该听得懂什么。
                 // 词表变了语音服务会在下一句之间重装识别器，这里只管喂名字。
                 AsrHotwords.setExtra(snapshot.devices.map { it.name })

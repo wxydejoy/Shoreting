@@ -85,7 +85,7 @@ npm run build    # -> ../dock_console/assets/console.js / console.css
 
 | tab | 改什么 |
 |---|---|
-| 安卓 K20 | 手机上要填的地址 / 端口 / Token（可复制）、Mini CPU 地址、室内温湿度、主屏方块与场景（只读） |
+| 安卓 K20 | 手机上要填的地址 / 端口 / Token（可复制）、Mini CPU 地址、室内温湿度、主屏方块与场景（只读）、**外观与字体 / 电源 / 天气 / 视频背景** |
 | Windows | `probe` 段整段（地址、口令、回连、监听、掉线阈值）、`pc` 的监控开关与采样、`media`、启动项清单 |
 | Mac | `name` / `host` / `port` / Token、伴侣大模型、声音与朗读服务、`mini` 监控、米家登录 |
 
@@ -93,6 +93,18 @@ npm run build    # -> ../dock_console/assets/console.js / console.css
 
 页头那张「三端地址」表写 `hub.yaml` 的 `nodes:` 段：`mac` / `win` / `android` 各一个 `host`（域名）、`ip`、`port`。
 域名由路由器的静态 DNS 绑定，换网段只改路由器那三行；安卓页显示的就是 `nodes.mac`，Windows 页的「用域名填」按钮从 `nodes.win` 取值。
+
+### 手机端那几项（外观 / 电源 / 天气 / 视频背景）
+
+这些值本来只活在手机的 DataStore 里，控制台既看不见也改不了。现在分两条路走：
+
+- **外观与字体、电源、天气** 走 Hub：`POST /setup/api/phone` 写 `hub.yaml` 的 `phone:` 段，`rev` 自动 +1，然后跟着 `/v1/snapshot` 的 `phone` 字段下发。手机记着自己套用到哪一版（`appliedPhoneRev`），**只有 rev 变大才覆盖本地值**——所以在手机上手动调过的字号、城市不会被 3 秒一次的轮询顶回去。协议见 [docs/lan-protocol.md](../docs/lan-protocol.md) §5.6。
+- **主屏布局** 也走 Hub，但用独立的 `layout.rev`：画布上直接拖动 / 缩放磁贴、开关显隐和边框，保存只提交动过的槽位，没动过的继续跟手机端默认布局走。读取现状走手机自己的 `GET /api/layout`（17920 那个页面），所以要手机上的岸亭在新版本（带布局接口的 APK）才能用。
+- **视频背景** 不走 Hub：手机自己起了一个背景管理页（`BackgroundServer`，`:17920`），控制台后端直接连它（`dock_console/phone_bg.py`）：列目录、上传、选中、删除。地址取自 `nodes.android`（先试域名，解不出来就退 IP），口令是拿 Hub Token 跟手机换的一个会话 cookie，cookie 只活在控制台进程里。视频动辄几十 MB，上传是**边收边转发**，不在内存里攒。列表里的预览图是控制台用 ffmpeg 抽的帧（按「id + 字节数」缓存在 `~/.cache/dock-console/backgrounds/`，顺带带出时长和分辨率）。
+
+手机没连 Wi-Fi、或者「岸亭」没在前台跑着时，视频背景那块会直接说连不上——这是唯一一块依赖手机在线的设置。
+
+![控制台改手机外观 / 电源 / 天气 / 视频背景](../docs/screenshots/console-setup-phone.png)
 
 写入规则（`hub/dock_hub/setup_ui.py`）：表单只提交改动的段，**其余段落从当前配置整份带走**——在功能开关里配的日落、访客、定时不会被一次保存洗掉；
 地址统一清洗成 `http://host:port`，探针 / Mini / 朗读三枚口令留空即保持原值，读接口也不回显。
