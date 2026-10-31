@@ -36,6 +36,10 @@ class BuildMessagesTest(unittest.TestCase):
         self.assertEqual(messages[0]["content"], DEFAULT_PERSONA.strip())
         self.assertEqual(messages[1], {"role": "user", "content": "晚上好。"})
 
+    def test_persona_tolerates_mixed_speech(self) -> None:
+        # F6：中英混着说、带口音，她听意思不挑发音
+        self.assertIn("中英混着说", DEFAULT_PERSONA)
+
     def test_custom_persona_wins(self) -> None:
         messages = build_messages("在吗", "", persona="你是别的助手。")
         self.assertEqual(messages[0]["content"], "你是别的助手。")

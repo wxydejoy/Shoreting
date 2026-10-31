@@ -36,6 +36,15 @@ class AsrHotwordsTest {
     }
 
     @Test
+    fun mixedWordsJoinTheStream() {
+        // F6 中英混说：口语常夹的英文词直接进热词表
+        val stream = AsrHotwords.forStream()
+        assertTrue(stream.contains("GitHub"))
+        assertTrue(stream.contains("Steam"))
+        assertTrue(stream.contains("PPT"))
+    }
+
+    @Test
     fun dropsOutOfVocabPhrases() {
         val known = setOf("台", "灯", "空", "调")
         val stream = AsrHotwords.forStream(known)

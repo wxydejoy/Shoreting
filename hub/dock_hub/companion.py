@@ -341,7 +341,7 @@ class Companion:
     def _probe_once(self) -> None:
         try:
             ready = self._ping_llm()
-            voice = self._ping_tts() if self.config.tts_base_url else False
+            voice = self.tts.ping() if self.config.tts_base_url else False
         finally:
             with self._lock:
                 self._probing = False
@@ -1044,7 +1044,7 @@ class Companion:
             if not item.get("brightness"):
                 # 不能调亮度就老实关掉，别假装在暗
                 try:
-                    self._call_run_skill(ident, False)
+                    self._run_skill(ident, False)
                 except HubError as exc:
                     events.append({"id": ident, "name": name, "ok": False, "code": exc.code})
                     continue
@@ -1107,14 +1107,14 @@ class Companion:
                 return
             level = max(1, int(round(start * (1 - step / SLOW_DIM_STEPS))))
             try:
-                self._call_run_skill(ident, True, brightness=level)
+                self._run_skill(ident, True, brightness=level)
             except HubError:
                 return
             time.sleep(step_wait)
         if gen != self._dim_gen:
             return
         try:
-            self._call_run_skill(ident, False)
+            self._run_skill(ident, False)
         except HubError:
             pass
 

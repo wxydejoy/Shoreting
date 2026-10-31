@@ -7,6 +7,7 @@ import math
 import os
 import re
 import socket
+import threading
 import time
 from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,13 @@ MAX_BODY = 64 * 1024
 MAX_WAIT = 30.0
 _DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")  # F30 时间线：chats 的 day 参数
 GZIP_MIN = 512
+IDLE_TIMEOUT = 20.0
+MAX_CONNECTIONS = 32
+BUSY_TIMEOUT = 2.0
+_BUSY_BODY = json.dumps(
+    {"error": {"code": "busy", "message": "Hub 正忙，稍后再试"}},
+    ensure_ascii=False,
+).encode("utf-8")
 _STATIC = {
     "litera.min.css": "text/css; charset=utf-8",
     "shell.css": "text/css; charset=utf-8",
@@ -90,6 +98,15 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        # 手机常驻 keep-alive；不设超时，一条闲置连接就永远占一个线程
+        timeout = IDLE_TIMEOUT
+
+        def handle(self) -> None:
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError):
+                # 手机切后台、Wi-Fi 切换时会直接掐断，不该刷一屏 traceback
+                self.close_connection = True
 
         def handle_one_request(self) -> None:
             # 记一下开始时间，供访问日志算耗时。每条请求单独算，keep-alive 也对
@@ -725,9 +742,55 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve(hub: DockHub, *, blocking: bool = True) -> ThreadingHTTPServer:
+class GuardedHTTPServer(ThreadingHTTPServer):
+    """连接数封顶：再多慢客户端也不会把线程堆到天上。"""
+
+    max_connections = MAX_CONNECTIONS
+    busy_timeout = BUSY_TIMEOUT
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._slots = threading.BoundedSemaphore(self.max_connections)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._slots.acquire(timeout=self.busy_timeout):
+            _reject_busy(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
+def _reject_busy(request: Any) -> None:
+    head = (
+        b"HTTP/1.1 503 Service Unavailable\r\n"
+        b"Content-Type: application/json; charset=utf-8\r\n"
+        b"Content-Length: " + str(len(_BUSY_BODY)).encode("ascii") + b"\r\n"
+        b"Cache-Control: no-store\r\n"
+        b"Connection: close\r\n\r\n"
+    )
+    try:
+        request.sendall(head + _BUSY_BODY)
+    except OSError:
+        pass
+    finally:
+        try:
+            request.close()
+        except OSError:
+            pass
+
+
+def serve(hub: DockHub, *, blocking: bool = True) -> GuardedHTTPServer:
     handler = make_handler(hub)
-    server = ThreadingHTTPServer((hub.config.host, hub.config.port), handler)
+    server = GuardedHTTPServer((hub.config.host, hub.config.port), handler)
     ips = lan_ips()
     print(f"岸亭 Hub v1  http://{ips[0]}:{hub.config.port}", flush=True)
     for extra in ips[1:]:

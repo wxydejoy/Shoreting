@@ -23,6 +23,33 @@ object AsrHotwords {
         "Cursor",
     )
 
+    /**
+     * 中英混说（F6）：口语里常夹在中文中间的英文词和品牌名。
+     * 识别器词表里没有的字整词会被 [forStream] 过滤掉，所以这里放心列——
+     * 模型认不下的词不会把整张热词表搞挂，只是那一条不起作用。
+     */
+    val MIXED = listOf(
+        "GitHub",
+        "Git",
+        "Python",
+        "Java",
+        "ChatGPT",
+        "Steam",
+        "WeGame",
+        "Bilibili",
+        "WiFi",
+        "VPN",
+        "APP",
+        "PPT",
+        "PDF",
+        "Excel",
+        "bug",
+        "demo",
+        "email",
+        "link",
+        "copy",
+    )
+
     @Volatile
     var extra: List<String> = emptyList()
         private set
@@ -51,7 +78,7 @@ object AsrHotwords {
     }
 
     fun forStream(knownTokens: Set<String>? = null): String {
-        return (BASE + extra)
+        return (BASE + MIXED + extra)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
