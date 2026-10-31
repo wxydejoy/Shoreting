@@ -10,7 +10,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from dock_console.server import serve
+from dock_console.server import read_hub_token, serve
 from dock_console.services import Controller, run_launchctl
 
 HUB_YAML = Path.home() / ".config" / "dock-hub" / "hub.yaml"
@@ -51,6 +51,7 @@ def follow_parent(poll: float = 2.0) -> threading.Thread | None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="岸亭本机服务控制台")
     parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args(argv)
     if sys.platform != "darwin":
@@ -63,14 +64,26 @@ def main(argv: list[str] | None = None) -> int:
         run=run_launchctl,
         hub_yaml=HUB_YAML,
     )
+    # 局域网访问凭 hub.yaml 的 token；没有 token 就只许本机，不能裸奔
+    token = read_hub_token(HUB_YAML)
+    host = args.host
+    if host not in ("127.0.0.1", "localhost", "::1") and not token:
+        print("hub.yaml 里没读到 token，控制台退回只听本机。", file=sys.stderr)
+        host = "127.0.0.1"
     try:
-        httpd = serve(controller, port=args.port)
+        httpd = serve(controller, host=host, port=args.port, token=token or None)
     except OSError as exc:
         print(f"端口 {args.port} 打不开：{exc}", file=sys.stderr)
         return 1
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
     print(f"岸亭控制台 {url}", flush=True)
-    print("只在本机打开。Ctrl+C 退出控制台，不会关掉 Hub。", flush=True)
+    if host in ("127.0.0.1", "localhost", "::1"):
+        print("只在本机打开。Ctrl+C 退出控制台，不会关掉 Hub。", flush=True)
+    else:
+        print(
+            f"局域网打开：http://<本机地址>:{args.port}/?key=<hub.yaml 的 token>。",
+            flush=True,
+        )
     follow_parent()
     if not args.no_browser:
         webbrowser.open(url)

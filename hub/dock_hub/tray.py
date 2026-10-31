@@ -69,16 +69,11 @@ def run_probe_tray(
     status_line: str,
     pages: dict[str, str] | None = None,
 ) -> None:
-    """Windows 探针托盘：本机读取 yaml token，自动登录 Mini 配置页。"""
+    """Windows 探针托盘：直接打开 Mac 上的新控制台（Token 放 URL 里换 cookie）。"""
     import webbrowser
 
     import pystray
     from pystray import MenuItem as Item
-
-    from dock_hub.probe import hub_lan_pages
-
-    pages = pages or hub_lan_pages(config)
-    setup_url = pages.get("setup_login") or pages["setup"]
 
     def open_url(url: str):
         def _open(_icon: pystray.Icon, _item: object) -> None:
@@ -86,24 +81,37 @@ def run_probe_tray(
 
         return _open
 
-    def copy_setup(_icon: pystray.Icon, _item: object) -> None:
-        _copy_text(setup_url)
-
     def quit_app(icon: pystray.Icon, _item: object) -> None:
         icon.stop()
         stop_server()
 
+    home = console_url(config)
     menu = pystray.Menu(
         Item(status_line, None, enabled=False),
-        Item("打开配置向导", open_url(setup_url)),
-        Item("打开聊天记录", open_url(pages["chats"])),
-        Item("打开朗读", open_url(pages["read"])),
-        Item("复制配置地址", copy_setup),
+        # default=True：左键单击就是它，直接开控制台；右键菜单里也能点
+        Item("打开控制台", open_url(home), default=True),
         pystray.Menu.SEPARATOR,
         Item("退出", quit_app),
     )
     icon = pystray.Icon("dock-probe", load_tray_image(), "岸亭探针", menu)
     icon.run()
+
+
+CONSOLE_PORT = 17880
+
+
+def console_url(config) -> str:
+    """新控制台的入口：nodes.mac 的主机名 + ?key=<token>。
+
+    Token 是 hub.yaml 顶层那枚（控制台的门禁认它）；进页面换到 cookie
+    之后 URL 里的 key 就不再参与请求。老 Hub 页面（/setup、/chats）不再
+    从托盘给入口——控制台里都有，还更好用。
+    """
+    nodes = getattr(config, "nodes", None)
+    host = (getattr(nodes.mac, "host", "") if nodes is not None and nodes.mac else "") or "mini.lan"
+    base = f"http://{host}:{CONSOLE_PORT}/"
+    token = (config.token or "").strip()
+    return f"{base}?key={token}" if token else base
 
 
 def _copy_text(text: str) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,19 +33,78 @@ _PHONE_SELECT = re.compile(r"/api/phone/backgrounds/([^/]+)/select")
 _PHONE_THUMB = re.compile(r"/api/phone/backgrounds/([^/]+)/thumb")
 _PHONE_ITEM = re.compile(r"/api/phone/backgrounds/([^/]+)")
 
+# 本机回环地址：这些来源免 Token（沿用 Hub 的规矩）
+_LOCAL_ADDRESSES = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
+
+def check_access(
+    client_ip: str,
+    token: str | None,
+    *,
+    query_key: str = "",
+    cookie: str = "",
+    authorization: str = "",
+) -> bool:
+    """本机直接放行；局域网凭 ?key= / Cookie / Bearer 三选一。
+
+    浏览器打不开带 Authorization 的请求，所以约定 ?key=<token> 打开页面，
+    服务端顺手种 cookie，之后的 /api/* 同源请求自己就带上了。
+    没配 Token 时局域网一律拒绝——宁可控制台从 Win 打不开，不能裸奔上 LAN。
+    """
+    if client_ip in _LOCAL_ADDRESSES:
+        return True
+    if not token:
+        return False
+    candidates = (
+        query_key.strip(),
+        _cookie_key(cookie),
+        authorization.removeprefix("Bearer ").strip(),
+    )
+    return any(got and hmac.compare_digest(got, token) for got in candidates)
+
+
+def _cookie_key(cookie: str) -> str:
+    for part in cookie.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name == "key":
+            return value.strip()
+    return ""
+
+
+def read_hub_token(path: Path) -> str:
+    """hub.yaml 顶层的 token。控制台环境不保证有 PyYAML，按行找就够了。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for raw in text.splitlines():
+        # 顶层的 token:（probe: 段里的 token 有缩进，不会误中）
+        if raw.startswith("token:"):
+            return raw.split(":", 1)[1].strip().strip("'\"")
+    return ""
+
 
 class Handler(BaseHTTPRequestHandler):
     controller = None
     features: FeaturesClient | None = None
+    token: str | None = None
 
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path == "/health":
+            # 探活：launchd 控制台服务和局域网查「控制台活没活」都用它，免鉴权
+            self._json(200, {"ok": True, "service": "dock-console"})
+            return
+        if not self._auth():
+            return
         if path.startswith(_HUB_PREFIX):
             self._hub("GET")
             return
         if path in {"/", "/index.html", "/features", "/features/"}:
-            # 单页应用：所有入口都发同一份壳，前端自己按 # 路由
-            self._asset(ASSET)
+            # 单页应用：所有入口都发同一份壳，前端自己按 # 路由。
+            # 带 ?key= 打开时顺手种 cookie，之后的 /api/* 同源请求自己带上。
+            key = (parse_qs(urlparse(self.path).query).get("key") or [""])[0]
+            self._asset(ASSET, cookie=f"key={key}; Path=/; HttpOnly; SameSite=Lax" if key else None)
             return
         if path in _STATIC:
             self._asset(*self._static(path))
@@ -69,6 +129,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"ok": False, "message": "没有这个地址"})
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._auth():
+            return
         path = urlparse(self.path).path
         if path.startswith(_HUB_PREFIX):
             self._hub("POST")
@@ -120,6 +182,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"ok": False, "message": "没有这个地址"})
 
     def do_DELETE(self) -> None:  # noqa: N802
+        if not self._auth():
+            return
         path = urlparse(self.path).path
         if path.startswith(_HUB_PREFIX):
             self._hub("DELETE")
@@ -213,15 +277,42 @@ class Handler(BaseHTTPRequestHandler):
             self.features = FeaturesClient()
         return self.features
 
+    def _auth(self) -> bool:
+        query = parse_qs(urlparse(self.path).query)
+        if check_access(
+            self.client_address[0],
+            type(self).token,
+            query_key=(query.get("key") or [""])[0],
+            cookie=self.headers.get("Cookie") or "",
+            authorization=self.headers.get("Authorization") or "",
+        ):
+            return True
+        self._json(
+            401,
+            {"ok": False, "message": "缺 Token：地址后面带 ?key=<hub.yaml 里的 token>，或从 Mac 本机打开"},
+        )
+        return False
+
     def _static(self, path: str) -> tuple[Path, str]:
         name, content_type = _STATIC[path]
         return ASSETS / name, content_type
 
-    def _asset(self, path: Path, content_type: str = "text/html; charset=utf-8") -> None:
+    def _asset(
+        self, path: Path, content_type: str = "text/html; charset=utf-8", cookie: str | None = None
+    ) -> None:
         try:
             body = path.read_bytes()
         except OSError as exc:
             self._json(500, {"ok": False, "message": f"页面打不开：{exc}"})
+            return
+        if cookie:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Set-Cookie", cookie)
+            self.end_headers()
+            self.wfile.write(body)
             return
         self._bytes(200, content_type, body)
 
@@ -256,10 +347,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def serve(controller, host: str = "127.0.0.1", port: int = 17880, features=None) -> ThreadingHTTPServer:
+def serve(
+    controller,
+    host: str = "127.0.0.1",
+    port: int = 17880,
+    features=None,
+    token: str | None = None,
+) -> ThreadingHTTPServer:
     handler = type(
         "BoundHandler",
         (Handler,),
-        {"controller": controller, "features": features},
+        {"controller": controller, "features": features, "token": token},
     )
     return ThreadingHTTPServer((host, port), handler)

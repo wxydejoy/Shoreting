@@ -159,7 +159,6 @@ def _force_login() -> int:
 
 def _run_probe(config, *, tray: bool) -> int:
     from dock_hub.probe import serve_probe, start_probe
-    from dock_hub.setup_ui import SETUP_FLAG
 
     if not tray:
         return serve_probe(config)
@@ -171,30 +170,13 @@ def _run_probe(config, *, tray: bool) -> int:
 
     runtime = start_probe(config)
     runtime.start_background()
-    local = f"http://127.0.0.1:{runtime.port}"
-    pages = {
-        "setup": f"{local}/v1/open-setup",
-        "setup_login": f"{local}/v1/open-setup",
-        "chats": f"{local}/v1/open-chats",
-        "read": f"{local}/v1/open-read",
-    }
-    if not SETUP_FLAG.is_file():
-        SETUP_FLAG.parent.mkdir(parents=True, exist_ok=True)
-        SETUP_FLAG.write_text("1", encoding="utf-8")
-        import webbrowser
-
-        try:
-            webbrowser.open(pages["setup"])
-        except Exception as exc:
-            print(f"无法打开配置向导：{exc}", flush=True)
-            print(f"请手动打开 {pages['setup']}", flush=True)
 
     def stop() -> None:
         print("探针已停止", flush=True)
         runtime.shutdown()
 
-    status = f"探针 :{runtime.port} · 托盘打开配置"
-    run_probe_tray(config, stop, status, pages=pages)
+    status = f"探针 :{runtime.port} · 单击打开控制台"
+    run_probe_tray(config, stop, status)
     return 0
 
 

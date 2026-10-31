@@ -241,7 +241,9 @@ class ServerTest(unittest.TestCase):
 class CatalogTest(unittest.TestCase):
     def test_three_local_services(self) -> None:
         specs = {spec.id: spec for spec in service_specs(ROOT)}
-        self.assertEqual(set(specs), {"hub", "mini", "tts"})
+        self.assertEqual(set(specs), {"hub", "mini", "tts", "console"})
+        self.assertEqual(specs["console"].label, "cn.weiekko.dock-console")
+        self.assertEqual(specs["console"].port, 17880)
         self.assertEqual(specs["hub"].label, "cn.weiekko.dock-hub")
         self.assertEqual(specs["hub"].prefer, ("user", "gui"))
         self.assertEqual(specs["mini"].port, 17891)
