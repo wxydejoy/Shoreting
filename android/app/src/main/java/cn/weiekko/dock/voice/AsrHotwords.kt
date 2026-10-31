@@ -1,7 +1,9 @@
 package cn.weiekko.dock.voice
 
 /**
- * 流式 transducer 热词。汉字按字空格（cjkchar），多词用 `/` 分隔。
+ * 流式 transducer 热词。汉字按字空格（cjkchar），**每行一个词**。
+ * 用 `/` 拼会把整行当成一个词，sherpa 找不到 `/` 这个 token，全部编码失败（真机日志
+ * `Cannot find ID for token /`，随后 `Failed to encode some hotwords`）。
  * 词表里没有的字整词丢掉，否则 sherpa 会整表热词失败。
  * 主屏设备名由 [setExtra] 在 snapshot 后追加，下次开口生效。
  */
@@ -86,7 +88,7 @@ object AsrHotwords {
             .filter { encoded ->
                 knownTokens == null || encoded.split(" ").all { it in knownTokens }
             }
-            .joinToString("/")
+            .joinToString("\n")
     }
 
     fun toTokens(phrase: String): String {

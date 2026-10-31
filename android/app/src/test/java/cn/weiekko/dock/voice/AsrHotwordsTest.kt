@@ -19,12 +19,13 @@ class AsrHotwordsTest {
     }
 
     @Test
-    fun streamJoinsWithSlash() {
+    fun streamJoinsWithNewline() {
         val stream = AsrHotwords.forStream()
         assertTrue(stream.contains("小 岸"))
         assertTrue(stream.contains("无 畏 契 约"))
-        assertTrue(stream.contains("/"))
-        assertTrue(!stream.contains("\n"))
+        // sherpa 的热词文件每行一个词；用 / 拼会把整行当成一个词，全部编码失败
+        assertTrue(stream.contains("\n"))
+        assertTrue(!stream.contains("/"))
     }
 
     @Test

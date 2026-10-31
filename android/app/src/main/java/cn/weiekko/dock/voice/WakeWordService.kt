@@ -63,6 +63,13 @@ class WakeWordService : Service() {
 
     private val hotwordFile: File by lazy { File(cacheDir, "asr-hotwords.txt") }
 
+    /**
+     * 解包到 filesDir 的模型目录。识别器走文件模式（见 [AsrAssets]），
+     * 否则热词的绝对路径会被 sherpa 当 asset 名去开，native abort 掉整个进程。
+     */
+    @Volatile
+    private var asrDir: File? = null
+
     /** tokens.txt 里的字，用来把词表里模型不认识的字剔掉（否则热词整表失效）。 */
     private val asrTokens: Set<String>? by lazy {
         runCatching {
@@ -614,6 +621,9 @@ class WakeWordService : Service() {
         asrLoader = thread(name = "asr-load", isDaemon = true) {
             val version = AsrHotwords.version
             val started = SystemClock.elapsedRealtime()
+            // 首次要把 155MB 模型从 assets 解到 filesDir；唤醒词不受影响，它还在 assets 上
+            val dir = asrDir ?: AsrAssets.ensure(this@WakeWordService).also { asrDir = it }
+            if (dir == null) Log.e(TAG, "asr models unavailable, wake-only")
             val hotwords = prepareHotwords()
             var usedHotwords = false
             var built = hotwords?.let { path ->
@@ -663,21 +673,27 @@ class WakeWordService : Service() {
     }
 
     private fun buildAsr(hotwordsPath: String?): OnlineRecognizer {
+        val dir = asrDir ?: throw IllegalStateException("asr models not extracted")
+        fun abs(name: String) = AsrAssets.path(dir, name)
         return OnlineRecognizer(
-            assetManager = assets,
+            // 必须是 null：非 null 时 sherpa 会把下面 hotwordsPath 的绝对路径当 asset 名开
+            assetManager = null,
             config = OnlineRecognizerConfig(
                 featConfig = getFeatureConfig(SAMPLE_RATE, 80),
                 modelConfig = OnlineModelConfig(
                     transducer = OnlineTransducerModelConfig(
-                        encoder = AsrModels.ENCODER,
-                        decoder = AsrModels.DECODER,
-                        joiner = AsrModels.JOINER,
+                        encoder = abs(AsrModels.ENCODER),
+                        decoder = abs(AsrModels.DECODER),
+                        joiner = abs(AsrModels.JOINER),
                     ),
-                    tokens = AsrModels.TOKENS,
+                    tokens = abs(AsrModels.TOKENS),
                     numThreads = 2,
                     debug = false,
                     provider = "cpu",
                     modelType = "zipformer2",
+                    // 热词要按 modeling_unit 编码；不给会被当成空串，EncodeHotwords 直接 exit(255)。
+                    // cjkchar 与 AsrHotwords.toTokens 的按字空格写法一致。
+                    modelingUnit = "cjkchar",
                 ),
                 enableEndpoint = false,
                 // 热词只在 modified_beam_search 下生效；没词表就走 greedy，省点算力
