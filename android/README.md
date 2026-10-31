@@ -17,11 +17,12 @@ Hub 健康检查 `service=dock-hub` 且 `name=study`。`name=mini` 会被拒绝�
 
 ## 构建
 
-需要 JDK 17（Android Studio 自带 JBR 即可）和一次网络，用来拉唤醒词 / ASR 模型（不进 git）。
+需要 JDK 17（Android Studio 自带 JBR 即可）和一次网络，用来拉唤醒词 / ASR / 声纹模型（不进 git）。
 
 ```bash
 cd android
 ./fetch-wake-word.sh
+./fetch-voiceprint.sh   # F5 声纹认人用的 CAM++ 模型（28MB）；不拉也能构建，只是她不认人
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   ./gradlew :app:assembleDebug
 ./gradlew :app:testDebugUnitTest

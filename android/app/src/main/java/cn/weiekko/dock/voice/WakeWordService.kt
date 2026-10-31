@@ -31,6 +31,11 @@ import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import com.k2fsa.sherpa.onnx.OnlineZipformer2CtcModelConfig
 import com.k2fsa.sherpa.onnx.getFeatureConfig
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 class WakeWordService : Service() {
@@ -816,6 +821,9 @@ class WakeWordService : Service() {
         private const val ASR_WAIT_MS = 1_200L
         private const val ASR_POLL_MS = 20L
         private const val ASR_LOAD_JOIN_MS = 1_500L
+
+        /** 发 settled 广播前最多陪声纹线程等这么久；等不到这轮就不认人。 */
+        private const val SPEAKER_JOIN_MS = 400L
 
         const val ACTION_TRANSCRIPT = "cn.weiekko.dock.VOICE_TRANSCRIPT"
         const val EXTRA_TEXT = "text"

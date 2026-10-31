@@ -626,11 +626,8 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         if (spoken.isNotEmpty() && companionReady()) {
             conversationWindow.onInput(now)
             _voice.value = _voice.value.copy(listening = false)
-            if (VoiceprintBus.enrollName != null) {
-                // 注册中：这几句话只喂声纹，别再当聊天发出去
-            } else {
-                hearCompanion(spoken, speaker)
-            }
+            // 注册中：这几句话只喂声纹，别再当聊天发出去
+            if (VoiceprintBus.enrollName == null) hearCompanion(spoken, speaker)
             return
         }
         if (spoken.isEmpty()) {
