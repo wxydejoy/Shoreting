@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -29,6 +30,10 @@ class ServiceSpec:
     log_path: Path
     prefer: tuple[str, str]
     install: str
+    # launchd 装载不了的兜底（比如 launchd 域卡死报 EIO）：直接拉起进程
+    direct_argv: tuple[str, ...] = ()
+    direct_cwd: Path | None = None
+    direct_env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,8 @@ def service_specs(repo: Path) -> tuple[ServiceSpec, ...]:
             log_path=repo / "hub" / "dock-hub.log",
             prefer=("user", "gui"),
             install="hub/install-launchd.sh",
+            direct_argv=(str(repo / "hub" / ".venv" / "bin" / "python"), "-m", "dock_hub", "--no-tray"),
+            direct_cwd=repo / "hub",
         ),
         ServiceSpec(
             id="mini",
@@ -65,6 +72,9 @@ def service_specs(repo: Path) -> tuple[ServiceSpec, ...]:
             log_path=repo / "mini" / "helm-mini.log",
             prefer=("gui", "user"),
             install="mini/install-launchd.sh",
+            direct_argv=(str(repo / "mini" / ".venv" / "bin" / "python"), "-m", "helm_mini"),
+            direct_cwd=repo / "mini",
+            direct_env={"HELM_MINI_TOKEN": "helm-mini-weiekko"},
         ),
         ServiceSpec(
             id="tts",
@@ -76,6 +86,27 @@ def service_specs(repo: Path) -> tuple[ServiceSpec, ...]:
             log_path=repo / "companion" / "tts" / "tts.log",
             prefer=("gui", "user"),
             install="companion/tts/install-launchd.sh",
+            direct_argv=(
+                str(repo / "companion" / "tts" / ".venv" / "bin" / "python"),
+                "server.py",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "18100",
+                "--model",
+                "models/Qwen3-TTS-12Hz-1.7B-Base-4bit",
+                "--ref-audio",
+                "voices/shorekeeper/clone.wav",
+                "--voice",
+                "shorekeeper",
+                "--play",
+            ),
+            direct_cwd=repo / "companion" / "tts",
+            direct_env={
+                "HF_HUB_OFFLINE": "1",
+                "HF_HUB_DISABLE_XET": "1",
+                "PYTHONUNBUFFERED": "1",
+            },
         ),
     )
 
@@ -143,10 +174,15 @@ def run_launchctl(args: list[str], timeout: float = 20):
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
 
+# 探活永远直连 127.0.0.1：控制台进程要是继承了代理环境变量（http_proxy），
+# 不设这个 opener 时连本机健康检查都会被代理劫走，服务死了看到的是 502 而不是连接拒绝。
+_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def default_probe(url: str) -> tuple[bool, dict[str, Any] | None, str | None]:
     try:
         request = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(request, timeout=1.2) as response:
+        with _DIRECT_OPENER.open(request, timeout=1.2) as response:
             payload = json.loads(response.read(8192).decode())
     except Exception as exc:
         return False, None, str(exc)
@@ -185,10 +221,10 @@ def _summary(payload: dict[str, Any] | None) -> str:
 
 
 def _state_label(*, installed: bool, loaded: bool, running: bool, health_ok: bool) -> str:
+    if health_ok and running:
+        return "运行中" if loaded else "运行中（直启）"
     if not installed and not loaded:
         return "未安装"
-    if running and health_ok:
-        return "运行中"
     if running:
         return "进程在，端口未就绪"
     if loaded:
@@ -221,10 +257,20 @@ class Controller:
         spec = self._spec(service_id)
         loaded, domain, state, _pid = self._locate(spec)
         plist = self._plist(spec)
+        health_ok = self.probe(spec.health_url)[0]
+        # 直启的进程 launchctl 看不见，健康探活说了算
+        running = state == "running" or health_ok
+        if action == "start" and running and not loaded:
+            return {"ok": True, "id": spec.id, "action": action, "message": "已经在运行（直启进程）"}
+        if action == "restart" and running and not loaded:
+            self._kill_by_port(spec)
+            return self._spawn_direct(spec, "直启进程重启")
+        if action == "stop" and not loaded and health_ok:
+            return self._kill_by_port(spec)
         plan = plan_action(
             action,
             loaded=loaded,
-            running=state == "running",
+            running=running,
             domain=domain,
             label=spec.label,
             plist=plist,
@@ -234,10 +280,71 @@ class Controller:
             return {"ok": False, "id": spec.id, "action": action, "message": plan.message}
         for command in plan.commands:
             result = self.run(command, timeout=30)
-            if result.returncode != 0:
-                detail = (result.stderr or result.stdout or "launchctl 失败").strip()
-                return {"ok": False, "id": spec.id, "action": action, "message": detail}
+            if result.returncode == 0:
+                continue
+            detail = (result.stderr or result.stdout or "launchctl 失败").strip()
+            fallback = self._fallback(spec, action, loaded=loaded, health_ok=health_ok, detail=detail)
+            if fallback is not None:
+                return fallback
+            return {"ok": False, "id": spec.id, "action": action, "message": detail}
         return {"ok": True, "id": spec.id, "action": action, "message": plan.message}
+
+    def _fallback(
+        self,
+        spec: ServiceSpec,
+        action: str,
+        *,
+        loaded: bool,
+        health_ok: bool,
+        detail: str,
+    ) -> dict[str, Any] | None:
+        """launchd 装载/卸载失败时的兜底：直接拉起、按端口杀掉。"""
+        if action in ("start", "restart"):
+            if not spec.direct_argv:
+                return None
+            return self._spawn_direct(spec, detail)
+        if action == "stop" and not loaded and health_ok:
+            return self._kill_by_port(spec)
+        return None
+
+    def _spawn_direct(self, spec: ServiceSpec, detail: str) -> dict[str, Any]:
+        env = {**os.environ, **spec.direct_env}
+        spec.log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = spec.log_path.open("ab")
+        try:
+            process = subprocess.Popen(  # noqa: S603 - 参数写死在 service_specs 里
+                list(spec.direct_argv),
+                cwd=spec.direct_cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,  # 脱离控制台进程组，控制台退出它不陪葬
+            )
+        finally:
+            log_handle.close()
+        return {
+            "ok": True,
+            "id": spec.id,
+            "action": "start",
+            "pid": process.pid,
+            "message": f"launchd 装载失败（{detail}），已直接拉起进程（pid {process.pid}）；重启电脑后恢复 launchd 托管",
+        }
+
+    def _kill_by_port(self, spec: ServiceSpec) -> dict[str, Any]:
+        result = self.run(
+            ["lsof", "-nP", "-tiTCP", str(spec.port), "-sTCP:LISTEN"], timeout=8
+        )
+        pids = (result.stdout or "").split()
+        if not pids:
+            return {"ok": False, "id": spec.id, "action": "stop", "message": "进程已经不在了"}
+        self.run(["kill", *pids], timeout=8)
+        return {
+            "ok": True,
+            "id": spec.id,
+            "action": "stop",
+            "message": f"已停掉直启的进程（端口 {spec.port}）",
+        }
 
     def set_windows_address(self, address: str) -> dict[str, Any]:
         if self.hub_yaml is None:
@@ -308,7 +415,7 @@ class Controller:
         plist = self._plist(spec)
         installed = plist.is_file()
         health_ok, payload, health_error = self.probe(spec.health_url)
-        running = state == "running"
+        running = state == "running" or health_ok
         try:
             log_file = str(spec.log_path.relative_to(self.repo))
         except ValueError:

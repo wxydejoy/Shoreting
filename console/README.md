@@ -48,7 +48,13 @@ swiftc -parse-as-library menubar/main.swift -o "岸亭控制台.app/Contents/Mac
 | `mini` | Mini 监控 | `cn.weiekko.helm-mini` | 17891 | `mini/install-launchd.sh` |
 | `tts` | 守岸人 TTS | `cn.weiekko.companion-tts` | 18100 | `companion/tts/install-launchd.sh` |
 
-Windows 探针不再单独一页：地址、口令、回连、监听、掉线阈值都在「三端配置」的 Windows tab 里，概览页那张卡只显示在线状态和当前地址。
+Windows 探针不再单独一页：地址、口令、回连、监听、掉线阈值都在「三端配置」的 Windows tab 里，概览页那张卡只显示在线状态和当前地址；侧边栏「服务」组里也有一个 Windows 入口（带在线状态点），落点同样是这个 tab。
+
+### launchd 装载失败时的兜底
+
+`launchctl bootstrap` 万一装不进去（launchd 域卡死时报 `5: Input/output error`，2026-10-31 踩过），「启动」不会跟着瘫：控制台直接把服务进程拉起来（参数、日志、环境变量都从 plist 抄的，见 `service_specs` 的 `direct_*` 字段），状态显示「运行中（直启）」，「关闭」按端口杀进程。重启电脑后 launchd 恢复，自动回到托管模式。
+
+另一个坑：控制台进程要是继承了代理环境变量（`http_proxy`），对 `127.0.0.1` 的健康检查也会被代理劫走——服务死了看到的是 `HTTP Error 502` 而不是连接拒绝。探活一律走 `ProxyHandler({})` 的直连 opener（`services.py`、`windows.py`、`features.py`、`hub_proxy.py` 都是），别用裸 `urlopen`。
 
 ## 页面结构
 
@@ -56,7 +62,7 @@ Windows 探针不再单独一页：地址、口令、回连、监听、掉线阈
 
 - **概览** — 三个服务的状态、Windows 探针、Hub 最近日志
 - **配置** — 三端配置（`#/hub/setup`）：安卓 / Windows / Mac 三个 tab + 一份三端地址簿
-- **服务** — Hub / Mini 监控 / 守岸人语音，各自的状态、日志、接口
+- **服务** — Hub / Mini 监控 / 守岸人语音 / Windows（探针状态点，点进去是三端配置的 Windows tab），各自的状态、日志、接口
 - **功能开关** — `hub.yaml` 里那些只能手写的段落，按组分
 - **陪伴** — 聊天记录、朗读、周报与日记（一页两个 tab：这一周 / 日记）
 - **系统** — 关于与帮助

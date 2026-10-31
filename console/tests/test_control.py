@@ -6,6 +6,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 from dock_console.server import serve
 from dock_console.services import (
@@ -191,6 +192,79 @@ class ControllerTest(unittest.TestCase):
         result = ctl.apply("mini", "stop")
         self.assertTrue(result["ok"])
         self.assertIn(["launchctl", "bootout", "gui/501/cn.weiekko.helm-mini"], calls)
+
+
+class FallbackTest(unittest.TestCase):
+    """launchd 装载不了（比如 gui 域卡死报 EIO）时，启动/关闭不能跟着瘫。"""
+
+    def test_start_falls_back_to_direct_spawn_when_bootstrap_fails(self) -> None:
+        def run(args: list[str], timeout: float = 20):
+            if args[:2] == ["launchctl", "print"]:
+                return _done(1, "Could not find service")
+            return _done(5, "Bootstrap failed: 5: Input/output error")
+
+        class FakeProcess:
+            pid = 4321
+
+        repo = Path("/tmp/fallback-repo")
+        with mock.patch("dock_console.services.subprocess.Popen") as popen:
+            popen.return_value = FakeProcess()
+            ctl = Controller(
+                repo=repo,
+                home=Path("/Users/weiekko"),
+                uid=501,
+                run=run,
+                probe=lambda url: (False, None, "down"),
+            )
+            result = ctl.apply("tts", "start")
+
+        self.assertTrue(result["ok"], result)
+        self.assertIn("直接拉起", result["message"])
+        self.assertIn("Input/output error", result["message"])
+        popen.assert_called_once()
+        argv = popen.call_args.args[0]
+        self.assertIn("server.py", " ".join(str(part) for part in argv))
+        self.assertIn("--play", argv)
+        self.assertTrue(popen.call_args.kwargs.get("start_new_session"))
+        # 日志落到该服务的 log_path
+        self.assertEqual(
+            popen.call_args.kwargs.get("stdout").name, str(repo / "companion/tts/tts.log")
+        )
+
+    def test_stop_of_direct_process_kills_by_port(self) -> None:
+        calls: list[list[str]] = []
+
+        def run(args: list[str], timeout: float = 20):
+            calls.append(args)
+            if args[:2] == ["launchctl", "print"]:
+                return _done(1, "Could not find service")
+            if args[0] == "lsof":
+                return _done(0, "8112\n8113\n")
+            return _done(0, "")
+
+        ctl = Controller(
+            repo=Path("/tmp/fallback-repo"),
+            home=Path("/Users/weiekko"),
+            uid=501,
+            run=run,
+            probe=lambda url: (True, {"ok": True}, None),
+        )
+        result = ctl.apply("tts", "stop")
+        self.assertTrue(result["ok"], result)
+        self.assertIn("直启", result["message"])
+        self.assertIn(["kill", "8112", "8113"], calls)
+
+    def test_state_label_marks_direct_spawn(self) -> None:
+        from dock_console.services import _state_label
+
+        self.assertEqual(
+            _state_label(installed=True, loaded=False, running=True, health_ok=True),
+            "运行中（直启）",
+        )
+        self.assertEqual(
+            _state_label(installed=True, loaded=True, running=True, health_ok=True),
+            "运行中",
+        )
 
 
 class ServerTest(unittest.TestCase):

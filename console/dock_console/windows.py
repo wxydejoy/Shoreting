@@ -61,9 +61,11 @@ def windows_online(url: str, timeout: float = 0.6) -> bool:
     import json
     import urllib.request
 
+    # 探针在本机/局域网，绝不走代理（继承的 http_proxy 会把它劫走）。
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         request = urllib.request.Request(url.rstrip("/") + "/health", method="GET")
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             payload = json.loads(response.read(4096).decode())
     except Exception:
         return False
