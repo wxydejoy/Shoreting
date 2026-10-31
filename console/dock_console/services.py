@@ -77,17 +77,6 @@ def service_specs(repo: Path) -> tuple[ServiceSpec, ...]:
             prefer=("gui", "user"),
             install="companion/tts/install-launchd.sh",
         ),
-        ServiceSpec(
-            id="console",
-            name="控制台",
-            blurb="这个页面自己。常驻后 Win 托盘单击就能打开。",
-            label="cn.weiekko.dock-console",
-            port=17880,
-            health_url="http://127.0.0.1:17880/health",
-            log_path=repo / "console" / "dock-console.log",
-            prefer=("user", "gui"),
-            install="console/install-launchd.sh",
-        ),
     )
 
 
