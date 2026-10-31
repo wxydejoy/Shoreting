@@ -37,6 +37,7 @@ class ChatLog:
         ms: int = 0,
         skills: list[dict[str, Any]] | None = None,
         error: str | None = None,
+        speaker: str = "",
     ) -> None:
         if self.path is None:
             return
@@ -48,6 +49,8 @@ class ChatLog:
             "ms": max(0, int(ms)),
             "skills": list(skills or []),
             "error": _clip(error) if error else None,
+            # F5 声纹：谁在说话（安卓认出来的），没认出来就不占这个字段
+            "speaker": _clip(speaker) if speaker else None,
         }
         line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
         with self._lock:

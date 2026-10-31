@@ -1582,6 +1582,12 @@ components:
         text:
           type: string
           minLength: 1
+        speaker:
+          type: string
+          maxLength: 12
+          description: |
+            F5 声纹：安卓本地声纹比对出的称呼（如「妈妈」），没认出来就不带这个字段。
+            只传名字，音频不出设备；Hub 只把它带进提示词和对话记录，超出 12 字截断。
         weather:
           type: object
           additionalProperties: true

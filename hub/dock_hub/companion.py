@@ -409,6 +409,7 @@ class Companion:
         if not heard:
             raise HubError("bad_request", "text 不能为空")
         text = fold_game_asr(heard)
+        speaker = _clean_speaker(body.get("speaker"))
         turn = _turn_id(body)
         started = time.monotonic()
         _latency(turn, "chat_recv", chars=len(heard))
@@ -426,14 +427,14 @@ class Companion:
             self._prepare_mood(text, control=False)
             self._commit_reply(spoken)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         if taught or is_teach_attempt(text):
             spoken = taught or "这个只能绑已经配好的灯或启动项，不能自己加程序。"
             self._prepare_mood(text, control=False)
             self._commit_reply(spoken)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         # F28：「记住，……」当场落盘并短确认，不绕模型——记忆这事确定性比文采重要
         memo = parse_memory_teach(text)
@@ -444,7 +445,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "memory_teach", ok=1 if key else 0)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         memo_forget = parse_memory_forget(text)
         if memo_forget is not None and self._memory is not None:
@@ -454,7 +455,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "memory_forget", ok=1 if gone else 0)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         control = looks_like_control(text)
         mood_extra = self._prepare_mood(text, control=control)
@@ -466,7 +467,7 @@ class Companion:
                 self._commit_reply(spoken)
                 _latency(turn, "clarify", chars=len(spoken))
                 return self._finish_spoken(
-                    spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
+                    spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=skills
                 )
         asked = query_kind(text)
         if asked:
@@ -474,7 +475,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "query", kind=asked)
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         scene = self._handle_scene(text, turn)
         if scene:
@@ -482,7 +483,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "scene", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=events
             )
         leaving = self._handle_leaving(text, turn)
         if leaving:
@@ -490,7 +491,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "leave", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=events
             )
         guest = self._handle_guest(text, turn)
         if guest:
@@ -498,7 +499,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "guest", act=events[0].get("action") if events else "")
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=events
             )
         desk = self._handle_desk(text, turn)
         if desk:
@@ -506,7 +507,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "desk", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=skills
             )
         relay = self._handle_relay(text, turn)
         if relay:
@@ -514,7 +515,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "relay", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=skills
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=skills
             )
         # 泰缇斯 / Hermes 已移除：不再做「简单还是复杂」的路由判定，
         # 所有对话直接交给伴侣模型（顺带省掉每次一条分类请求）。
@@ -526,7 +527,7 @@ class Companion:
             self._commit_reply(spoken)
             _latency(turn, "power", chars=len(spoken))
             return self._finish_spoken(
-                spoken, turn, seq, started, cue_llm=False, user=heard, skills=events
+                spoken, turn, seq, started, cue_llm=False, user=heard, speaker=speaker, skills=events
             )
         # F3：像开关指令却解不出设备的话，先问一句，别把「帮我关了」扔给模型瞎猜。
         question = (
@@ -539,13 +540,15 @@ class Companion:
             self._commit_reply(question.asked)
             _latency(turn, "clarify_ask", chars=len(question.asked))
             return self._finish_spoken(
-                question.asked, turn, seq, started, cue_llm=False, user=heard
+                question.asked, turn, seq, started, cue_llm=False, user=heard, speaker=speaker
             )
         catalog = skill_prompt(self._skills)
         memory = recent_prompt(self._recent)
         desk_facts = desk_facts_prompt(_call_world(self._world.get("desk")))
         extra = "\n".join(
-            part for part in (catalog, mood_extra, memory, facts, desk_facts) if part.strip()
+            part
+            for part in (catalog, mood_extra, memory, facts, speaker_prompt(speaker), desk_facts)
+            if part.strip()
         )
         messages = build_messages(text, extra, self.config.persona)
         llm_at = time.monotonic()
@@ -559,11 +562,11 @@ class Companion:
                 raise _TurnCancelled()
         except _TurnCancelled:
             _latency(turn, "barge_in", ms=_ms(llm_at))
-            self._record_turn(turn, heard, "", _ms(started), [], "被下一轮顶掉")
+            self._record_turn(turn, heard, "", _ms(started), [], "被下一轮顶掉", speaker=speaker)
             return {"text": "", "audio_id": None}
         except HubError as exc:
             _latency(turn, "ollama_error", ms=_ms(llm_at))
-            self._record_turn(turn, heard, "", _ms(started), [], exc.message)
+            self._record_turn(turn, heard, "", _ms(started), [], exc.message, speaker=speaker)
             raise
         spoken = _clean_reply(raw)
         spoken = enforce_ask_budget(spoken, bool(self._mood.get("allow_ask")))
@@ -576,12 +579,12 @@ class Companion:
             filled = True
         if not spoken:
             _latency(turn, "ollama_empty", ms=_ms(llm_at))
-            self._record_turn(turn, heard, "", _ms(started), skills, "大脑没有说出话")
+            self._record_turn(turn, heard, "", _ms(started), skills, "大脑没有说出话", speaker=speaker)
             raise HubError("companion_unavailable", "大脑没有说出话")
         _latency(turn, "ollama_done", ms=_ms(llm_at), chars=len(spoken))
         self._commit_reply(spoken)
         return self._finish_spoken(
-            spoken, turn, seq, started, filled=filled, user=heard, skills=skills
+            spoken, turn, seq, started, filled=filled, user=heard, speaker=speaker, skills=skills
         )
 
     def _finish_spoken(
@@ -594,6 +597,7 @@ class Companion:
         filled: bool = False,
         cue_llm: bool = True,
         user: str = "",
+        speaker: str = "",
         skills: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         self._ready = True
@@ -604,7 +608,7 @@ class Companion:
             with self._lock:
                 if seq != self._seq:
                     _latency(turn, "barge_in", ms=_ms(started))
-                    self._record_turn(turn, user, spoken, _ms(started), skills or [])
+                    self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
                     return {"text": spoken, "audio_id": None}
             audio_id = self._maybe_speak(spoken, turn)
         else:
@@ -615,7 +619,7 @@ class Companion:
             elif filled or not cue_llm:
                 self._cue_sentence(spoken, turn, seq)
         _latency(turn, "chat_total", ms=_ms(started), audio=1 if audio_id else 0)
-        self._record_turn(turn, user, spoken, _ms(started), skills or [])
+        self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
         self._remember(user, spoken)
         return {"text": spoken, "audio_id": audio_id}
 
@@ -627,12 +631,13 @@ class Companion:
         ms: int,
         skills: list[dict[str, Any]],
         error: str | None = None,
+        speaker: str = "",
     ) -> None:
         # F26：访客模式下这轮对话不落盘——跟客人的话更不该被记着
         if not self._chat_log or self._guest_hidden():
             return
         self._chat_log.append(
-            turn=turn, user=user, reply=reply, ms=ms, skills=skills, error=error
+            turn=turn, user=user, reply=reply, ms=ms, skills=skills, error=error, speaker=speaker
         )
 
     def set_story_books(self, books: Any) -> None:
@@ -1764,6 +1769,20 @@ def _turn_id(body: dict[str, Any]) -> str:
     if raw and ID_RE.match(raw) and len(raw) <= 64:
         return raw
     return uuid.uuid4().hex[:12]
+
+
+def _clean_speaker(raw: Any) -> str:
+    """声纹认出来的人（F5）：只留一个短称呼，别把识别结果整段带进来。"""
+    name = re.sub(r"\s+", "", str(raw or ""))
+    name = re.sub(r"^[，。！？!?,.、·:：\-—]+|[，。！？!?,.、·:：\-—]+$", "", name)
+    return name[:12]
+
+
+def speaker_prompt(name: str) -> str:
+    """F5 声纹：知道是谁在说话就带一句进提示词——称呼自然用上，别句句报名字。"""
+    if not name:
+        return ""
+    return f"现在跟你说话的人：{name}。称呼可以自然用上，但别每句都提。"
 
 
 def _ms(started: float) -> int:
