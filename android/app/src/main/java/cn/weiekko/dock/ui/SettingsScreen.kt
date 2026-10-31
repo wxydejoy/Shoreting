@@ -67,7 +67,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.weiekko.dock.data.DockFont
-import cn.weiekko.dock.data.DockModule
+import cn.weiekko.dock.data.ModuleCatalog
 import cn.weiekko.dock.data.HubConnection
 import cn.weiekko.dock.data.MiniConnection
 import cn.weiekko.dock.background.BackgroundServer
@@ -110,8 +110,8 @@ fun SettingsScreen(
     onDeleteMemory: (String) -> Unit = {},
     onSetHubEnabled: (Boolean) -> Unit = {},
     onEditLayout: () -> Unit = {},
-    onSetModuleVisible: (DockModule, Boolean) -> Unit = { _, _ -> },
-    onSetModuleChrome: (DockModule, Boolean) -> Unit = { _, _ -> },
+    onSetModuleVisible: (String, Boolean) -> Unit = { _, _ -> },
+    onSetModuleChrome: (String, Boolean) -> Unit = { _, _ -> },
     onResetLayout: () -> Unit = {},
     onBack: () -> Unit,
 ) {
@@ -459,8 +459,8 @@ fun SettingsScreen(
                     Text("媒体通知使用权")
                 }
                 Spacer(Modifier.height(4.dp))
-                DockModule.entries.forEach { module ->
-                    val rect = state.layout.rect(module)
+                ModuleCatalog.all.forEach { slot ->
+                    val rect = state.layout.rect(slot.id)
                     val visible = rect?.visible ?: true
                     val chrome = rect?.chrome ?: true
                     Row(
@@ -468,7 +468,7 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            module.label,
+                            slot.label,
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.weight(1f),
                         )
@@ -480,7 +480,7 @@ fun SettingsScreen(
                             )
                             Switch(
                                 checked = visible,
-                                onCheckedChange = { onSetModuleVisible(module, it) },
+                                onCheckedChange = { onSetModuleVisible(slot.id, it) },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = colors.onPrimary,
                                     checkedTrackColor = colors.primary,
@@ -496,7 +496,7 @@ fun SettingsScreen(
                             )
                             Switch(
                                 checked = chrome,
-                                onCheckedChange = { onSetModuleChrome(module, it) },
+                                onCheckedChange = { onSetModuleChrome(slot.id, it) },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = colors.onPrimary,
                                     checkedTrackColor = colors.primary,
