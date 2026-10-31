@@ -22,6 +22,8 @@ data class Snapshot(
     val devices: List<HubDevice> = emptyList(),
     val notify: NotifyState? = null,
     val mirror: MirrorState? = null,
+    /** 访客模式（F26）：开着的时候对话记录都收起来了，屏上留一个小标记。 */
+    val guest: GuestState? = null,
     val alarm: AlarmStatus? = null,
     val theme: ThemeStatus? = null,
     val photos: PhotoIds? = null,
@@ -84,6 +86,14 @@ data class NotifyItem(
 data class MirrorState(
     val lastId: Int = 0,
     val items: List<MirrorItem> = emptyList(),
+)
+
+/** 访客模式（F26）：Hub 一句话开、一句话关、到点自己恢复；这里只管亮个标记。 */
+@Serializable
+data class GuestState(
+    val since: String = "",
+    val until: String? = null,
+    val hours: Double = 0.0,
 )
 
 @Serializable
