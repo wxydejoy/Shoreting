@@ -33,3 +33,5 @@ android/app/src/main/assets/voiceprint/*.onnx
 # 工作区杂物（勿入库）
 .workbuddy/
 /plan/
+hub/_revision.txt
+hub/hub.yaml.*-bak

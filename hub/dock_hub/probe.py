@@ -77,11 +77,21 @@ def probe_token(config: HubConfig) -> str:
 
 
 def probe_revision() -> str | None:
-    """当前 checkout 的 git 短提交号，用来回答「Windows 端跑的哪一版」。
+    """当前代码的 git 短提交号，用来回答「Windows 端跑的哪一版」。
 
-    只在仓库 checkout 里跑得出来；PyInstaller 的 exe、没有 git 的机器返回
-    None（/health 里就不带 revision 字段，客户端按缺失处理）。
+    两条路：
+    - PyInstaller exe：`sys._MEIPASS` 下有 build-exe.ps1 打包时烤进去的
+      `_revision.txt`（解包目录不是 git 仓库，问 git 必然失败）；
+    - 仓库 checkout：直接问 git，exe / 无 git 的机器返回 None
+      （/health 里就不带 revision 字段，客户端按缺失处理）。
     """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        try:
+            text = (Path(meipass) / "_revision.txt").read_text(encoding="utf-8").strip()
+        except OSError:
+            text = ""
+        return text or None
     root = Path(__file__).resolve().parent.parent
     try:
         out = subprocess.run(

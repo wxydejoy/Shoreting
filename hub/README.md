@@ -122,9 +122,9 @@ powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 `git pull --ff-only`（失败时直连 GitHub 的 https 地址再试）→ 有 uv 就 `uv sync`
 → 找到 `pythonw` 里命令行含 `dock_hub --probe` 的进程杀掉并用 vbs 重新拉起
 → `curl http://127.0.0.1:17892/health` 验活。注意它按端口 17892 验活，探针
-配置改过监听端口时要手动核对。`/health` 里带 `revision`（当前 checkout 的
-git 短提交号，exe 跑法没有这个字段）——想确认 Windows 端更没更新，
-`curl http://win.lan:17892/health` 看一眼就知道。
+配置改过监听端口时要手动核对。`/health` 里带 `revision`（当前提交号：checkout
+跑法问 git，exe 是 build-exe.ps1 打包时烤进去的 `_revision.txt`）——想确认
+Windows 端更没更新，`curl http://win.lan:17892/health` 看一眼就知道。
 
 ## 桌面伴侣
 
