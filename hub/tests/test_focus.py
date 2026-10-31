@@ -91,6 +91,10 @@ class TestFocusEvaluate(unittest.TestCase):
             "actions": [],
             "said": False,
         }
+        # 整类都别碰真音量：focus 默认 mute=True，漏桩的用例会真改 Mac 系统音量
+        # （test_scene_error_does_not_crash 就这么把系统音量收到过 0）。
+        self.hub._read_volume = lambda: 40
+        self.hub._write_volume = lambda level: None
 
     def _game(self, running: bool) -> None:
         self.hub._game_running = lambda: running  # type: ignore[method-assign]
