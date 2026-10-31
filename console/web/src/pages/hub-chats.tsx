@@ -170,7 +170,7 @@ export function ChatsPage() {
   let lastDay = "";
 
   return (
-    <div className="space-y-4 pb-6">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 pb-2">
       <PageHeader
         title="聊天记录"
         subtitle="你对她说的每一句，和她回的每一句。只存在这台电脑上。"
@@ -181,7 +181,7 @@ export function ChatsPage() {
         }
       />
 
-      <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 bg-background px-1 py-1.5">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[200px] flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -240,7 +240,7 @@ export function ChatsPage() {
           }
         />
       ) : (
-        <div className="space-y-3">
+        <div className="scroll-thin min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
           {items.map((chat) => {
             const label = dayLabel(chat.ts);
             const newDay = label !== lastDay;

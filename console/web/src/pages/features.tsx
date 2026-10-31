@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { EmptyState, PageHeader } from "@/components/page";
 import { saveFeature, servicesAction, type Feature } from "@/lib/api";
 import { useConsole } from "@/lib/console-store";
+import { navigate } from "@/lib/route";
 import { cn } from "@/lib/utils";
 
 function asText(value: unknown): string {
@@ -326,6 +327,25 @@ export function FeaturesPage({ group }: { group: string }) {
 
       {!hubDown ? (
         <>
+          <div className="flex flex-wrap gap-1.5">
+            {groups.map((item) => {
+              const on = !query.trim() && item.id === activeGroup?.id;
+              return (
+                <Button
+                  key={item.id}
+                  size="sm"
+                  variant={on ? "secondary" : "ghost"}
+                  onClick={() => {
+                    setQuery("");
+                    navigate({ kind: "features", group: item.id });
+                  }}
+                >
+                  {item.title}
+                </Button>
+              );
+            })}
+          </div>
+
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
             <p className="min-w-0 flex-1 text-[11.5px] leading-relaxed text-muted-foreground">
               {activeGroup?.blurb}
@@ -371,7 +391,7 @@ export function FeaturesPage({ group }: { group: string }) {
                 <EmptyState
                   icon={<SlidersHorizontal className="size-6" />}
                   title="这组还没有开关"
-                  description="Hub 那边没给这一组返回任何项。换左边别的组看看。"
+                  description="Hub 那边没给这一组返回任何项。换一组看看。"
                 />
               ) : null}
             </>
@@ -382,11 +402,7 @@ export function FeaturesPage({ group }: { group: string }) {
             <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
               {catalog?.config_path || "hub.yaml"}
             </code>
-            。写完 Hub 立刻热加载，安卓那台不用重新配。要脚本化就直接打{" "}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-              /api/features
-            </code>
-            。
+            ，Hub 立刻热加载。
           </p>
         </>
       ) : (

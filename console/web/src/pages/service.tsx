@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronRight, Copy, ExternalLink, RefreshCw, ServerCrash } from "lucide-react";
+import { Check, ChevronRight, Copy, RefreshCw, ServerCrash } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,9 +8,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState, MetaRow, PageHeader } from "@/components/page";
 import { ServiceActions } from "@/components/service-actions";
 import { StateBadge } from "@/components/service-state";
-import { HUB_ORIGIN } from "@/lib/api";
 import { useConsole } from "@/lib/console-store";
-import { HUB_PAGES, hrefOf, navigate, type Route, type ServiceTab } from "@/lib/route";
+import { hrefOf, navigate, type Route, type ServiceTab } from "@/lib/route";
 import { cn } from "@/lib/utils";
 
 const TABS: { id: ServiceTab; label: string }[] = [
@@ -167,27 +166,6 @@ export function ServicePage({ id, tab }: { id: string; tab: ServiceTab }) {
                   </div>
                 </CardContent>
               </Card>
-
-              {id === "hub" ? (
-                <Card className="gap-0 py-0">
-                  <CardContent className="px-4 py-4">
-                    <div className="mb-2 text-[12px] font-medium">Hub 的页面</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {HUB_PAGES.map((page) => (
-                        <Button key={page.id} asChild size="sm" variant="secondary">
-                          <a href={hrefOf({ kind: "hub", page: page.id })}>{page.title}</a>
-                        </Button>
-                      ))}
-                      <Button asChild size="sm" variant="ghost" className="text-muted-foreground">
-                        <a href={`${HUB_ORIGIN}/setup`} target="_blank" rel="noopener noreferrer">
-                          新标签打开
-                          <ExternalLink />
-                        </a>
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ) : null}
             </div>
           </div>
         ) : null}

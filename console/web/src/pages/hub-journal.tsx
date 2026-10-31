@@ -1,13 +1,5 @@
 import { useState } from "react";
-import {
-  CalendarDays,
-  Clock3,
-  MessageSquare,
-  NotebookPen,
-  Power,
-  Timer,
-  Trash2,
-} from "lucide-react";
+import { NotebookPen, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -21,10 +13,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EmptyState, PageHeader, Section } from "@/components/page";
+import { EmptyState, PageHeader } from "@/components/page";
+import { WeekChart } from "@/components/week-chart";
 import { HubNotice } from "@/pages/hub-notice";
 import { hubDelete, useHub } from "@/lib/hub";
-import { cn } from "@/lib/utils";
 
 type Day = {
   date: string;
@@ -50,7 +42,6 @@ type Entry = { date: string; text: string; source?: string };
 
 type DiaryData = { entries: Entry[]; enabled: boolean; at?: string };
 
-const WEEKDAY = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const DIARY_WEEKDAY = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 const SOURCE: Record<string, string> = {
   llm: "她自己写的",
@@ -64,58 +55,9 @@ const TABS = [
 
 type JournalTab = (typeof TABS)[number]["id"];
 
-export function duration(sec: number): string {
-  const minutes = Math.round((sec || 0) / 60);
-  if (minutes <= 0) return "0 分钟";
-  if (minutes < 60) return `${minutes} 分钟`;
-  const hour = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest ? `${hour} 小时 ${rest} 分` : `${hour} 小时`;
-}
-
-function deltaText(sec: number): string {
-  const minutes = Math.round(sec / 60);
-  if (!minutes) return "和上周持平";
-  return `${minutes > 0 ? "比上周多" : "比上周少"} ${duration(Math.abs(sec))}`;
-}
-
 function weekdayOf(day: string): string {
   const date = new Date(`${day}T00:00:00`);
   return Number.isNaN(date.getTime()) ? "" : (DIARY_WEEKDAY[date.getDay()] ?? "");
-}
-
-function Metric({
-  icon,
-  label,
-  value,
-  hint,
-  tone,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  hint?: string;
-  tone?: "up" | "down";
-}) {
-  return (
-    <Card className="gap-0 py-0">
-      <div className="flex items-center gap-1.5 px-4 pt-3.5 text-[11.5px] text-muted-foreground">
-        {icon}
-        {label}
-      </div>
-      <div className="px-4 pt-1 pb-1 text-[24px] leading-tight font-semibold tabular-nums">
-        {value}
-      </div>
-      <div
-        className={cn(
-          "px-4 pb-3.5 text-[11px]",
-          tone === "up" ? "text-ok" : "text-muted-foreground",
-        )}
-      >
-        {hint || "\u00a0"}
-      </div>
-    </Card>
-  );
 }
 
 function WeekView() {
@@ -126,17 +68,13 @@ function WeekView() {
   }
 
   const summary = data?.summary;
-  const total = summary?.total;
-  const delta = summary?.delta;
   const days = summary?.days ?? [];
-  const peak = Math.max(...days.map((day) => day.desk_sec), 1);
-  const today = new Date().toISOString().slice(0, 10);
 
   return (
     <div className="space-y-5">
       {data?.line ? (
         <Card className="gap-0 border-primary/25 bg-primary/5 py-0">
-          <div className="px-5 py-4 text-[14px] leading-relaxed">「{data.line}」</div>
+          <div className="px-5 py-4 text-[15px] leading-relaxed">「{data.line}」</div>
         </Card>
       ) : (
         <Card className="gap-0 py-0">
@@ -146,95 +84,9 @@ function WeekView() {
         </Card>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <Metric
-          icon={<Clock3 className="size-3.5" />}
-          label="在桌时长"
-          value={duration(total?.desk_sec ?? 0)}
-          hint={delta ? deltaText(delta.desk_sec) : undefined}
-          tone={delta && delta.desk_sec > 0 ? "up" : undefined}
-        />
-        <Metric
-          icon={<Timer className="size-3.5" />}
-          label="朗读时长"
-          value={duration(total?.read_sec ?? 0)}
-          hint="她念给你听的时间"
-        />
-        <Metric
-          icon={<CalendarDays className="size-3.5" />}
-          label="最晚一次"
-          value={summary?.latest_at || "—"}
-          hint="这周最晚还在桌前的时刻"
-        />
-        <Metric
-          icon={<MessageSquare className="size-3.5" />}
-          label="说了多少句"
-          value={`${total?.chats ?? 0} 句`}
-          hint="你对她说的"
-        />
-        <Metric
-          icon={<Power className="size-3.5" />}
-          label="开了几次机"
-          value={`${total?.boots ?? 0} 次`}
-          hint="Mini 看见的开机"
-        />
-      </div>
-
-      <Section title="这一周" description="灰条是在桌时长，实心是今天。">
-        <Card className="gap-0 py-0">
-          <div className="divide-y divide-border/70">
-            {days.map((day) => {
-              const width = Math.max(
-                day.desk_sec > 0 ? 6 : 0,
-                Math.round((day.desk_sec / peak) * 100),
-              );
-              const isToday = day.date === today;
-              const idle = !day.desk_sec && !day.chats && !day.read_sec && !day.boots;
-              return (
-                <div key={day.date} className="flex items-center gap-3 px-4 py-2.5">
-                  <div className="w-[74px] shrink-0 text-[12px] tabular-nums">{day.date.slice(5)}</div>
-                  <div
-                    className={cn(
-                      "w-[46px] shrink-0 text-[11.5px]",
-                      isToday ? "font-medium text-primary" : "text-muted-foreground",
-                    )}
-                  >
-                    {WEEKDAY[day.weekday] ?? ""}
-                  </div>
-                  <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className={cn("h-full rounded-full", isToday ? "bg-primary" : "bg-primary/35")}
-                      style={{ width: `${width}%` }}
-                    />
-                  </div>
-                  <div className="w-[92px] shrink-0 text-right text-[11.5px] text-muted-foreground tabular-nums">
-                    {idle ? "没开机" : duration(day.desk_sec)}
-                  </div>
-                  <div className="hidden w-[86px] shrink-0 text-right text-[11.5px] text-muted-foreground tabular-nums sm:block">
-                    {day.chats ? `${day.chats} 句` : "—"}
-                  </div>
-                  <div className="hidden w-[52px] shrink-0 text-right text-[11.5px] text-muted-foreground tabular-nums md:block">
-                    {day.last_at ?? "—"}
-                  </div>
-                </div>
-              );
-            })}
-            {!days.length ? (
-              <div className="px-4 py-10 text-center text-[12.5px] text-muted-foreground">
-                {loading ? "读着呢…" : "还没有台账。"}
-              </div>
-            ) : null}
-          </div>
-        </Card>
-      </Section>
-
-      <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-        她会在周日晚 20:00 把这句念出来（主动播报开着的时候）。数字都在
-        <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-          ~/.config/dock-hub/hub.yaml
-        </code>
-        所在的机器上，不上传。
-      </p>
+      <Card className="gap-0 py-0">
+        <WeekChart days={days} height={220} />
+      </Card>
     </div>
   );
 }

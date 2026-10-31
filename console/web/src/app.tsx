@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
+import { motion } from "motion/react";
 import { ChevronRight, Menu, Monitor, Moon, RefreshCw, Sun, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -12,13 +13,15 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AppSidebar } from "@/components/app-sidebar";
 import { EmptyState, PageHeader } from "@/components/page";
-import { OverviewPage } from "@/pages/overview";
+import { TodayPage } from "@/pages/today";
+import { ServicesPage } from "@/pages/services";
 import { ServicePage } from "@/pages/service";
 import { FeaturesPage } from "@/pages/features";
 import { SetupPage } from "@/pages/hub-setup";
 import { ChatsPage } from "@/pages/hub-chats";
 import { ReadPage } from "@/pages/hub-read";
 import { JournalPage } from "@/pages/hub-journal";
+import { LayoutPage } from "@/pages/hub-layout";
 import { AboutPage } from "@/pages/about";
 import { useConsole } from "@/lib/console-store";
 import { HUB_PAGES, pathOf, type Route, useRoute } from "@/lib/route";
@@ -30,19 +33,28 @@ function crumbs(
   groups: { id: string; title: string }[],
 ): string[] {
   switch (route.kind) {
+    case "services":
+      return ["机器", "服务"];
     case "service":
-      return ["服务", services.find((item) => item.id === route.id)?.name ?? route.id];
+      return ["机器", "服务", services.find((item) => item.id === route.id)?.name ?? route.id];
     case "features": {
-      const group = groups.find((item) => item.id === route.group) ?? groups[0];
-      return group ? ["功能开关", group.title] : ["功能开关"];
+      const group = groups.find((item) => item.id === route.group);
+      return group ? ["机器", "功能开关", group.title] : ["机器", "功能开关"];
     }
-    case "hub":
-      return ["陪伴", HUB_PAGES.find((page) => page.id === route.page)?.title ?? route.page];
+    case "hub": {
+      const page = HUB_PAGES.find((item) => item.id === route.page);
+      const lane = route.page === "setup" || route.page === "layout" ? "机器" : "日子";
+      return [lane, page?.title ?? route.page];
+    }
     case "about":
-      return ["系统", "关于与帮助"];
+      return ["关于"];
     default:
-      return ["概览"];
+      return ["今天"];
   }
+}
+
+function wideRoute(route: Route): boolean {
+  return route.kind === "hub" && (route.page === "read" || route.page === "layout");
 }
 
 function UnknownHubPage({ page }: { page: string }) {
@@ -171,19 +183,39 @@ export default function App() {
 
         <main
           ref={mainRef}
-          className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-5 lg:px-6"
+          className={cn(
+            "scroll-thin min-h-0 flex-1 px-4 py-5 lg:px-6",
+            route.kind === "hub" && route.page === "chats"
+              ? "flex flex-col overflow-hidden"
+              : "overflow-y-auto",
+          )}
         >
-          {route.kind === "overview" ? <OverviewPage /> : null}
-          {route.kind === "service" ? <ServicePage id={route.id} tab={route.tab} /> : null}
-          {route.kind === "features" ? <FeaturesPage group={route.group} /> : null}
-          {route.kind === "hub" && route.page === "setup" ? <SetupPage initialTab={route.tab} /> : null}
-          {route.kind === "hub" && route.page === "chats" ? <ChatsPage /> : null}
-          {route.kind === "hub" && route.page === "read" ? <ReadPage /> : null}
-          {route.kind === "hub" && route.page === "journal" ? <JournalPage /> : null}
-          {route.kind === "hub" && !HUB_PAGES.some((page) => page.id === route.page) ? (
-            <UnknownHubPage page={route.page} />
-          ) : null}
-          {route.kind === "about" ? <AboutPage /> : null}
+          <motion.div
+            key={where}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+            className={cn(
+              route.kind === "hub" && route.page === "chats" && "flex min-h-0 flex-1 flex-col",
+              !wideRoute(route) &&
+                !(route.kind === "hub" && route.page === "chats") &&
+                "mx-auto w-full max-w-3xl",
+            )}
+          >
+            {route.kind === "overview" ? <TodayPage /> : null}
+            {route.kind === "services" ? <ServicesPage /> : null}
+            {route.kind === "service" ? <ServicePage id={route.id} tab={route.tab} /> : null}
+            {route.kind === "features" ? <FeaturesPage group={route.group} /> : null}
+            {route.kind === "hub" && route.page === "setup" ? <SetupPage initialTab={route.tab} /> : null}
+            {route.kind === "hub" && route.page === "layout" ? <LayoutPage /> : null}
+            {route.kind === "hub" && route.page === "chats" ? <ChatsPage /> : null}
+            {route.kind === "hub" && route.page === "read" ? <ReadPage /> : null}
+            {route.kind === "hub" && route.page === "journal" ? <JournalPage /> : null}
+            {route.kind === "hub" && !HUB_PAGES.some((page) => page.id === route.page) ? (
+              <UnknownHubPage page={route.page} />
+            ) : null}
+            {route.kind === "about" ? <AboutPage /> : null}
+          </motion.div>
         </main>
       </div>
     </div>

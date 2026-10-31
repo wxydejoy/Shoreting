@@ -1,89 +1,49 @@
 import { useState } from "react";
+import { motion } from "motion/react";
 import {
-  Activity,
   BookOpen,
   CalendarDays,
   ChevronRight,
-  Clock,
-  Cpu,
-  History,
-  Info,
-  LayoutDashboard,
-  Lightbulb,
-  MessageCircle,
+  House,
+  LayoutGrid,
   MessagesSquare,
-  Network,
   Server,
-  ShieldCheck,
   SlidersHorizontal,
-  Smile,
-  Volume2,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ServiceDot } from "@/components/service-state";
 import { useConsole } from "@/lib/console-store";
 import { cn } from "@/lib/utils";
-import { HUB_PAGES, hrefOf, navigate, type Route } from "@/lib/route";
-
-const SERVICE_ICONS: Record<string, LucideIcon> = {
-  hub: Server,
-  mini: Cpu,
-  tts: Volume2,
-};
-
-// 功能开关的六组各给一个图标，不然六个滑块排在一起看不出是不同东西。
-const FEATURE_ICONS: Record<string, LucideIcon> = {
-  talk: MessageCircle,
-  routine: Clock,
-  home: Lightbulb,
-  memory: History,
-  face: Smile,
-  safety: ShieldCheck,
-};
-
-const HUB_ICONS: Record<string, LucideIcon> = {
-  setup: Wrench,
-  chats: MessagesSquare,
-  read: BookOpen,
-  journal: CalendarDays,
-};
+import { hrefOf, navigate, type Route } from "@/lib/route";
 
 type Item = {
   key: string;
   label: string;
   to: Route;
   icon: LucideIcon;
-  aside?: React.ReactNode;
 };
 
 type Section = {
   id: string;
   label: string;
   items: Item[];
-  hint?: string;
 };
 
 function isActive(route: Route, item: Route): boolean {
+  if (item.kind === "services") return route.kind === "services" || route.kind === "service";
+  if (item.kind === "features") return route.kind === "features";
   if (route.kind !== item.kind) return false;
-  if (route.kind === "service" && item.kind === "service") return route.id === item.id;
-  if (route.kind === "features" && item.kind === "features") {
-    return route.group === item.group;
-  }
   if (route.kind === "hub" && item.kind === "hub") return route.page === item.page;
   return true;
 }
 
 export function AppSidebar({ route }: { route: Route }) {
-  const { services, catalog, catalogError } = useConsole();
+  const { services } = useConsole();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
     try {
-      return JSON.parse(localStorage.getItem("dock-console:nav") ?? "{}") as Record<
-        string,
-        boolean
-      >;
+      return JSON.parse(localStorage.getItem("dock-console:nav") ?? "{}") as Record<string, boolean>;
     } catch {
       return {};
     }
@@ -97,66 +57,32 @@ export function AppSidebar({ route }: { route: Route }) {
     });
   };
 
-  const groups = catalog?.groups ?? [];
   const running = services.filter((service) => service.state_label === "运行中").length;
-  const setupPage = HUB_PAGES.find((page) => page.id === "setup");
 
   const sections: Section[] = [
     {
-      id: "overview",
-      label: "总览",
-      items: [{ key: "overview", label: "概览", to: { kind: "overview" }, icon: LayoutDashboard }],
+      id: "today",
+      label: "今天",
+      items: [{ key: "today", label: "今天", to: { kind: "overview" }, icon: House }],
     },
     {
-      id: "config",
-      label: "配置",
-      items: setupPage
-        ? [
-            {
-              key: "hub-setup",
-              label: setupPage.title,
-              to: { kind: "hub", page: "setup" } as Route,
-              icon: Wrench,
-            },
-          ]
-        : [],
+      id: "days",
+      label: "日子",
+      items: [
+        { key: "chats", label: "聊天", to: { kind: "hub", page: "chats" }, icon: MessagesSquare },
+        { key: "read", label: "朗读", to: { kind: "hub", page: "read" }, icon: BookOpen },
+        { key: "journal", label: "周报", to: { kind: "hub", page: "journal" }, icon: CalendarDays },
+      ],
     },
     {
-      id: "services",
-      label: "服务",
-      items: services.map((service) => ({
-        key: `svc-${service.id}`,
-        label: service.name,
-        to: { kind: "service", id: service.id, tab: "status" } as Route,
-        icon: SERVICE_ICONS[service.id] ?? Activity,
-        aside: <ServiceDot service={service} />,
-      })),
-    },
-    {
-      id: "features",
-      label: "功能开关",
-      hint: groups.length ? undefined : (catalogError ?? "Hub 没在跑"),
-      items: groups.map((group) => ({
-        key: `feat-${group.id}`,
-        label: group.title,
-        to: { kind: "features", group: group.id } as Route,
-        icon: FEATURE_ICONS[group.id] ?? SlidersHorizontal,
-      })),
-    },
-    {
-      id: "hub",
-      label: "陪伴",
-      items: HUB_PAGES.filter((page) => page.id !== "setup").map((page) => ({
-        key: `hub-${page.id}`,
-        label: page.title,
-        to: { kind: "hub", page: page.id } as Route,
-        icon: HUB_ICONS[page.id] ?? Network,
-      })),
-    },
-    {
-      id: "system",
-      label: "系统",
-      items: [{ key: "about", label: "关于与帮助", to: { kind: "about" }, icon: Info }],
+      id: "machine",
+      label: "机器",
+      items: [
+        { key: "services", label: "服务", to: { kind: "services" }, icon: Server },
+        { key: "setup", label: "配置", to: { kind: "hub", page: "setup" }, icon: Wrench },
+        { key: "features", label: "功能开关", to: { kind: "features", group: "" }, icon: SlidersHorizontal },
+        { key: "layout", label: "主屏布局", to: { kind: "hub", page: "layout" }, icon: LayoutGrid },
+      ],
     },
   ];
 
@@ -177,31 +103,23 @@ export function AppSidebar({ route }: { route: Route }) {
       <nav className="scroll-thin flex-1 overflow-y-auto px-2 py-3">
         {sections.map((section) => {
           const open = !collapsed[section.id];
-          const single = section.items.length <= 1 && section.id === "overview";
+          const bare = section.id === "today";
           return (
             <div key={section.id} className="mb-1">
-              {single ? null : (
+              {bare ? null : (
                 <button
                   type="button"
                   onClick={() => toggle(section.id)}
-                  className="group flex h-7 w-full items-center gap-1 rounded-md px-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground"
+                  className="group flex h-7 w-full items-center gap-1 rounded-md px-2 text-[11px] font-medium tracking-wide text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <ChevronRight
-                    className={cn(
-                      "size-3 transition-transform",
-                      open ? "rotate-90" : "rotate-0",
-                    )}
+                    className={cn("size-3 transition-transform", open ? "rotate-90" : "rotate-0")}
                   />
                   <span className="flex-1 text-left">{section.label}</span>
-                  {section.hint ? (
-                    <span className="text-[10px] tracking-normal normal-case opacity-70">
-                      {section.hint}
-                    </span>
-                  ) : null}
                 </button>
               )}
 
-              {open || single ? (
+              {open || bare ? (
                 <ul className="space-y-0.5">
                   {section.items.map((item) => {
                     const active = isActive(route, item.to);
@@ -210,20 +128,26 @@ export function AppSidebar({ route }: { route: Route }) {
                         <a
                           href={hrefOf(item.to)}
                           className={cn(
-                            "flex h-8 items-center gap-2 rounded-md px-2 text-[13px] transition-colors",
+                            "relative flex h-8 items-center gap-2 rounded-md px-2 text-[13px]",
                             active
-                              ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                              ? "font-medium text-sidebar-accent-foreground"
                               : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
                           )}
                         >
+                          {active ? (
+                            <motion.span
+                              layoutId="dock-nav"
+                              className="absolute inset-0 rounded-md bg-sidebar-accent"
+                              transition={{ type: "spring", bounce: 0.16, duration: 0.38 }}
+                            />
+                          ) : null}
                           <item.icon
                             className={cn(
-                              "size-3.5 shrink-0",
+                              "relative size-3.5 shrink-0",
                               active ? "text-primary" : "text-muted-foreground",
                             )}
                           />
-                          <span className="flex-1 truncate">{item.label}</span>
-                          {item.aside}
+                          <span className="relative flex-1 truncate">{item.label}</span>
                         </a>
                       </li>
                     );

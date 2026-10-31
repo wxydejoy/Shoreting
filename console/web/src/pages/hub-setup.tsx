@@ -6,7 +6,6 @@ import {
   Film,
   KeyRound,
   Laptop,
-  LayoutGrid,
   Loader2,
   MonitorCog,
   Palette,
@@ -45,7 +44,6 @@ import {
   uploadBackground,
   type BackgroundList,
 } from "@/lib/api";
-import { PhoneLayoutEditor } from "@/pages/hub-phone-layout";
 import { HubNotice } from "@/pages/hub-notice";
 import { useConsole } from "@/lib/console-store";
 import { hubGet, hubPost, useHub } from "@/lib/hub";
@@ -204,7 +202,6 @@ const NODE_ROWS: { key: "android" | "win" | "mac"; label: string; hint: string; 
 
 const TABS = [
   { id: "android", label: "安卓 K20", icon: Smartphone },
-  { id: "layout", label: "主屏布局", icon: LayoutGrid },
   { id: "win", label: "Windows", icon: MonitorCog },
   { id: "mac", label: "Mac", icon: Laptop },
 ];
@@ -800,7 +797,6 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
   // 安卓那边要填的地址：主机名优先，没填就退回这台机器的局域网 IP
   const hubAddress =
     form?.nodes.mac.host || form?.nodes.mac.ip || data?.lan_ips?.[0] || "127.0.0.1";
-  const hubPort = form?.nodes.mac.port || String(cfg?.port ?? 17890);
   const miniAddress = phoneAddressOf(form?.miniUrl ?? "", hubAddress);
   // 探针地址和地址簿里的域名对不上时提一句（老配置里常是 IP 或 mDNS 名）
   const probeHost = addressOf(form?.probe.url ?? "").replace(/:\d+$/, "");
@@ -914,18 +910,10 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
         <TabsContent value="android" className="space-y-4">
           <Card className="gap-0 py-0">
             <div className="border-b border-border/60 px-4 py-2.5 text-[12.5px] font-medium">
-              手机上填这三项（岸亭 → 设置 → Hub）
+              手机上的 Token
             </div>
             <div className="space-y-4 p-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <CopyField
-                  label="地址"
-                  value={hubAddress}
-                  hint="域名优先；改路由器就好，不用动手机"
-                />
-                <CopyField label="端口" value={hubPort} hint="改端口要重启 Hub 才生效" />
-              </div>
-              <Field label="Token" hint="保密。改完手机也要跟着改。">
+              <Field label="Token" hint="保密。地址和端口在上面那张表里，改完手机也要跟着改。">
                 <div className="flex flex-wrap gap-1.5">
                   <Input
                     value={data?.token_masked ?? ""}
@@ -1001,41 +989,6 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
               </Field>
             </div>
           </Card>
-
-          <Section title="主屏方块" description="顺序就是安卓上的顺序，设备本身在 hub.yaml 里。">
-            <Card className="gap-0 py-0">
-              <div className="divide-y divide-border/60">
-                {(cfg?.devices ?? []).map((device) => (
-                  <div key={device.id} className="flex items-center gap-2.5 px-4 py-2.5">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[12.5px]">{device.name || device.id}</div>
-                      <div className="truncate font-mono text-[10.5px] text-muted-foreground">
-                        {device.type}
-                        {device.mijia_name ? ` · 米家：${device.mijia_name}` : ""}
-                        {device.base_url ? ` · ${device.base_url}` : ""}
-                        {device.run?.program ? ` · ${device.run.program}` : ""}
-                      </div>
-                    </div>
-                    {device.follow_pc ? (
-                      <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                        跟电脑
-                      </Badge>
-                    ) : null}
-                    {device.type ? (
-                      <Badge variant="secondary" className="text-[10px]">
-                        {device.type}
-                      </Badge>
-                    ) : null}
-                  </div>
-                ))}
-                {!cfg?.devices?.length ? (
-                  <div className="px-4 py-8 text-center text-[12px] text-muted-foreground">
-                    还没有方块。米家设备可以在米家里勾「主屏」。
-                  </div>
-                ) : null}
-              </div>
-            </Card>
-          </Section>
 
           {(cfg?.scenes?.length ?? 0) > 0 ? (
             <Section title="场景" description="一句话触发的组合。">
@@ -1392,16 +1345,6 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
           </div>
         </TabsContent>
 
-        {/* --------------------------------------------------------- 主屏布局 */}
-        <TabsContent value="layout" className="space-y-4">
-          <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-            手机主屏那十来个磁贴摆在哪、多大、显不显示。布局从手机上直接读现状（手机要装新版 APK），
-            拖动 / 缩放 / 显隐都在网页上做，保存后等手机下次刷新就套用；
-            手机上手动拖过的布局不会被顶回去，除非再在这里保存一次。
-          </p>
-          <PhoneLayoutEditor />
-        </TabsContent>
-
         {/* --------------------------------------------------------- Windows */}
         <TabsContent value="win" className="space-y-4">
           <Card className="gap-0 py-0">
@@ -1578,33 +1521,6 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
               </Row>
             </div>
           </Card>
-
-          <Section title="启动项" description="点安卓主屏 logo 时在 Windows 上跑的东西。">
-            <Card className="gap-0 py-0">
-              <div className="divide-y divide-border/60">
-                {(cfg?.devices ?? [])
-                  .filter((device) => device.type === "action")
-                  .map((device) => (
-                    <div key={device.id} className="flex items-center gap-2.5 px-4 py-2.5">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-[12.5px]">{device.name || device.id}</div>
-                        <div className="truncate font-mono text-[10.5px] text-muted-foreground">
-                          {device.run?.program || "没写 program"}
-                        </div>
-                      </div>
-                      <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                        {device.icon || device.id}
-                      </Badge>
-                    </div>
-                  ))}
-                {!(cfg?.devices ?? []).some((device) => device.type === "action") ? (
-                  <div className="px-4 py-8 text-center text-[12px] text-muted-foreground">
-                    还没有启动项。在 hub.yaml 的 devices 里加 type: action。
-                  </div>
-                ) : null}
-              </div>
-            </Card>
-          </Section>
         </TabsContent>
 
         {/* ------------------------------------------------------------- Mac */}
@@ -1648,28 +1564,6 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
                   />
                 </Field>
               </div>
-              <Field label="Token" hint="安卓那一页复制同一枚；重新生成后手机要重填。">
-                <div className="flex flex-wrap gap-1.5">
-                  <Input
-                    value={data?.token_masked ?? ""}
-                    readOnly
-                    className="h-8 min-w-[180px] flex-1 font-mono text-[12.5px]"
-                  />
-                  <Button size="sm" variant="outline" onClick={() => void revealToken()}>
-                    <KeyRound />
-                    复制
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={Boolean(saving)}
-                    onClick={() => void regenerateToken()}
-                  >
-                    {busy("token") ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                    重新生成
-                  </Button>
-                </div>
-              </Field>
             </div>
           </Card>
 
