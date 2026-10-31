@@ -19,7 +19,6 @@ import cn.weiekko.dock.data.DemoSnapshot
 import cn.weiekko.dock.data.deskLink
 import cn.weiekko.dock.data.DeviceType
 import cn.weiekko.dock.data.DockLayout
-import cn.weiekko.dock.data.DockModule
 import cn.weiekko.dock.data.Health
 import cn.weiekko.dock.data.HubClient
 import cn.weiekko.dock.data.HubConnection
@@ -131,7 +130,7 @@ data class DockUiState(
     val conversationOpen: Boolean = false,
     val layout: DockLayout = DockLayout(),
     val editing: Boolean = false,
-    val selectedModule: DockModule? = null,
+    val selectedModule: String? = null,
     val companionOpen: Boolean = false,
     val companionDraft: String = "",
     val companionHeard: String? = null,
@@ -685,19 +684,19 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         _ui.update { it.copy(editing = false, selectedModule = null) }
     }
 
-    fun selectModule(id: DockModule?) {
+    fun selectModule(id: String?) {
         _ui.update { current ->
             if (current.selectedModule == id && (id == null || current.editing)) current
             else current.copy(selectedModule = id, editing = true)
         }
     }
 
-    fun toggleModule(id: DockModule) {
+    fun toggleModule(id: String) {
         val current = _ui.value.layout.rect(id)
         setModuleVisible(id, !(current?.visible ?: true))
     }
 
-    fun setModuleVisible(id: DockModule, visible: Boolean) {
+    fun setModuleVisible(id: String, visible: Boolean) {
         val layout = _ui.value.layout
         val current = layout.rect(id)
         val next = if (current == null || current.isPlaceholder()) {
@@ -715,7 +714,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         commitLayout(layout.with(id, next))
     }
 
-    fun setModuleChrome(id: DockModule, chrome: Boolean) {
+    fun setModuleChrome(id: String, chrome: Boolean) {
         val layout = _ui.value.layout
         val current = layout.rect(id)
         val next = if (current == null || current.isPlaceholder()) {
@@ -734,7 +733,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleModuleChrome(
-        id: DockModule,
+        id: String,
         canvasW: Float,
         canvasH: Float,
         tileW: Float,
@@ -745,7 +744,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         commitLayout(layout.with(id, current.copy(chrome = !current.chrome)))
     }
 
-    fun hideModule(id: DockModule, canvasW: Float, canvasH: Float, tileW: Float, tileH: Float) {
+    fun hideModule(id: String, canvasW: Float, canvasH: Float, tileW: Float, tileH: Float) {
         val layout = resolvedLayout(canvasW, canvasH, tileW, tileH)
         val current = layout.rect(id) ?: return
         commitLayout(layout.with(id, current.copy(visible = false)))
@@ -753,7 +752,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun moveModule(
-        id: DockModule,
+        id: String,
         dxPx: Float,
         dyPx: Float,
         canvasW: Float,
@@ -769,7 +768,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resizeModule(
-        id: DockModule,
+        id: String,
         dwPx: Float,
         dhPx: Float,
         canvasW: Float,
