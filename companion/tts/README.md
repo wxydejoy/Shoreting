@@ -2,7 +2,16 @@
 
 独立进程，跑在 **Mac Mini**。不要 `import dock_hub`。Hub 当客户端打 `POST /v1/speak`、`POST /v1/stop`。安卓不直连本服务。
 
-默认：本地 `models/Qwen3-TTS-12Hz-1.7B-Base-8bit`（Qwen3-TTS 12Hz 1.7B Base 8bit / MLX）+ 官方包片段克隆（`voices/shorekeeper/clone.wav` + 同名 `.lab`）。0.6B 6bit 仍可用 `--model mlx-community/Qwen3-TTS-12Hz-0.6B-Base-6bit` 加 `HF_HOME=.cache-base` 退回。
+默认：本地 `models/Qwen3-TTS-12Hz-1.7B-Base-4bit`（Qwen3-TTS 12Hz 1.7B Base 4bit / MLX）+ 官方包片段克隆（`voices/shorekeeper/clone.wav` + 同名 `.lab`）。
+
+量化档是 2026-10-31 实测定的（同参数、同 ref 音频）：4bit 比 8bit 首块快 ~40%（420ms vs 779ms）、RTF 0.66 vs 0.84~0.99、权重 2.2GiB vs 3.0GiB，模型加载 2s vs 17s。`ab-test/` 里有同一句话的 8bit/4bit 试听样本，觉得音质降了再切回：
+
+```bash
+# LaunchAgent plist 里把 --model 指回 models/Qwen3-TTS-12Hz-1.7B-Base-8bit（目录还在）
+# 0.6B 6bit：--model mlx-community/Qwen3-TTS-12Hz-0.6B-Base-6bit 加 HF_HOME=.cache-base
+```
+
+mlx-audio 锁 0.5.0：0.6.x 的 qwen3_tts 修复对 RTF 无收益（实测持平），不冒 API 变动风险。`bench_models.py` 可以复测：`python bench_models.py models/<档位>`。
 
 Mac Mini 没有内置喇叭，`--play` 需要耳机或外接音箱。
 
@@ -20,7 +29,7 @@ bash ./install-launchd.sh
 
 模型加载失败时进程**不会退出**：`/health` 里 `ready: false` 并带 `error`，后台按 30s→15min 退避重试。以前是 `SystemExit(1)`，配 KeepAlive 就成了每 10 秒重读 2GB 模型的重启风暴。调试时要老行为，加 `--exit-on-load-error`。日志：`companion/tts/tts.log`。
 
-**权重常驻**：加载前会 `mx.set_wired_limit(4GiB)`，把 ~3GiB 权重钉在物理内存里。机器内存一紧（16GB 只剩一两 GB 空闲时），权重会被换出磁盘，下一次开口前先从 swap 换回来——首字延迟从 0.8s 抖到 8~19s 就是这么来的（2026-10-31 踩过）。代价是这 4GiB 不再参与换页，别的应用会更挤。日志里 `wired 上限 …` / `权重 …GiB 已加载` 可以确认。
+**权重常驻**：加载前会 `mx.set_wired_limit(4GiB)`，把权重钉在物理内存里（4bit 档 ~2.2GiB）。机器内存一紧（16GB 只剩一两 GB 空闲时），权重会被换出磁盘，下一次开口前先从 swap 换回来——首字延迟从 0.8s 抖到 8~19s 就是这么来的（2026-10-31 踩过）。代价是这 4GiB 不再参与换页，别的应用会更挤。日志里 `wired 上限 …` / `权重 …GiB 已加载` 可以确认。
 
 首字延迟看日志行 `tts latency turn=… stage=play_only first_ms=…`（stream 路径的响应头没有这个字段）；`play: false` 的同步合成测的是整句生成完的时间，比开口延迟大得多，别拿它当用户体验。
 
@@ -28,12 +37,11 @@ bash ./install-launchd.sh
 
 ```bash
 cd companion/tts
-export HF_HOME=.cache-1.7b-8bit
 export HF_HUB_OFFLINE=1
 export HF_HUB_DISABLE_XET=1
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 .venv/bin/python server.py --host 0.0.0.0 --port 18100 \
-  --model models/Qwen3-TTS-12Hz-1.7B-Base-8bit \
+  --model models/Qwen3-TTS-12Hz-1.7B-Base-4bit \
   --ref-audio voices/shorekeeper/clone.wav --voice shorekeeper --play
 ```
 
