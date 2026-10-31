@@ -114,6 +114,16 @@ powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 
 重新打包前先退出托盘里的旧进程。改 `dock_hub/companion.py` 后必须重新打 exe：正在跑的是 `dist\DockHub.exe`，只拷 `.py` 不会生效。
 
+### 探针代码怎么更新（不重打 exe 的跑法）
+
+探针也可以不起 exe，直接用仓库 checkout 跑：`hub\run-probe.bat`（内部走
+`run-probe.vbs` → `.venv\Scripts\pythonw.exe -m dock_hub --probe`，无窗口）。
+更新就一条命令：**双击 `hub\update-probe.cmd`**——它做四件事：
+`git pull --ff-only`（失败时直连 GitHub 的 https 地址再试）→ 有 uv 就 `uv sync`
+→ 找到 `pythonw` 里命令行含 `dock_hub --probe` 的进程杀掉并用 vbs 重新拉起
+→ `curl http://127.0.0.1:17892/health` 验活。注意它按端口 17892 验活，探针
+配置改过监听端口时要手动核对。
+
 ## 桌面伴侣
 
 默认 `companion.tts.deliver: false`：Hub 流式读 LLM，每写出一句（`。！？`）就 cue Mini TTS（`play_only`）。`POST /v1/companion/chat` 仍等全文再返回给安卓字幕。`companion.llm.base_url` 可填 OpenAI 兼容地址（如阿里云 MaaS `qwen3.8-flash`），`api_key` 只写本机 yaml；请求顶层带 `enable_thinking: false`（推理型模型不关会把额度花在思考上）。未配密钥且 base 是 Ollama 时仍走 `/api/chat`（`think: false`）。TTS 仍指向 Mini。对话不预先读米家状态。白名单灯/开关/灯带可口头开关（`ACTION: id.on|off` 或「关灯」「开灯带」「开空调」兜底），真正执行仍走 devices/command。「慢慢关灯」这类说法会被直接接住：12 秒把亮度收到底再断电，不经过模型。打断走 `POST /v1/companion/stop`。另有 `POST /v1/companion/announce` 让外部脚本（如微信机器人）直接让书桌喇叭说话；天气由 `GET /v1/weather` 代取。说明见 [docs/companion.md](../docs/companion.md)。
