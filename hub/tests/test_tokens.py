@@ -157,35 +157,6 @@ class AuthOverHttpTest(unittest.TestCase):
         status, _body = self._get("/v1/snapshot", PHONE)
         self.assertEqual(status, 401)
 
-    def test_login_page_accepts_device_token(self) -> None:
-        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
-        raw = json.dumps({"token": PHONE}).encode("utf-8")
-        conn.request(
-            "POST",
-            "/chats/login",
-            body=raw,
-            headers={"Content-Type": "application/json"},
-        )
-        resp = conn.getresponse()
-        self.assertEqual(resp.status, 200)
-        self.assertIn("helm_chats", resp.getheader("Set-Cookie") or "")
-        resp.read()
-        conn.close()
-
-    def test_login_page_rejects_unknown(self) -> None:
-        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
-        raw = json.dumps({"token": "nope-nope-nope"}).encode("utf-8")
-        conn.request(
-            "POST",
-            "/chats/login",
-            body=raw,
-            headers={"Content-Type": "application/json"},
-        )
-        resp = conn.getresponse()
-        self.assertEqual(resp.status, 401)
-        resp.read()
-        conn.close()
-
 
 class WizardKeepsTokensTest(unittest.TestCase):
     def test_save_preserves_device_tokens(self) -> None:

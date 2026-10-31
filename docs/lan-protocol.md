@@ -40,7 +40,7 @@ Hub 用配置文件**白名单**暴露米家设备和可启动的程序。没写
 | 时间 | ISO-8601 UTC，例如 `2026-08-15T15:30:01Z` |
 | 数字 | JSON number；温度保留一位小数即可 |
 | 连接 | keep-alive；空闲 20 秒没请求就断开。Hub 同时最多处理 32 条连接，满了回 `503 busy` |
-| 缓存 | `/v1` 与页面一律 `Cache-Control: no-store`；只有 `/assets/*.css|js` 带 `ETag` 与 `max-age=3600`，可回 `304` |
+| 缓存 | `/v1` 一律 `Cache-Control: no-store` |
 | 压缩 | JSON 与 HTML 超过 512 字节时，若请求带 `Accept-Encoding: gzip` 就回 `Content-Encoding: gzip`；安卓用 OkHttp 的话默认已带上，不用自己解 |
 
 Hub 必须在启动时打印本机局域网 IP 和端口，方便在安卓里填写，例如：
@@ -135,15 +135,14 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `GET` | `/v1/photos/{id}` | 是 | 回忆相框（F37）：一张照片的原图。名单走 snapshot.photos，带 ETag/304；id 只认 basename，穿越一律 404 |
 | `POST` | `/v1/telemetry` | 是 | Windows 探针上报 CPU / GPU / 进程名 |
 | `POST` | `/v1/power` | 是 | Hub → 探针：`{"power": "shutdown"\|"sleep"\|"lock"}`（F21）。探针在本机执行：关机 `/t 5`、锁屏、睡眠。危险动作的二次确认在伴侣语音侧，协议层不拦 |
-| `POST` | `/v1/login-ticket` | 是 | 托盘换一张 60 秒有效的一次性票据，把浏览器送进 `/chats` |
 | `POST` | `/v1/companion/chat` | 是 | 桌面伴侣一轮对话（配置关闭则 404） |
 | `POST` | `/v1/companion/stop` | 是（本机可免） | 打断当前说话，立刻停 Mini 喇叭 |
 | `POST` | `/v1/companion/announce` | 是 | 让守岸人说一句（微信侧路；安卓不用打） |
-| `POST` | `/v1/companion/read` | 是（本机可免） | 朗读：播放或排队生成 wav。浏览器页是 `GET /read` |
+| `POST` | `/v1/companion/read` | 是（本机可免） | 朗读：播放或排队生成 wav |
 | `GET` | `/v1/companion/read/jobs` | 是（本机可免） | 朗读任务列表。**安卓不要打** |
 | `POST` | `/v1/companion/read/jobs/{id}/{action}` | 是（本机可免） | `cancel` / `delete` / `replay` 一个朗读任务。**安卓不要打** |
 | `GET` | `/v1/companion/audio/{id}` | 是（本机可免） | 伴侣 wav（`audio_id` 为空或关闭则不要打） |
-| `GET` | `/v1/companion/chats` | 是（本机可免） | 对话原文列表。浏览器页是 `GET /chats` |
+| `GET` | `/v1/companion/chats` | 是（本机可免） | 对话原文列表。控制台的聊天记录页在用 |
 | `GET`/`POST` | `/v1/companion/books` | 是（本机可免） | 睡前朗读书架 / 上传一本 txt。**安卓不要打** |
 | `GET` | `/v1/companion/books/{id}` | 是（本机可免） | 打开一本书：章节索引 + 书签位置。**安卓不要打** |
 | `GET` | `/v1/companion/books/{id}/chapter/{index}` | 是（本机可免） | 一章的正文。**安卓不要打** |
@@ -647,7 +646,7 @@ Hub 应在超时前返回。4B 关思考仍慢则 `502`，不要让安卓一直�
 
 ### 6.5 `GET /v1/companion/audio/{id}`
 
-需要 token（本机浏览器可免，与 `/chats` 相同）。`id` 只允许 `A-Za-z0-9._-`。仅 `tts.deliver: true` 时 chat 才会把 wav 交给手机；朗读页生成的文件也会落在这里。**安卓不要直连 :18100**。默认 chat 不缓存，本接口 404。
+需要 token（本机直连可免）。`id` 只允许 `A-Za-z0-9._-`。仅 `tts.deliver: true` 时 chat 才会把 wav 交给手机；朗读页生成的文件也会落在这里。**安卓不要直连 :18100**。默认 chat 不缓存，本接口 404。
 
 合成发生在 `POST /v1/companion/chat` 或 `POST /v1/companion/read` 里；本接口只返回已缓存或已落盘的 wav，不再向 TTS 要一遍。
 
@@ -699,7 +698,7 @@ Content-Type: application/json
 
 ### 6.8 `POST /v1/companion/read` · `GET /v1/companion/read/jobs`
 
-给 **Hub 浏览器朗读页** 用：贴一段文字，预估时长后在 Mini 喇叭播放，或排队生成一份 24 kHz 单声道 WAV 供下载。**安卓不要打**。配置未开启 companion → `404`。本机可免 token，局域网与 `/chats` 相同。
+给 **控制台的朗读页** 用：贴一段文字，预估时长后在 Mini 喇叭播放，或排队生成一份 24 kHz 单声道 WAV 供下载。**安卓不要打**。配置未开启 companion → `404`。本机可免 token，局域网与 `/chats` 相同。
 
 一次最多 8000 字。预估按约 4 字/秒，不调模型。`mode` 为 `play` 或 `file`，**都立刻入队**；`play` 在后台 cue Mini，`file` 后台合成、不播喇叭。短句会先合并到接近克隆参考的长度再送 TTS。
 
@@ -751,13 +750,12 @@ POST /v1/companion/read/jobs/{id}/replay
 POST /v1/companion/read/jobs/{id}/delete
 ```
 
-`cancel` 停下排队或正在跑的任务；`replay` 用存下的稿再 cue Mini；`delete` 从列表拿掉并删掉对应 wav。浏览器页的「停止」走 `POST /v1/companion/stop`（本机可免 token，与 `/read` 相同）。
+`cancel` 停下排队或正在跑的任务；`replay` 用存下的稿再 cue Mini；`delete` 从列表拿掉并删掉对应 wav。控制台朗读页的「停止」走 `POST /v1/companion/stop`。
 
-浏览器页：`GET /read`（稿在左、任务在右，选区 / 导入 / 停止 / 再播）。
 
 ### 6.9 睡前朗读
 
-书放在 Hub 配置目录的 `books/`。这些路由**安卓不要打**。鉴权与 `/read` 相同：本机免 Token，局域网要 Token。伴侣未开启时 `404`。
+书放在 Hub 配置目录的 `books/`。这些路由**安卓不要打**。鉴权：本机免 Token，局域网要 Token。伴侣未开启时 `404`。
 
 `GET /v1/companion/books` 只返回文件名、大小、修改时间、`current_id` 和 `timer_min`，不返回正文。
 
@@ -907,7 +905,7 @@ Content-Type: application/json
 
 给 Prometheus 抓的纯文本指标。**安卓不打**，它不是协议面的一部分，改起来也不受 v1 约束。
 
-鉴权：本机直连免 Token（和 `/chats` 一致）；跨机抓要带 `Authorization: Bearer <token>`。
+鉴权：本机直连免 Token；跨机抓要带 `Authorization: Bearer <token>`。
 不设这个例外的话，同网段谁都能看出你几点在跟谁说话。
 
 ```
@@ -975,7 +973,7 @@ Authorization: Bearer <token>
 - `key` 是删除句柄，URL 编码后放路径里；`/` 开头的 key 不存在。
 - 删除即生效：下一轮对话她就真的不知道这件事了，不进上下文。
 - 超 60 条先挤 `chat` 来源里最旧的，你亲手教的（`taught`）最后动。
-- 本机直连免 Token（同 `/chats`）；跨机要 Bearer。
+- 本机直连免 Token；跨机要 Bearer。
 
 ### 6.15b `POST /v1/notify/phone` · `POST /v1/wechat` · snapshot.notify
 
@@ -1033,7 +1031,7 @@ Content-Type: application/json
 
 ### 6.16 `GET /v1/companion/week`
 
-桌面周报（F27）。**安卓不打**——这是给人看的页面，`/week`（HTML）配这条数据接口。
+桌面周报（F27）。**安卓不打**——这是给人看的数据，控制台周报页在用。
 浏览器打开 `/week`，鉴权与 `/chats` 同一套（本机直连免 Token，跨机走 cookie / Bearer）。
 
 数据来自 `companion-stats.jsonl`（hub.yaml 同目录）：对话、朗读、在桌、开关机的
@@ -1124,7 +1122,6 @@ Content-Type: application/json
 | `POST /v1/companion/announce` | 10/分 | 走 TTS，会占住喇叭 |
 | `POST /v1/companion/read` | 20/分 | 每个任务都要合成音频 |
 | `POST /v1/devices/{id}/command` | 60/分 | 能拉起本机白名单程序，泄露 token 时的提权面 |
-| `POST /chats/login` | 10/分 | 挡 token 暴力猜解 |
 
 按 IP 分桶而不是按 token：token 只有一枚，按 token 限等于全局限，一个人刷爆全家
 都动不了。本机直连也照样限——真烧起额度来时，本机跑的脚本比外面更可能是元凶。

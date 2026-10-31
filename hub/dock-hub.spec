@@ -22,9 +22,6 @@ datas = [
     *collect_data_files("certifi"),
     (str(ASSETS / "icon.png"), "."),
     (str(ASSETS / "icon.ico"), "."),
-    (str(ASSETS / "setup.html"), "."),
-    (str(ASSETS / "chats.html"), "."),
-    (str(ASSETS / "read.html"), "."),
     (str(ROOT / "hub.yaml.example"), "."),
 ]
 # build-exe.ps1 打包前把短提交号写进 _revision.txt；没这个文件（裸跑 spec）就跳过

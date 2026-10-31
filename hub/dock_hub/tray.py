@@ -32,20 +32,13 @@ def run_tray(hub: "DockHub", stop_server: Callable[[], None], status_line: str) 
     import pystray
     from pystray import MenuItem as Item
 
-    def open_setup(icon: pystray.Icon, _item: object) -> None:
-        from dock_hub.setup_ui import open_setup_browser
+    def open_console(path: str):
+        def _open(icon: pystray.Icon, _item: object) -> None:
+            import webbrowser
 
-        open_setup_browser(hub, force=True)
+            webbrowser.open(f"http://127.0.0.1:{CONSOLE_PORT}/#{path}")
 
-    def open_chats(icon: pystray.Icon, _item: object) -> None:
-        import webbrowser
-
-        webbrowser.open(f"http://127.0.0.1:{hub.config.port}/chats")
-
-    def open_read(icon: pystray.Icon, _item: object) -> None:
-        import webbrowser
-
-        webbrowser.open(f"http://127.0.0.1:{hub.config.port}/read")
+        return _open
 
     def quit_app(icon: pystray.Icon, _item: object) -> None:
         icon.stop()
@@ -53,9 +46,10 @@ def run_tray(hub: "DockHub", stop_server: Callable[[], None], status_line: str) 
 
     menu = pystray.Menu(
         Item(status_line, None, enabled=False),
-        Item("打开配置向导", open_setup),
-        Item("打开聊天记录", open_chats),
-        Item("打开朗读", open_read),
+        # default=True：左键单击就是它，直接开控制台；右键菜单里也能点
+        Item("打开控制台", open_console("/"), default=True),
+        Item("打开聊天记录", open_console("/hub/chats")),
+        Item("打开朗读", open_console("/hub/read")),
         pystray.Menu.SEPARATOR,
         Item("退出", quit_app),
     )

@@ -32,7 +32,7 @@ hub/
     pc.py             # CPU / 内存 / GPU / CPU 温度
     ledstrip.py       # 书桌 WS2812 灯带（ESP32 HTTP）
     mijia_bridge.py   # 米家设备
-    setup_ui.py       # 配置向导（/setup）
+    setup_ui.py       # /setup/api/* —— 控制台转发的配置接口
     assets/           # 托盘与 exe 图标；rare.* 是 web/ 的构建产物
   web/                # 向导 / 朗读 / 睡前朗读页面前端源码（vite → dock_hub/assets/rare.*）
   dock_hub_entry.py   # PyInstaller 入口
@@ -51,7 +51,7 @@ hub/
 | 路径 | 用途 |
 |------|------|
 | `~/.config/dock-hub/hub.yaml` | 主配置 + token（Mini） |
-| `~/.config/dock-hub/companion-chats.jsonl` | 守岸人对话原文（查看页 `/chats`） |
+| `~/.config/dock-hub/companion-chats.jsonl` | 守岸人对话原文（控制台「聊天记录」页在用） |
 | `~/.config/dock-hub/reads/` | 朗读页生成的 wav |
 | `~/.config/dock-hub/books/` | 睡前朗读的 txt 和 `progress.json` |
 | `~/.config/mijia-api/auth.json` | 米家登录缓存（勿发给手机） |
@@ -70,7 +70,7 @@ uv sync
 ./install-launchd.sh
 ```
 
-配置向导：`http://127.0.0.1:17890/setup`（本机直接开；局域网先打开 `/chats` 登录或带 Token）。
+配置页面在控制台：`http://127.0.0.1:17880/#/hub/setup`（本机直接开；局域网带 `?key=<hub.yaml 的 token>`）。
 
 ### 日志
 
@@ -81,8 +81,8 @@ uv sync
 2026-10-30T19:52:03+08:00 hub win.lan 200 1204 4ms "GET /v1/snapshot"
 ```
 
-**查询串一律不上盘**：`/chats/claim?ticket=…` 里是登录凭据，`/v1/companion/chats?q=…`
-里是搜过的原文，所以只留路径，问号之后记成 `?…`。
+**查询串一律不上盘**：`/v1/companion/chats?q=…` 里是搜过的原文，所以只留路径，
+问号之后记成 `?…`。
 
 | 环境变量 | 作用 |
 |---|---|
@@ -101,15 +101,15 @@ uv sync
 powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
 ```
 
-产物：`hub\dist\DockHub.exe`（无黑窗口 + 系统托盘，开机由计划任务 `HelmDockHub` 拉起）。托盘右键可打开 Mini 上的配置向导 / 聊天 / 朗读。
+产物：`hub\dist\DockHub.exe`（无黑窗口 + 系统托盘，开机由计划任务 `HelmDockHub` 拉起）。托盘右键可打开 Mini 上的控制台 / 聊天 / 朗读。
 
 不要再让 Windows 占 `:17890`。探针端口是 **17892**。
 
 1. **右键 → 以管理员身份运行**（或 `.\run-admin.ps1`，有 exe 时会优先启动它）
-2. 托盘右键：**打开配置向导** 或 **退出**（首次启动会自动打开向导）
-3. 配置向导地址：`http://127.0.0.1:17890/setup`（**仅本机**可访问）
-4. 聊天记录：托盘 **打开聊天记录**，或浏览器打开 `http://127.0.0.1:17890/chats`（本机不用 Token；局域网填手机那枚 Token）
-5. 朗读：托盘 **打开朗读**，或 `http://127.0.0.1:17890/read`。贴文稿或导入 txt，可只读选区；播放 / 生成 / 停止 / 再播 / 下载都在任务列表里
+2. 托盘右键：**打开控制台** 或 **退出**（首次启动会自动打开控制台）
+3. 控制台地址：`http://mini.lan:17880/#/hub/setup`（局域网带 `?key=<token>`）
+4. 聊天记录：托盘 **打开聊天记录**（落点是控制台的 `#/hub/chats`）
+5. 朗读：托盘 **打开朗读**（落点是控制台的 `#/hub/read`）。贴文稿或导入 txt，可只读选区；播放 / 生成 / 停止 / 再播 / 下载都在任务列表里
 6. 安卓填向导里显示的 IP、端口 `17890`、Token
 
 重新打包前先退出托盘里的旧进程。改 `dock_hub/companion.py` 后必须重新打 exe：正在跑的是 `dist\DockHub.exe`，只拷 `.py` 不会生效。
@@ -193,7 +193,7 @@ curl -s -X POST http://127.0.0.1:17890/setup/api/features \
 ```powershell
 cd hub
 uv sync
-uv run dock-hub                      # 首次会自动生成 hub.yaml 并打开配置向导
+uv run dock-hub                      # 首次会自动生成 hub.yaml 并打开控制台
 uv run dock-hub --init              # 仅命令行：生成随机 token 的 hub.yaml
 uv run dock-hub --list-devices      # 核对米家设备名
 uv run dock-hub --dump-device "卧室温湿度计"
@@ -216,11 +216,7 @@ powershell -ExecutionPolicy Bypass -File .\run-admin.ps1
 
 ![配置向导](../docs/screenshots/hub-setup.png)
 
-聊天记录、朗读 / 睡前朗读页（`/chats`、`/read`）：
-
-![对话记录](../docs/screenshots/hub-chats.png)
-
-![朗读与睡前朗读](../docs/screenshots/hub-read.png)
+聊天记录、朗读 / 睡前朗读在**控制台**（`#/hub/chats`、`#/hub/read`；Hub 自己那套老页面已删）：
 
 1. 复制 **IP / Token** 到安卓
 2. 米家扫码登录

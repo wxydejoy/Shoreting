@@ -79,26 +79,6 @@ class AssetHeaderTest(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_asset_is_cacheable(self) -> None:
-        status, headers, body = self._get("/assets/shell.css")
-        self.assertEqual(status, 200)
-        self.assertIn("max-age", headers.get("Cache-Control", ""))
-        self.assertTrue(headers.get("ETag"))
-        self.assertGreater(len(body), 0)
-
-    def test_asset_304_when_unchanged(self) -> None:
-        _, headers, _ = self._get("/assets/shell.css")
-        tag = headers["ETag"]
-        status, headers, body = self._get("/assets/shell.css", {"If-None-Match": tag})
-        self.assertEqual(status, 304)
-        self.assertEqual(body, b"")
-        self.assertEqual(headers.get("ETag"), tag)
-
-    def test_pages_stay_no_store(self) -> None:
-        status, headers, _ = self._get("/chats")
-        self.assertEqual(status, 200)
-        self.assertEqual(headers.get("Cache-Control"), "no-store")
-
     def test_json_stays_no_store(self) -> None:
         status, headers, _ = self._get(
             "/v1/snapshot",

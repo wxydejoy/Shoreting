@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import secrets
 import threading
 import time
 from datetime import datetime, timedelta
@@ -83,13 +82,6 @@ from dock_hub.mijia_bridge import (
 )
 
 
-def _safe_next_path(raw: str | None) -> str:
-    text = str(raw or "/setup").strip() or "/setup"
-    if not text.startswith("/") or text.startswith("//") or "://" in text or "\\" in text:
-        return "/setup"
-    return text
-
-
 class DockHub:
     def __init__(self, config: HubConfig) -> None:
         self.config = config
@@ -119,8 +111,6 @@ class DockHub:
         self._remote_at = 0.0
         self._remote_idle: float | None = None
         self._desk_pc_online: bool | None = None
-        self._ticket_lock = threading.Lock()
-        self._login_tickets: dict[str, tuple[float, str]] = {}
         # 没开限流时是 None，调用方按「不限」处理，不用到处判断开关
         self.gate = Gate.from_config(config.limits)
         # 慢请求（等模型、等 TTS）单独几个名额，满了回 503 而不是无限开线程
@@ -663,34 +653,6 @@ class DockHub:
             "protocol": PROTOCOL,
             "name": self.config.name,
         }
-
-    def mint_login_ticket(self, next_path: str | None = None) -> dict[str, Any]:
-        nxt = _safe_next_path(next_path)
-        ticket = secrets.token_urlsafe(24)
-        now = time.monotonic()
-        with self._ticket_lock:
-            expired = [key for key, (exp, _nxt) in self._login_tickets.items() if exp <= now]
-            for key in expired:
-                self._login_tickets.pop(key, None)
-            self._login_tickets[ticket] = (now + 60.0, nxt)
-        from urllib.parse import quote
-
-        path = f"/chats/claim?ticket={quote(ticket, safe='')}&next={quote(nxt, safe='/')}"
-        return {"ok": True, "ticket": ticket, "path": path}
-
-    def claim_login_ticket(self, ticket: str) -> str | None:
-        ident = str(ticket or "").strip()
-        if not ident:
-            return None
-        now = time.monotonic()
-        with self._ticket_lock:
-            item = self._login_tickets.pop(ident, None)
-        if item is None:
-            return None
-        exp, nxt = item
-        if exp <= now:
-            return None
-        return nxt
 
     def uses_probe(self) -> bool:
         return bool((self.config.probe.url or "").strip())

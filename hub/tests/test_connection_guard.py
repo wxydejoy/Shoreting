@@ -108,10 +108,6 @@ class DisconnectTest(unittest.TestCase):
         handler = self._handler(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
         handler.handle()  # 不该抛，也不该刷 traceback
 
-    def test_asset_disconnect_does_not_raise(self) -> None:
-        handler = self._handler(b"GET /assets/rare.js HTTP/1.1\r\nHost: localhost\r\n\r\n")
-        handler.handle()
-
 
 if __name__ == "__main__":
     unittest.main()

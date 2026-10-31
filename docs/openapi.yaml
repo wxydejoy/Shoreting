@@ -423,33 +423,6 @@ paths:
           $ref: "#/components/responses/Error"
         "401":
           $ref: "#/components/responses/Error"
-  /v1/login-ticket:
-    post:
-      summary: Mint a one-shot ticket that turns a browser into a logged-in chats session
-      description: >
-        桌面托盘是这么把浏览器送进 /chats 的：不用把 token 贴进地址栏。
-        票据 60 秒有效、只能兑换一次。
-      operationId: postLoginTicket
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                next:
-                  type: string
-                  default: /setup
-                  description: 兑换后跳转的站内路径，外部地址会被拒绝
-      responses:
-        "200":
-          description: Ticket and the URL to open
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LoginTicket"
-        "401":
-          $ref: "#/components/responses/Error"
   /v1/companion/chats:
     get:
       summary: Companion conversation log (Hub web UI only). Android must not call this.
@@ -1850,18 +1823,6 @@ components:
           items:
             type: string
           description: 当前前台 / 关注的进程名，小写，用于「正在玩游戏」判断
-    LoginTicket:
-      type: object
-      required: [ok, ticket, path]
-      properties:
-        ok:
-          type: boolean
-          enum: [true]
-        ticket:
-          type: string
-        path:
-          type: string
-          example: /chats/claim?ticket=...&next=%2Fsetup
     ChatTurn:
       type: object
       required: [ts, turn, user, reply, ms]

@@ -6,7 +6,6 @@ import json
 import re
 import secrets
 import subprocess
-import sys
 import threading
 import urllib.error
 import urllib.request
@@ -17,7 +16,6 @@ from urllib.parse import urlparse
 
 import yaml
 
-from dock_hub.assets import read_asset
 from dock_hub.config import (
     DEFAULT_PROBE_PORT,
     NODE_KEYS,
@@ -33,6 +31,7 @@ from dock_hub.config import (
 from dock_hub.errors import HubError
 from dock_hub.mijia_bridge import clear_mijia_auth, list_device_props
 from dock_hub.service import DockHub
+from dock_hub.tray import console_url
 
 SETUP_FLAG = Path.home() / ".config" / "dock-hub" / ".setup-opened"
 
@@ -44,18 +43,6 @@ _mijia_login_state: dict[str, Any] = {
 }
 
 
-def setup_asset_path() -> Path:
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        p = Path(sys._MEIPASS) / "setup.html"  # type: ignore[attr-defined]
-        if p.is_file():
-            return p
-    return Path(__file__).resolve().parent / "assets" / "app.html"
-
-
-def setup_page_html() -> bytes:
-    return read_asset(setup_asset_path())
-
-
 def is_local_client(address: tuple[str, int] | str) -> bool:
     host = address[0] if isinstance(address, tuple) else str(address)
     if host.startswith("::ffff:"):
@@ -64,15 +51,19 @@ def is_local_client(address: tuple[str, int] | str) -> bool:
 
 
 def open_setup_browser(hub: DockHub, *, force: bool = False) -> None:
+    """首次启动（或托盘点「打开配置向导」）时开浏览器——落点是控制台的配置页。
+
+    控制台没起来时浏览器会白屏：控制台由岸亭控制台.app 常驻，日常都在。
+    """
     if not force and SETUP_FLAG.is_file():
         return
     SETUP_FLAG.parent.mkdir(parents=True, exist_ok=True)
     SETUP_FLAG.write_text("1", encoding="utf-8")
-    url = f"http://127.0.0.1:{hub.config.port}/setup"
+    url = console_url(hub.config)
     try:
         webbrowser.open(url)
     except Exception as exc:
-        print(f"无法打开配置向导：{exc}", flush=True)
+        print(f"无法打开控制台：{exc}", flush=True)
         print(f"请手动打开 {url}", flush=True)
 
 
@@ -861,10 +852,7 @@ def _merge_devices(incoming: list[Any], current: Any) -> list[Any]:
 
 
 def handle_setup_get(hub: DockHub, path: str, handler: Any) -> bool:
-    """Return True if request handled."""
-    if path == "/setup":
-        handler._html(200, setup_page_html(), "text/html; charset=utf-8")  # noqa: SLF001
-        return True
+    """Return True if request handled. 页面全在控制台，这里只剩 API。"""
     if path == "/setup/api/state":
         handler._json(200, build_state(hub))  # noqa: SLF001
         return True

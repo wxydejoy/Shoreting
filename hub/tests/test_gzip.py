@@ -99,14 +99,14 @@ class GzipTest(unittest.TestCase):
         self.assertIsNone(headers.get("Content-Encoding"))
         self.assertEqual(json.loads(body.decode("utf-8"))["error"]["code"], "unauthorized")
 
-    def test_page_html_is_compressed(self) -> None:
-        status, headers, body = self._get("/chats", {"Accept-Encoding": "gzip, deflate"})
+    def test_json_is_compressed_when_accepted(self) -> None:
+        status, headers, body = self._get(
+            "/v1/snapshot",
+            {"Accept-Encoding": "gzip", "Authorization": "Bearer secret-token-value"},
+        )
         self.assertEqual(status, 200)
         self.assertEqual(headers.get("Content-Encoding"), "gzip")
-        self.assertIn(b"<", gzip.decompress(body))
-
-    def test_page_keeps_no_store(self) -> None:
-        _, headers, _ = self._get("/chats", {"Accept-Encoding": "gzip"})
+        self.assertIn(b"{", gzip.decompress(body))
         self.assertEqual(headers.get("Cache-Control"), "no-store")
 
 

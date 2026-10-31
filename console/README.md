@@ -61,7 +61,7 @@ Windows 探针不再单独一页：地址、口令、回连、监听、掉线阈
 - **陪伴** — 聊天记录、朗读、周报与日记（一页两个 tab：这一周 / 日记）
 - **系统** — 关于与帮助
 
-这几页原本是 Hub 自己的一套 HTML（`/setup`、`/chats`、`/read`、`/week`、`/diary`），现在全部用同一套 shadcn/ui 组件重写了，不再是 iframe 套页面；Hub 那套页面本身还能直接用浏览器打开，只是控制台不再引用。周报和日记合成一页（`#/hub/journal`），`#/hub/week`、`#/hub/diary` 两个老地址会落到这一页的对应 tab；`#/windows` 会落到三端配置的 Windows tab。
+这几页原本是 Hub 自己的一套 HTML（`/setup`、`/chats`、`/read`、`/week`、`/diary`），现在全部用同一套 shadcn/ui 组件重写了，不再是 iframe 套页面；Hub 那套老页面已整个删掉，`/setup` 路径上只剩控制台在转发的 API。周报和日记合成一页（`#/hub/journal`），`#/hub/week`、`#/hub/diary` 两个老地址会落到这一页的对应 tab；`#/windows` 会落到三端配置的 Windows tab。
 
 ## 前端
 

@@ -12,12 +12,11 @@ import time
 from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from dock_hub.accesslog import AccessLog
-from dock_hub.assets import etag_for
 from dock_hub.books import MAX_BOOK_BYTES
-from dock_hub.chat_log import asset_page_html, chats_page_html, diary_page_html, read_page_html, week_page_html
+from dock_hub.config import HubConfig
 from dock_hub.errors import HubError
 from dock_hub.service import DockHub
 from dock_hub.setup_ui import is_local_client
@@ -33,12 +32,6 @@ _BUSY_BODY = json.dumps(
     {"error": {"code": "busy", "message": "Hub 正忙，稍后再试"}},
     ensure_ascii=False,
 ).encode("utf-8")
-_STATIC = {
-    "litera.min.css": "text/css; charset=utf-8",
-    "shell.css": "text/css; charset=utf-8",
-    "rare.css": "text/css; charset=utf-8",
-    "rare.js": "text/javascript; charset=utf-8",
-}
 
 def lan_ips() -> list[str]:
     found: list[str] = []
@@ -126,19 +119,9 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or "/"
             try:
-                if path.startswith("/assets/"):
-                    name = path.removeprefix("/assets/")
-                    ctype = _STATIC.get(name)
-                    if ctype is None:
-                        raise HubError("not_found", "未知接口")
-                    self._asset(asset_page_html(name), ctype)
-                    return
                 if path.startswith("/setup"):
                     from dock_hub import setup_ui
 
-                    if path == "/setup" and not self._chats_ok():
-                        self._redirect("/chats?next=/setup")
-                        return
                     setup_ui.ensure_local(self)
                     if setup_ui.handle_setup_get(hub, path, self):
                         return
@@ -152,42 +135,6 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     if not is_local_client(self.client_address):
                         self._require_auth()
                     self._text(200, hub.metrics_text(), "text/plain; version=0.0.4; charset=utf-8")
-                    return
-                if path == "/chats/claim":
-                    query = parse_qs(parsed.query)
-                    ticket = unquote((query.get("ticket") or [""])[0])
-                    nxt = hub.claim_login_ticket(ticket)
-                    if not nxt:
-                        raise HubError("unauthorized", "登录已过期，请从托盘重新打开")
-                    self.send_response(302)
-                    self.send_header("Location", nxt)
-                    self.send_header(
-                        "Set-Cookie",
-                        "helm_chats="
-                        + quote(hub.config.token, safe="")
-                        + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000",
-                    )
-                    self.send_header("Content-Length", "0")
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                    return
-                if path == "/chats":
-                    self._guard_guest()
-                    self._html(200, chats_page_html(), "text/html; charset=utf-8")
-                    return
-                if path == "/read":
-                    self._html(200, read_page_html(), "text/html; charset=utf-8")
-                    return
-                if path == "/week":
-                    # F27 桌面周报：这一周你在桌前多久、读了多少。页面本身不设防，
-                    # 数据接口（/v1/companion/week）和 /chats 一样鉴权
-                    self._guard_guest()
-                    self._html(200, week_page_html(), "text/html; charset=utf-8")
-                    return
-                if path == "/diary":
-                    # F29 守岸人日记：她傍晚写的那段。页面不设防，数据接口鉴权
-                    self._guard_guest()
-                    self._html(200, diary_page_html(), "text/html; charset=utf-8")
                     return
                 if path == "/v1/companion/diary":
                     # F29：日记列表。鉴权口径与 /chats 相同——本机免 token
@@ -341,26 +288,6 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     with self._lane("chat"):
                         self._json(200, hub.companion_chat(body))
                     return
-                if path == "/chats/login":
-                    self._limit("login")
-                    body = self._read_json()
-                    token = str(body.get("token") or "").strip()
-                    if not self._token_ok(token):
-                        raise HubError("unauthorized", "Token 不正确")
-                    data = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json; charset=utf-8")
-                    self.send_header("Content-Length", str(len(data)))
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header(
-                        "Set-Cookie",
-                        "helm_chats="
-                        + quote(token, safe="")
-                        + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000",
-                    )
-                    self.end_headers()
-                    self.wfile.write(data)
-                    return
                 if path == "/v1/companion/stop":
                     if not self._chats_ok():
                         raise HubError("unauthorized", "Token 不正确")
@@ -437,11 +364,6 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._read_json()
                     self._json(200, hub.companion_read_job_action(parts[0], parts[1]))
                     return
-                if path == "/v1/login-ticket":
-                    self._require_auth()
-                    body = self._read_json()
-                    self._json(200, hub.mint_login_ticket(str(body.get("next") or "/setup")))
-                    return
                 if path == "/v1/telemetry":
                     self._require_auth()
                     body = self._read_json()
@@ -495,16 +417,6 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             except HubError as exc:
                 self._json(exc.status, exc.body(), headers=exc.headers)
 
-        def _cookie(self, name: str) -> str:
-            raw = self.headers.get("Cookie") or ""
-            for part in raw.split(";"):
-                if "=" not in part:
-                    continue
-                key, value = part.split("=", 1)
-                if key.strip() == name:
-                    return unquote(value.strip())
-            return ""
-
         def _token_ok(self, got: str) -> bool:
             """任一配置过的 token 命中就算过。
 
@@ -525,7 +437,7 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             bearer = header.strip()
             if bearer.lower().startswith("bearer ") and self._token_ok(bearer[7:].strip()):
                 return True
-            return self._token_ok(self._cookie("helm_chats"))
+            return False
 
         def _guard_guest(self) -> None:
             """F26 访客模式：对话记录连页面带接口一律 404。
@@ -673,24 +585,6 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(data)
 
-        def _asset(self, payload: bytes, content_type: str) -> None:
-            """打包进来的 css/js 不会变，给浏览器留一份，省掉每次刷新的重下。"""
-
-            tag = etag_for(payload)
-            if (self.headers.get("If-None-Match") or "").strip() == tag:
-                self.send_response(304)
-                self.send_header("ETag", tag)
-                self.send_header("Cache-Control", "public, max-age=3600")
-                self.end_headers()
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(payload)))
-            self.send_header("Cache-Control", "public, max-age=3600")
-            self.send_header("ETag", tag)
-            self.end_headers()
-            self.wfile.write(payload)
-
         def _html(self, status: int, payload: bytes, content_type: str) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
@@ -699,15 +593,6 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(payload)
-
-        def _redirect(self, location: str) -> None:
-            data = b""
-            self.send_response(302)
-            self.send_header("Location", location)
-            self.send_header("Content-Length", "0")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(data)
 
         def _bytes(
             self,

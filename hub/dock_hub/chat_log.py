@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import json
-import sys
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-from dock_hub.assets import read_asset
 
 MAX_TEXT = 4000
 MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -153,30 +150,3 @@ def _clip(value: str | None) -> str:
     if len(text) <= MAX_TEXT:
         return text
     return text[: MAX_TEXT - 1] + "…"
-
-
-def asset_page_html(name: str) -> bytes:
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        bundled = Path(sys._MEIPASS) / name  # type: ignore[attr-defined]
-        if bundled.is_file():
-            return read_asset(bundled)
-    return read_asset(Path(__file__).resolve().parent / "assets" / name)
-
-
-def chats_page_html() -> bytes:
-    """F30 时间线版对话页：独立小页（gate + ‹ › 翻天），不再走 app.html 三栏。"""
-    return asset_page_html("chats.html")
-
-
-def read_page_html() -> bytes:
-    return asset_page_html("app.html")
-
-
-def week_page_html() -> bytes:
-    """F27 桌面周报页（独立小页，不走 app.html 那套三栏）。"""
-    return asset_page_html("week.html")
-
-
-def diary_page_html() -> bytes:
-    """F29 守岸人日记页（独立小页，一天一段，可删）。"""
-    return asset_page_html("diary.html")

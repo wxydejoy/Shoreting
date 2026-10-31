@@ -176,14 +176,6 @@ class ProtocolTest(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(body["items"], [])
-        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
-        conn.request("GET", "/chats")
-        resp = conn.getresponse()
-        html = resp.read().decode("utf-8")
-        self.assertEqual(resp.status, 200)
-        self.assertIn("text/html", resp.getheader("Content-Type") or "")
-        self.assertIn("守岸人", html)
-        conn.close()
 
     def test_companion_chats_day_and_days(self) -> None:
         # F30 时间线：day 翻某一天，with_days 带回记过话的日子
@@ -236,15 +228,6 @@ class ProtocolTest(unittest.TestCase):
         status, body = self._request("GET", "/v1/companion/week")
         self.assertEqual(body["summary"]["total"]["chats"], 1)
 
-        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
-        conn.request("GET", "/week")
-        resp = conn.getresponse()
-        html = resp.read().decode("utf-8")
-        self.assertEqual(resp.status, 200)
-        self.assertIn("text/html", resp.getheader("Content-Type") or "")
-        self.assertIn("桌面周报", html)
-        conn.close()
-
     def test_notify_and_wechat_endpoints(self) -> None:
         # F33/F4/F34：递话入队、随 snapshot 下发；微信那句她念出来
         status, body = self._request("POST", "/v1/notify/phone", {"text": "我晚点回", "from": "script"})
@@ -270,22 +253,6 @@ class ProtocolTest(unittest.TestCase):
         self.assertGreaterEqual(snap["notify"]["last_id"], 2)
         self.assertTrue(any("我晚点回" in item["text"] for item in items))
         self.assertTrue(any(item["source"] == "wechat" for item in items))
-
-    def test_companion_read_page(self) -> None:
-        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
-        conn.request("GET", "/read")
-        resp = conn.getresponse()
-        html = resp.read().decode("utf-8")
-        self.assertEqual(resp.status, 200)
-        self.assertIn("text/html", resp.getheader("Content-Type") or "")
-        self.assertIn("朗读", html)
-        self.assertIn('id="story"', html)
-        self.assertIn('id="timer"', html)
-        self.assertIn('id="importBar"', html)
-        self.assertIn('id="readLog"', html)
-        self.assertIn("短稿", html)
-        self.assertIn('id="text"', html)
-        conn.close()
 
     def test_lan_protocol_mentions_story_routes(self) -> None:
         text = Path(__file__).resolve().parents[2].joinpath("docs/lan-protocol.md").read_text(encoding="utf-8")

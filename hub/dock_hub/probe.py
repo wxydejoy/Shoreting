@@ -9,15 +9,13 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from dock_hub import logs
-from dock_hub.config import DEFAULT_PROBE_HUB_URL, HubConfig, PcConfig
+from dock_hub.config import HubConfig, PcConfig
 from dock_hub.accesslog import AccessLog
 from dock_hub.errors import HubError
 from dock_hub.launch import FinishedWatch, launch, running_image_names
@@ -36,40 +34,6 @@ def parse_listen(raw: str) -> tuple[str, int]:
     if not sep:
         return text or "0.0.0.0", 17892
     return (host or "0.0.0.0"), int(port_s)
-
-
-OPEN_PAGES = {
-    "/v1/open-setup": "/setup",
-    "/v1/open-chats": "/chats",
-    "/v1/open-read": "/read",
-}
-
-
-# Hub 就在局域网 / 本机回环上：环境里的 http_proxy 指到别处时（比如桌面
-# 端代理把 127.0.0.1 的流量也收走），urlopen 会间歇性地把探针自己的请求
-# 也送进代理然后 502。这里一律直连，不读任何代理环境变量。
-_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-
-def mint_claim_url(config: HubConfig, next_path: str = "/setup") -> str:
-    base = hub_lan_base(config)
-    url = base + "/v1/login-ticket"
-    raw = json.dumps({"next": next_path}, ensure_ascii=False).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": f"Bearer {probe_token(config)}",
-    }
-    req = urllib.request.Request(url, data=raw, method="POST", headers=headers)
-    try:
-        with _DIRECT_OPENER.open(req, timeout=3) as resp:
-            body = json.loads(resp.read().decode("utf-8") or "{}")
-    except (TimeoutError, urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as exc:
-        raise HubError("offline", "无法自动登录 Mini Hub") from exc
-    path = str(body.get("path") or "")
-    if not path.startswith("/chats/claim?"):
-        raise HubError("offline", "无法自动登录 Mini Hub")
-    return base + path
 
 
 def probe_token(config: HubConfig) -> str:
@@ -134,16 +98,6 @@ def make_probe_handler(config: HubConfig) -> type[BaseHTTPRequestHandler]:
                     if revision:
                         payload["revision"] = revision
                     self._json(200, payload)
-                    return
-                if path in OPEN_PAGES:
-                    if not is_local_client(self.client_address):
-                        raise HubError("forbidden", "只能本机打开配置页")
-                    nxt = OPEN_PAGES[path]
-                    try:
-                        target = mint_claim_url(config, nxt)
-                    except HubError:
-                        target = hub_lan_base(config) + "/chats?next=" + nxt
-                    self._redirect(target)
                     return
                 raise HubError("not_found", "未知接口")
             except HubError as exc:
@@ -308,21 +262,6 @@ def _report_loop(config: HubConfig, sampler: PcSampler, stop: threading.Event) -
             post_telemetry(mini, _windows_sample(sampler, watch))
         except Exception:
             continue
-
-
-def hub_lan_base(config: HubConfig) -> str:
-    return (config.probe.hub_url or DEFAULT_PROBE_HUB_URL).rstrip("/")
-
-
-def hub_lan_pages(config: HubConfig) -> dict[str, str]:
-    base = hub_lan_base(config)
-    return {
-        "setup": f"{base}/setup",
-        "setup_login": f"{base}/chats?next=/setup",
-        "chats": f"{base}/chats",
-        "read": f"{base}/read",
-        "health": f"{base}/health",
-    }
 
 
 class ProbeRuntime:
