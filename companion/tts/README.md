@@ -20,6 +20,10 @@ bash ./install-launchd.sh
 
 模型加载失败时进程**不会退出**：`/health` 里 `ready: false` 并带 `error`，后台按 30s→15min 退避重试。以前是 `SystemExit(1)`，配 KeepAlive 就成了每 10 秒重读 2GB 模型的重启风暴。调试时要老行为，加 `--exit-on-load-error`。日志：`companion/tts/tts.log`。
 
+**权重常驻**：加载前会 `mx.set_wired_limit(4GiB)`，把 ~3GiB 权重钉在物理内存里。机器内存一紧（16GB 只剩一两 GB 空闲时），权重会被换出磁盘，下一次开口前先从 swap 换回来——首字延迟从 0.8s 抖到 8~19s 就是这么来的（2026-10-31 踩过）。代价是这 4GiB 不再参与换页，别的应用会更挤。日志里 `wired 上限 …` / `权重 …GiB 已加载` 可以确认。
+
+首字延迟看日志行 `tts latency turn=… stage=play_only first_ms=…`（stream 路径的响应头没有这个字段）；`play: false` 的同步合成测的是整句生成完的时间，比开口延迟大得多，别拿它当用户体验。
+
 临时前台调试才用下面这组环境变量；平时不要在 Cursor 里挂着跑。
 
 ```bash

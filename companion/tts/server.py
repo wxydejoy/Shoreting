@@ -207,10 +207,41 @@ class Engine:
     def clone(self) -> bool:
         return bool(self.ref_audio and self.ref_text)
 
+    @staticmethod
+    def _wire_headroom() -> None:
+        """把权重钉在物理内存里。
+
+        机器内存一紧，MLX 的权重 (~2GiB) 会被换出磁盘；下一次开口前先把权重从
+        swap 换回来，首字延迟忽快忽慢（实测同一句话 3.9s ~ 9.4s 抖动）。加载之前
+        抬高 wired 上限，之后新分配的 buffer 一律不换出。
+        """
+        try:
+            import mlx.core as mx
+
+            set_wired = getattr(mx, "set_wired_limit", None) or mx.metal.set_wired_limit
+            info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+            recommended = int(info.get("max_recommended_working_set_size") or 0)
+            cap = min(recommended // 2, 4 << 30)
+            if cap <= 0:
+                print("wired 不可用，权重不常驻", flush=True)
+                return
+            set_wired(cap)
+            print(f"wired 上限 {cap / 2**30:.1f}GiB（权重加载后不换出）", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"wired 设置失败，权重不常驻：{exc}", flush=True)
+
     def load(self) -> None:
         try:
             print(f"加载 {self.model_id} …", flush=True)
+            self._wire_headroom()
             self.model = load_model(self.model_id)
+            try:
+                import mlx.core as mx
+
+                get_active = getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
+                print(f"权重 {get_active() / 2**30:.2f}GiB 已加载", flush=True)
+            except Exception:  # noqa: BLE001
+                pass
             if self.clone():
                 print(
                     f"就绪。克隆 {self.voice}  ref={self.ref_audio}",
