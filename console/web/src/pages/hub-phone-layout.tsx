@@ -185,13 +185,15 @@ export function PhoneLayoutEditor() {
 
   const selectedRect = selected ? viewRect(selected, draft, defaults) : null;
   const labelOf = (id: string) => snap?.slots?.find((s) => s.id === id)?.label ?? id;
+  const canvasW = snap?.canvas?.w ?? 2230;
+  const canvasH = snap?.canvas?.h ?? 1025;
 
   return (
     <Card className="gap-0 py-0">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-4 py-2.5">
         <span className="flex items-center gap-1.5 text-[12.5px] font-medium">
           <Scan className="size-3.5 text-muted-foreground" />
-          主屏布局
+          主屏画布（{canvasW}×{canvasH}，和手机同比例）
         </span>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="ghost" disabled={loading} onClick={() => void load()}>
@@ -215,10 +217,13 @@ export function PhoneLayoutEditor() {
           读取和保存都要手机上的岸亭在新版本（带布局接口的 APK）；先把手机更新了再回来。
         </div>
       ) : snap ? (
-        <div className="flex flex-wrap items-start gap-4 p-4">
+        <div className="space-y-3 p-4">
           <div
-            className="relative mx-auto w-[232px] shrink-0 overflow-hidden rounded-xl border bg-muted/30 select-none"
-            style={{ aspectRatio: `${snap.canvas?.w ?? 9} / ${snap.canvas?.h ?? 19.5}` }}
+            className="relative mx-auto w-full overflow-hidden rounded-xl border bg-muted/30 select-none"
+            style={{
+              aspectRatio: `${canvasW} / ${canvasH}`,
+              maxWidth: `calc(76vh * ${canvasW / canvasH})`,
+            }}
             ref={canvasRef}
             onPointerMove={onPointerMove}
             onPointerUp={endDrag}
@@ -232,7 +237,7 @@ export function PhoneLayoutEditor() {
                   key={slot.id}
                   onPointerDown={beginDrag(slot.id, "move")}
                   className={[
-                    "absolute flex items-center justify-center overflow-hidden rounded-md border text-[10px] leading-tight",
+                    "absolute flex items-center justify-center overflow-hidden rounded-lg border leading-tight",
                     rect.visible
                       ? "border-foreground/25 bg-background/80 text-foreground/80"
                       : "border-dashed border-foreground/20 bg-transparent text-muted-foreground/60",
@@ -246,14 +251,14 @@ export function PhoneLayoutEditor() {
                     opacity: drag.current?.id === slot.id ? 0.75 : 1,
                   }}
                 >
-                  <span className="px-1 text-center">
+                  <span className="px-1.5 text-center text-[12px]">
                     {slot.label}
                     {!rect.visible ? " · 隐" : !rect.chrome ? " · 裸" : ""}
                   </span>
                   {active ? (
                     <span
                       onPointerDown={beginDrag(slot.id, "resize")}
-                      className="absolute -right-0 -bottom-0 size-3.5 cursor-nwse-resize rounded-tl-md bg-primary/70"
+                      className="absolute -right-0 -bottom-0 size-4 cursor-nwse-resize rounded-tl-lg bg-primary/70"
                     />
                   ) : null}
                 </div>
@@ -261,7 +266,7 @@ export function PhoneLayoutEditor() {
             })}
           </div>
 
-          <div className="min-w-0 flex-1 space-y-3">
+          <div className="min-w-0 space-y-2.5">
             <div className="flex flex-wrap gap-1.5">
               {(snap.slots ?? []).map((slot) => {
                 const rect = viewRect(slot.id, draft, defaults);
@@ -271,7 +276,7 @@ export function PhoneLayoutEditor() {
                     type="button"
                     onClick={() => setSelected(slot.id === selected ? null : slot.id)}
                     className={[
-                      "rounded-full border px-2.5 py-1 text-[10.5px] transition-colors",
+                      "rounded-full border px-2.5 py-1 text-[11.5px] transition-colors",
                       slot.id === selected
                         ? "border-primary bg-primary/10 text-primary"
                         : "border-border/60 text-muted-foreground hover:bg-muted",
@@ -285,9 +290,9 @@ export function PhoneLayoutEditor() {
               })}
             </div>
             {selected && selectedRect ? (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-[11.5px]">
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-[12px]">
                 <span className="font-medium">{labelOf(selected)}</span>
-                <Badge variant="outline" className="text-[10px]">
+                <Badge variant="outline" className="text-[10.5px]">
                   {Math.round(selectedRect.w * 100)}×{Math.round(selectedRect.h * 100)}%
                 </Badge>
                 <Button size="sm" variant={selectedRect.visible ? "outline" : "ghost"} onClick={() => toggle("visible")}>
@@ -298,12 +303,11 @@ export function PhoneLayoutEditor() {
                   {selectedRect.chrome ? <Check /> : null}
                   边框
                 </Button>
-                <span className="text-[10.5px] text-muted-foreground">拖卡片移动，拖右下角缩放</span>
+                <span className="text-[11px] text-muted-foreground">拖卡片移动，拖右下角缩放</span>
               </div>
             ) : (
               <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-                点一个磁贴（左边板子上或右边标签都行）选中，拖动移动、拖右下角缩放；
-                「边框」关掉就是手机上那种没有底卡的裸样式。
+                点一个磁贴选中，拖动移动、拖右下角缩放；「边框」关掉就是手机上那种没有底卡的裸样式。
                 保存只提交动过的磁贴，其余继续跟手机端的默认布局走。
               </p>
             )}

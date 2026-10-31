@@ -6,6 +6,7 @@ import {
   Film,
   KeyRound,
   Laptop,
+  LayoutGrid,
   Loader2,
   MonitorCog,
   Palette,
@@ -203,6 +204,7 @@ const NODE_ROWS: { key: "android" | "win" | "mac"; label: string; hint: string; 
 
 const TABS = [
   { id: "android", label: "安卓 K20", icon: Smartphone },
+  { id: "layout", label: "主屏布局", icon: LayoutGrid },
   { id: "win", label: "Windows", icon: MonitorCog },
   { id: "mac", label: "Mac", icon: Laptop },
 ];
@@ -1257,13 +1259,6 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
           </div>
 
           <Section
-            title="主屏布局"
-            description="手机主屏那十来个磁贴摆在哪、多大、显不显示。拖动 / 缩放 / 显隐都在网页上做，保存后等手机下次刷新就套用；手机上手动拖过的布局不会被顶回去，除非再在这里保存一次。"
-          >
-            <PhoneLayoutEditor />
-          </Section>
-
-          <Section
             title="视频背景"
             description="手机上的背景库（图片和视频）。控制台直接连手机自己起的那个页面，不经过 Hub；手机没连 Wi-Fi 时这里读不出来。"
           >
@@ -1395,6 +1390,16 @@ export function SetupPage({ initialTab }: { initialTab?: string }) {
               不会被这里的旧值顶回去，除非再在这里点一次保存。
             </p>
           </div>
+        </TabsContent>
+
+        {/* --------------------------------------------------------- 主屏布局 */}
+        <TabsContent value="layout" className="space-y-4">
+          <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+            手机主屏那十来个磁贴摆在哪、多大、显不显示。布局从手机上直接读现状（手机要装新版 APK），
+            拖动 / 缩放 / 显隐都在网页上做，保存后等手机下次刷新就套用；
+            手机上手动拖过的布局不会被顶回去，除非再在这里保存一次。
+          </p>
+          <PhoneLayoutEditor />
         </TabsContent>
 
         {/* --------------------------------------------------------- Windows */}

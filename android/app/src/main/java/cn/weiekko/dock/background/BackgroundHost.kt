@@ -67,17 +67,19 @@ class BackgroundHost(private val context: Context) {
     }
 
     /**
-     * 网页布局编辑器要的快照。画布尺寸用 displayMetrics 减掉主屏那圈内边距
-     * （HomeScreen 的 20dp 横向 / 10dp 纵向），跟真实画布差个几像素没关系：
-     * 存布局存的是 0..1 的比例，编辑器也只提交用户真正动过的槽位，没动过的
-     * 槽位留空，手机端仍用自己的默认值。
+     * 网页布局编辑器要的快照。默认布局里的绝对常量（磁贴 84、CPU 卡 340/110、
+     * 角标 210/56、间距 10）都是 dp，HomeScreen 传给 ModuleCanvas 的是 dp 画布
+     * （padding 后的 maxWidth/maxHeight）——这里必须用同一口径，不然网页算出的
+     * 默认位置和手机上差一个 density。存布局存的是 0..1 的比例，编辑器也只提交
+     * 用户真正动过的槽位，没动过的槽位留空，手机端仍用自己的默认值。
      */
     private fun layoutSnapshotJson(): String? {
         val metrics = context.resources.displayMetrics
         if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) return null
         val density = metrics.density.coerceAtLeast(1f)
-        val canvasW = (metrics.widthPixels - 20f * density * 2f).coerceAtLeast(1f)
-        val canvasH = (metrics.heightPixels - 10f * density * 2f).coerceAtLeast(1f)
+        val canvasW = metrics.widthPixels / density - 20f * 2f
+        val canvasH = metrics.heightPixels / density - 10f * 2f
+        if (canvasW <= 0f || canvasH <= 0f) return null
         val tileH = min(canvasH * 0.22f, 84f)
         val tileW = min(canvasW * 0.20f, tileH * 1.7f)
         val canvas = ModuleCanvas(canvasW, canvasH, tileW, tileH)
