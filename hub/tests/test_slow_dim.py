@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from dock_hub import companion as module
+from dock_hub import companion_desk as module
 from dock_hub.companion import Companion
 from dock_hub.config import CompanionConfig
 
