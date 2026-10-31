@@ -13,7 +13,6 @@ from typing import Any
 from dock_hub import PROTOCOL, logs
 from dock_hub.chat_log import ChatLog, chat_log_path
 from dock_hub.companion import Companion
-from dock_hub.guest import GuestMode, parse_guest
 
 
 class _StorySpeaker:
