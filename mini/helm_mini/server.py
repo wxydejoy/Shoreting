@@ -28,7 +28,7 @@ def lan_ips() -> list[str]:
         ):
             found.append(ip)
 
-    for probe in ("10.83.22.1", "223.5.5.5", "8.8.8.8"):
+    for probe in ("10.14.14.1", "223.5.5.5", "8.8.8.8"):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(0.3)
@@ -42,7 +42,7 @@ def lan_ips() -> list[str]:
             add(info[4][0])
     except OSError:
         pass
-    found.sort(key=lambda ip: (0 if ip.startswith("10.83.22.") else 1, ip))
+    found.sort(key=lambda ip: (0 if ip.startswith("10.14.14.") else 1, ip))
     return found or ["127.0.0.1"]
 
 

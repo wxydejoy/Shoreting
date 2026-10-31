@@ -131,6 +131,9 @@ Windows 的 Hub exe 只能在 Windows 上打，Mac 会自动跳过并提醒—�
   ② `modeling_unit` 在 `OnlineModelConfig` 上，不填就是空串（`EncodeHotwords` 直接退出）；
   ③ 热词文件每行一个词，用 `/` 拼会让整行变成一个词，热词静默全失效
   （`Cannot find ID for token /`）。改模型或热词逻辑后，先 `adb logcat | grep sherpa` 看这三条。
-- **换网段后 Hub 三处地址要跟着改**：`probe.url`（Windows 主机名或 IP）、灯带
-  `base_url`（ESP32 拿的是 DHCP，换路由必变）、以及 `temperature:` 段（整段丢了主屏就
-  没有室内温湿度，snapshot 里 `temperature: null`）。前两项只影响对应功能，第三项最隐蔽。
+- **换网段**：三端都走域名（`mini.lan` / `win.lan` / `k20.lan`），换网段只改路由器的静态
+  租约 / FQDN 绑定，`hub.yaml` 里 `nodes:`、`probe.url`、`mini.base_url` 都不用动；手机上
+  的 Hub 栏也是 `mini.lan`。真正要跟着改的只剩两处：灯带 `base_url`（ESP32 拿的是 DHCP），
+  以及 `temperature:` 段（整段丢了主屏就没有室内温湿度，snapshot 里 `temperature: null`）。
+  macOS 上如果 `.lan` 解析不了（默认路由是别的网卡），把 10.14.14.1 加到系统 DNS，或写一份
+  `/etc/resolver/lan`（`nameserver 10.14.14.1`）。

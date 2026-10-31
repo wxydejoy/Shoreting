@@ -95,7 +95,7 @@ class SetupWizardTest(unittest.TestCase):
         )
         self.assertEqual(raw["companion"]["llm"]["model"], "qwen3.5:4b")
         self.assertEqual(raw["companion"]["tts"]["base_url"], "http://127.0.0.1:18100")
-        self.assertEqual(raw["mini"]["base_url"], "http://10.83.22.121:17891")
+        self.assertEqual(raw["mini"]["base_url"], "http://mini.lan:17891")
 
     def test_wizard_save_keeps_proactive(self) -> None:
         from dock_hub.setup_ui import _payload_to_raw

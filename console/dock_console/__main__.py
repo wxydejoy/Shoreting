@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -18,6 +20,32 @@ PORT = 17880
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def parent_is_origin(origin: int) -> bool:
+    """父进程还在原位上吗。抽出来是为了能测，不用起线程。"""
+    return os.getppid() == origin
+
+
+def follow_parent(poll: float = 2.0) -> threading.Thread | None:
+    """父进程没了就自己退出。
+
+    app 被强杀（或崩溃）时，它拉起的子进程会被 launchd 收养，ppid 变成 1，然后一直占着
+    17880——下次开 app 一探「端口有人应答」就不再拉起新的，页面永远停在旧代码上。
+    """
+    origin = os.getppid()
+    if origin == 1:
+        return None  # 本来就是 launchd 直接拉起的，没有父进程可跟
+
+    def watch() -> None:
+        while True:
+            time.sleep(poll)
+            if not parent_is_origin(origin):
+                os._exit(0)  # noqa: SLF001 - 收尾全靠内核，别留半截线程
+
+    thread = threading.Thread(target=watch, name="parent-watch", daemon=True)
+    thread.start()
+    return thread
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
     print(f"岸亭控制台 {url}", flush=True)
     print("只在本机打开。Ctrl+C 退出控制台，不会关掉 Hub。", flush=True)
+    follow_parent()
     if not args.no_browser:
         webbrowser.open(url)
     try:

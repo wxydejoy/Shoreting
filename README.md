@@ -12,7 +12,7 @@
 - [docs/lan-protocol.md](docs/lan-protocol.md) — HTTP 说明、时序、验收
 - [docs/openapi.yaml](docs/openapi.yaml) — OpenAPI 3
 
-下面 IP 是**本宅当前地址**，换家请改。Hub `http://10.83.22.121:17890`（Mac Mini，Bearer token）。Windows 只跑探针 `10.83.22.31:17892`（CPU 上报 + 开程序，不是 Hub）。Mini 监控另开 `http://10.83.22.121:17891`（不是 Hub）。嘴在 Mini：TTS `:18100 --play`；大脑走 Hub 配置的 LLM（OpenAI 兼容，或 Mini Ollama `:11434`）。
+地址一律用路由器里绑好的域名：`mini.lan → 10.14.14.117`（Mac Mini）、`win.lan → 10.14.14.170`（Windows）、`k20.lan → 10.14.14.177`（手机）。换网段只改路由器那三行（静态租约 / FQDN 绑定），三台机器上的配置不用动；Hub 自己的地址簿在 `hub.yaml` 的 `nodes:` 段，控制台「三端配置」页能直接改。Hub `http://mini.lan:17890`（Mac Mini，Bearer token）。Windows 只跑探针 `win.lan:17892`（CPU 上报 + 开程序，不是 Hub）。Mini 监控另开 `http://mini.lan:17891`（不是 Hub）。嘴在 Mini：TTS `:18100 --play`；大脑走 Hub 配置的 LLM（OpenAI 兼容，或 Mini Ollama `:11434`）。
 
 ## 仓库结构
 
@@ -22,7 +22,7 @@
 | [hub/](hub/README.md) | Hub（Mac Mini：米家 + 伴侣 + 配置向导）与 Windows 探针（CPU + 开程序 + 托盘 exe） |
 | [mini/](mini/README.md) | Mac Mini 本机 CPU / 内存 / GPU（`:17891`，不是 Hub、不是 TTS） |
 | [companion/tts/](companion/tts/README.md) | Mini 守岸人 TTS（`:18100 --play`） |
-| [console/](console/README.md) | Mac 控制台与菜单栏：启停 Hub / Mini / TTS，看 Windows 在不在线 |
+| [console/](console/README.md) | Mac 控制台与菜单栏：启停 Hub / Mini / TTS，看 Windows 在不在线，改新功能的开关与参数 |
 | [docs/](docs/) | 局域网协议与守岸人说明（改接口先改文档） |
 
 ## 安卓（客户端）
@@ -42,8 +42,8 @@
 
 ### 设置
 
-- Hub：**地址 / 端口 / Token**。填 Mini `10.83.22.121`、`17890`，不要填探针或 Mini 监控的地址。Token 从配置向导的「复制」拿（APK 里不再预置任何口令，装完必须手填一次）
-- Mac Mini：**默认地址 `10.83.22.121:17891`**，Token 从 Mini 的 `install-launchd.sh` 装完打印出来那行填（APK 里不再预置）
+- Hub：**地址 / 端口 / Token**。填 Mini `mini.lan`、`17890`，不要填探针或 Mini 监控的地址。Token 从配置向导的「复制」拿（APK 里不再预置任何口令，装完必须手填一次）
+- Mac Mini：**默认地址 `mini.lan:17891`**，Token 从 Mini 的 `install-launchd.sh` 装完打印出来那行填（APK 里不再预置）
 - 视频背景：选择 / 更换 / 清除本地视频；也可用背景页面上传图片 / 视频
 - 方块样式与字体排版预览
 - **电脑关机后熄屏**、Hub 恢复后自动亮屏（需设备管理员，仅用于 `lockNow()`；插拔电源不再熄屏）
@@ -96,11 +96,11 @@ Mac 上日常启停这几个服务，用 [console/](console/README.md) 的控制
 
 完整顺序和排错见 [docs/companion.md](docs/companion.md)。
 
-1. Mini 上装 Hub：`cd hub && uv sync && ./install-launchd.sh`。探活 `curl -s http://10.83.22.121:17890/health` 应为 `service=dock-hub`、`name=study`
-2. Windows 跑探针：`uv run dock-hub --probe`。探活 `http://10.83.22.31:17892/health` 应为 `service=dock-probe`
+1. Mini 上装 Hub：`cd hub && uv sync && ./install-launchd.sh`。探活 `curl -s http://mini.lan:17890/health` 应为 `service=dock-hub`、`name=study`
+2. Windows 跑探针：`uv run dock-hub --probe`。探活 `http://win.lan:17892/health` 应为 `service=dock-probe`
 3. 大脑：Hub 本机 `hub.yaml` 里配 LLM（OpenAI 兼容地址，或 Mini Ollama `:11434`）。`api_key` 只写本机 yaml，不要写进 git / 安卓 / 文档示例
 4. Mini 上启动 [companion/tts](companion/tts/README.md)（LaunchAgent 自启，或前台 `--play`）
-5. 安卓设置页 **Hub** 填 Mini `10.83.22.121`、端口 `17890`、token，点测试连接；**Mini CPU** 填 `10.83.22.121:17891`
+5. 安卓设置页 **Hub** 填 Mini `mini.lan`、端口 `17890`、token，点测试连接；**Mini CPU** 填 `mini.lan:17891`
 6. 米家设备名在 Mini 侧用 `uv run dock-hub --list-devices` 核对
 
 ## 测试

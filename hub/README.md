@@ -60,7 +60,7 @@ hub/
 
 - Mac Mini：Python 3.10+（推荐 [uv](https://github.com/astral-sh/uv)），LaunchAgent `cn.weiekko.dock-hub`
 - Windows 探针：同一套源码 `uv run dock-hub --probe`，防火墙放行入站 **TCP 17892**
-- 安卓 Hub 栏填 Mini `10.83.22.121:17890`
+- 安卓 Hub 栏填 Mini `mini.lan:17890`
 
 ## Mini 日常
 
@@ -78,7 +78,7 @@ uv sync
 启动时会打印实际路径。一行一条请求：
 
 ```
-2026-10-30T19:52:03+08:00 hub 10.83.22.31 200 1204 4ms "GET /v1/snapshot"
+2026-10-30T19:52:03+08:00 hub win.lan 200 1204 4ms "GET /v1/snapshot"
 ```
 
 **查询串一律不上盘**：`/chats/claim?ticket=…` 里是登录凭据，`/v1/companion/chats?q=…`
@@ -157,7 +157,25 @@ scenes:
 - `POST /v1/scenes/bedtime`（带 token）一次跑完，返回每台设备的结果；某台失败不影响其余的。
 - 手机说「我要睡了」直接命中，不经过模型；`say` 就是它回你的那句话。
 - 写错的设备 id、写成启动项的 id、同一台同时在 `on` 和 `off`、亮度超出 1–100，都会在加载配置时报错。
-- 向导里不能编辑场景，但保存配置会原样保留。
+- 向导里不能编辑场景，但保存配置会原样保留；场景列表本身仍然手写 yaml。
+
+## 功能开关（控制台）
+
+F7 之后的段落——主动开口、起床闹钟、日落联动、灯光氛围、访客模式、日记、壁纸、主题、限流——不需要再手写 yaml：Mac 上打开控制台的 **功能开关** 页（`console/`，`http://127.0.0.1:17880/features`），每一项带范围校验和一句说明，改完立刻热加载。
+
+控制和读写的都是本机接口 `GET/POST /setup/api/features`（只在本机能调，和 `/setup` 一样）：
+
+```bash
+curl -s http://127.0.0.1:17890/setup/api/features | head -c 400
+curl -s -X POST http://127.0.0.1:17890/setup/api/features \
+  -H 'Content-Type: application/json' \
+  -d '{"key": "proactive.daily_limit", "value": 8}'
+```
+
+- 改的是 yaml 文本里的那一行，**注释和段落顺序都留着**（不是 safe_dump 整篇重写）。
+- 写盘前会重新解析一遍：设备/场景引用不存在的 id、时刻写成 `25:00`、值超出范围，都会直接报错且不落盘。
+- 场景、定时任务、设备这些列表仍然在 yaml 或向导里编辑。
+
 
 ## 源码开发
 
@@ -257,11 +275,11 @@ uv run python -m unittest discover -s tests -v
 
 ## 同步到 Mac 仓库
 
-本仓库权威副本在 Mac：`weiekko@10.83.22.121:/Users/weiekko/dock/`（IP 会变；SSH 不通时先看 ARP / known_hosts）。  
+本仓库权威副本在 Mac：`weiekko@mini.lan:/Users/weiekko/dock/`（IP 会变；SSH 不通时先看 ARP / known_hosts）。  
 Windows 改完 Hub 后 scp 源码与说明（不要传 `.venv` / `build` / `dist`）：
 
 ```powershell
-$mac = "weiekko@10.83.22.121"
+$mac = "weiekko@mini.lan"
 ssh $mac "mkdir -p /Users/weiekko/dock/hub"
 scp -r dock_hub tests pyproject.toml uv.lock README.md hub.yaml.example .gitignore `
   run-admin.ps1 run_hub.pyw build-exe.ps1 dock-hub.spec dock_hub_entry.py `

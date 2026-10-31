@@ -10,8 +10,8 @@
 
 | 栏 | 填谁 | 本宅默认 |
 |---|---|---|
-| **Hub** | Mac Mini 门口 | `10.83.22.121` 端口 `17890` + Hub token |
-| **Mini CPU** | 主屏 CPU 第二行 | `10.83.22.121` 端口 `17891` |
+| **Hub** | Mac Mini 门口 | `mini.lan` 端口 `17890` + Hub token |
+| **Mini CPU** | 主屏 CPU 第二行 | `mini.lan` 端口 `17891` |
 
 Hub 健康检查 `service=dock-hub` 且 `name=study`。`name=mini` 会被拒绝（那是旧的 Mini 自测服务）。
 
@@ -28,7 +28,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 ./gradlew :app:testDebugUnitTest
 ```
 
-APK：`android/app/build/outputs/apk/debug/app-debug.apk`。装到横屏设备（本宅是 K20，adb `10.83.22.150:5555`）。
+APK：`android/app/build/outputs/apk/debug/app-debug.apk`。装到横屏设备（本宅是 K20，adb `k20.lan:5555`）。
 
 首次打开为预览；设置页填 Hub IP、`17890`、token，点测试连接。
 

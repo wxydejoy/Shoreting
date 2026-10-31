@@ -44,7 +44,7 @@ class ProbeConfigTest(unittest.TestCase):
         cfg = _cfg(probe={"url": "http://10.83.22.31:17892", "stale_ms": 2500})
         self.assertEqual(cfg.probe.url, "http://10.83.22.31:17892")
         self.assertEqual(cfg.probe.stale_ms, 2500)
-        self.assertEqual(cfg.probe.hub_url, "http://10.83.22.121:17890")
+        self.assertEqual(cfg.probe.hub_url, "http://mini.lan:17890")
         self.assertEqual(cfg.probe.listen, "0.0.0.0:17892")
 
 
@@ -53,17 +53,17 @@ class HubLanPagesTest(unittest.TestCase):
         from dock_hub.probe import hub_lan_pages
 
         pages = hub_lan_pages(_cfg())
-        self.assertEqual(pages["setup"], "http://10.83.22.121:17890/setup")
-        self.assertEqual(pages["setup_login"], "http://10.83.22.121:17890/chats?next=/setup")
+        self.assertEqual(pages["setup"], "http://mini.lan:17890/setup")
+        self.assertEqual(pages["setup_login"], "http://mini.lan:17890/chats?next=/setup")
 
     def test_pages_follow_hub_url(self) -> None:
         from dock_hub.probe import hub_lan_pages
 
-        cfg = _cfg(probe={"hub_url": "http://10.83.22.121:17890"})
+        cfg = _cfg(probe={"hub_url": "http://10.14.14.117:17890"})
         pages = hub_lan_pages(cfg)
-        self.assertEqual(pages["setup"], "http://10.83.22.121:17890/setup")
-        self.assertEqual(pages["setup_login"], "http://10.83.22.121:17890/chats?next=/setup")
-        self.assertEqual(pages["chats"], "http://10.83.22.121:17890/chats")
+        self.assertEqual(pages["setup"], "http://10.14.14.117:17890/setup")
+        self.assertEqual(pages["setup_login"], "http://10.14.14.117:17890/chats?next=/setup")
+        self.assertEqual(pages["chats"], "http://10.14.14.117:17890/chats")
         self.assertTrue(pages["setup"].endswith(":17890/setup"))
 
 

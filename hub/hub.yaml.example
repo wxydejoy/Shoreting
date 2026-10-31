@@ -7,6 +7,22 @@ host: 0.0.0.0
 port: 17890
 token: "replace-with-a-long-random-string"
 
+# 三端地址簿（控制台「三端配置」页可直接改）。
+# host 是路由器静态 DNS 里的域名，ip 只是备注：换网段只改路由器那三行，
+# 三台机器上的配置一个字都不用动。控制台的安卓页、探针页都从这里取值。
+nodes:
+  mac:                              # 跑 Hub 的这台
+    host: mini.lan
+    ip: 10.14.14.117
+    port: 17890
+  win:                              # Windows 探针
+    host: win.lan
+    ip: 10.14.14.170
+    port: 17892
+  android:                          # 手机，没有端口
+    host: k20.lan
+    ip: 10.14.14.177
+
 # 限流：按来源 IP + 端点各一个令牌桶，单位「每分钟几次」。
 # 整段删掉就是下面这组默认值；limits: false 全关；某一档写 0 只关那一档。
 # 一次 chat 是几千 token，这层是刷额度 / token 泄露时唯一还生效的止损点。
@@ -33,9 +49,9 @@ pc:
 
 # Windows 探针（CPU 上报 + 远程开程序）。整段删掉则本机采样、本机开程序
 probe:
-  url: "http://10.83.22.31:17892"          # Mini Hub 转发启动到这里
+  url: "http://win.lan:17892"          # Mini Hub 转发启动到这里
   stale_ms: 4000
-  hub_url: "http://10.83.22.121:17890"     # Windows --probe 往这里 POST /v1/telemetry
+  hub_url: "http://mini.lan:17890"     # Windows --probe 往这里 POST /v1/telemetry
   listen: "0.0.0.0:17892"
 
 # 系统媒体。Hub 在 Mini 上建议关掉；安卓用手机自己的媒体

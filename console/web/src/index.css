@@ -1,0 +1,167 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* 岸亭的调色板：纸感的浅色底 + 墨蓝主色。数字都是 oklch，
+   浅色和深色两套变量同名，靠 <html class="dark"> 切换。 */
+:root {
+  --radius: 0.75rem;
+
+  --background: oklch(0.992 0.001 250);
+  --foreground: oklch(0.22 0.018 258);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.018 258);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0.018 258);
+
+  --primary: oklch(0.51 0.145 258);
+  --primary-foreground: oklch(0.99 0 0);
+
+  --secondary: oklch(0.962 0.005 255);
+  --secondary-foreground: oklch(0.3 0.02 258);
+
+  --muted: oklch(0.966 0.004 255);
+  --muted-foreground: oklch(0.552 0.016 258);
+
+  --accent: oklch(0.955 0.009 255);
+  --accent-foreground: oklch(0.28 0.02 258);
+
+  --destructive: oklch(0.55 0.185 25);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --border: oklch(0.922 0.005 255);
+  --input: oklch(0.922 0.005 255);
+  --ring: oklch(0.62 0.11 255);
+
+  --sidebar: oklch(0.975 0.004 255);
+  --sidebar-foreground: oklch(0.3 0.018 258);
+  --sidebar-border: oklch(0.925 0.005 255);
+  --sidebar-accent: oklch(0.945 0.008 255);
+  --sidebar-accent-foreground: oklch(0.24 0.02 258);
+
+  --ok: oklch(0.55 0.13 155);
+  --warn: oklch(0.62 0.13 75);
+  --idle: oklch(0.62 0.012 258);
+}
+
+.dark {
+  --background: oklch(0.185 0.012 258);
+  --foreground: oklch(0.93 0.008 255);
+
+  --card: oklch(0.219 0.014 258);
+  --card-foreground: oklch(0.93 0.008 255);
+  --popover: oklch(0.235 0.014 258);
+  --popover-foreground: oklch(0.93 0.008 255);
+
+  --primary: oklch(0.66 0.13 255);
+  --primary-foreground: oklch(0.16 0.015 258);
+
+  --secondary: oklch(0.27 0.014 258);
+  --secondary-foreground: oklch(0.9 0.008 255);
+
+  --muted: oklch(0.265 0.013 258);
+  --muted-foreground: oklch(0.68 0.014 258);
+
+  --accent: oklch(0.29 0.016 258);
+  --accent-foreground: oklch(0.93 0.008 255);
+
+  --destructive: oklch(0.58 0.17 25);
+  --destructive-foreground: oklch(0.98 0 0);
+
+  --border: oklch(0.3 0.014 258);
+  --input: oklch(0.32 0.014 258);
+  --ring: oklch(0.6 0.1 255);
+
+  --sidebar: oklch(0.202 0.013 258);
+  --sidebar-foreground: oklch(0.88 0.008 255);
+  --sidebar-border: oklch(0.285 0.014 258);
+  --sidebar-accent: oklch(0.275 0.015 258);
+  --sidebar-accent-foreground: oklch(0.95 0.006 255);
+
+  --ok: oklch(0.72 0.13 155);
+  --warn: oklch(0.79 0.13 80);
+  --idle: oklch(0.66 0.012 258);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-idle: var(--idle);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro SC", "PingFang SC",
+    "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-synthesis-weight: none;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: color-mix(in oklch, var(--primary) 22%, transparent);
+  }
+}
+
+/* 细滚动条，侧栏和日志区都用得上 */
+@utility scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent) transparent;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 16%, transparent);
+    border-radius: 999px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

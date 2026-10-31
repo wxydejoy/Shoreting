@@ -23,6 +23,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let open = item("打开控制台", action: #selector(openConsole), key: "o")
         menu.addItem(open)
+        menu.addItem(item("功能开关", action: #selector(openFeatures), key: "f"))
         menu.addItem(.separator())
 
         for id in serviceOrder {
@@ -58,6 +59,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.open(consoleURL("/"))
     }
 
+    @objc func openFeatures() {
+        NSWorkspace.shared.open(consoleURL("/features"))
+    }
+
     @objc func runAction(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
         var request = URLRequest(url: consoleURL("/api/services/\(path)"))
@@ -68,6 +73,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func quit() {
         server?.terminate()
         NSApp.terminate(nil)
+    }
+
+    // Cmd+Q、注销、系统关掉 app 时也要带走服务端，别留个孤儿占着 17880
+    func applicationWillTerminate(_ notification: Notification) {
+        server?.terminate()
     }
 
     private func item(_ title: String, action: Selector, key: String) -> NSMenuItem {

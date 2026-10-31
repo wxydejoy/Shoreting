@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import subprocess
 import sys
@@ -18,6 +19,10 @@ import yaml
 
 from dock_hub.assets import read_asset
 from dock_hub.config import (
+    DEFAULT_PROBE_PORT,
+    NODE_KEYS,
+    MiniLinkConfig,
+    ProbeConfig,
     default_config_path,
     device_to_raw,
     hub_config_to_raw,
@@ -193,8 +198,25 @@ def build_state(hub: DockHub) -> dict[str, Any]:
     # 用户点「复制」时才走 /setup/api/token/reveal 取一次。
     config_raw = hub_config_to_raw(hub.config, mask_secrets=True)
     config_raw["token"] = ""
+    # 探针口令、Mini 口令、朗读服务口令同理：只告诉页面「配过没有」，
+    # 表单留空 = 保持原值（见 _clean_probe / _clean_mini / _clean_tts）。
+    secrets = {
+        "probe": bool(hub.config.probe.token),
+        "mini": bool(hub.config.mini and hub.config.mini.token),
+        "tts": bool(getattr(hub.config.companion, "tts_token", None)),
+    }
+    probe_raw = config_raw.get("probe")
+    if isinstance(probe_raw, dict):
+        probe_raw.pop("token", None)
+    mini_raw = config_raw.get("mini")
+    if isinstance(mini_raw, dict):
+        mini_raw.pop("token", None)
+    companion_raw = config_raw.get("companion")
+    if isinstance(companion_raw, dict) and isinstance(companion_raw.get("tts"), dict):
+        companion_raw["tts"].pop("token", None)
     return {
         "config": config_raw,
+        "secrets": secrets,
         "token_masked": mask_secret(hub.config.token),
         "lan_ips": lan_ips(),
         "mijia": status,
@@ -466,28 +488,222 @@ def apply_save(hub: DockHub, payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "message": note, "port_changed": port_changed}
 
 
+# ---------------------------------------------------------------- 表单字段清洗
+# 三端配置页能改的段落比以前多：Windows 的探针、Mini 的监控地址、三端地址簿。
+# 这些都是直接写进 yaml 的，所以每个字段都在这里过一遍，宁可报错也不写进半截 ip。
+
+_HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,250}[A-Za-z0-9])?$")
+
+
+def _clean_hostname(value: Any, field: str = "主机名") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if not _HOST_RE.match(text) or ".." in text:
+        raise ValueError(f"{field}只能写主机名或 IP：{text}")
+    return text
+
+
+def _clean_port(value: Any, field: str = "端口", *, allow_zero: bool = False) -> int:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        if allow_zero:
+            return 0
+        raise ValueError(f"{field}不能为空")
+    if not text.isdigit():
+        raise ValueError(f"{field}要是数字")
+    port = int(text)
+    if port < (0 if allow_zero else 1) or port > 65535:
+        raise ValueError(f"{field}超出范围：{port}")
+    return port
+
+
+def _clean_http(value: Any, default_port: int, field: str = "地址") -> str:
+    """统一成 http://host:port。没写协议补 http，没写端口补默认端口。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "http://" + text
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"{field}看不懂：{text}")
+    if parsed.username or parsed.password:
+        raise ValueError(f"{field}不要带用户名密码")
+    host = _clean_hostname(parsed.hostname, field)
+    try:
+        port = parsed.port or default_port
+    except ValueError as exc:
+        raise ValueError(f"{field}端口不对：{text}") from exc
+    if port < 1 or port > 65535:
+        raise ValueError(f"{field}端口超出范围：{port}")
+    return f"{parsed.scheme}://{host}:{port}"
+
+
+def _clean_listen(value: Any, field: str = "监听地址") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    host, _, port = text.rpartition(":")
+    if not host:
+        raise ValueError(f"{field}要写成 host:port：{text}")
+    return f"{_clean_hostname(host, field)}:{_clean_port(port, field, allow_zero=True)}"
+
+
+def _clean_nodes(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("nodes 必须是对象")
+    out: dict[str, Any] = {}
+    for key in NODE_KEYS:
+        entry = value.get(key)
+        if entry is None:
+            continue
+        if not isinstance(entry, dict):
+            raise ValueError(f"nodes.{key} 必须是对象")
+        clean: dict[str, Any] = {}
+        if "host" in entry:
+            clean["host"] = _clean_hostname(entry.get("host"), f"{key} 的主机名")
+        if "ip" in entry:
+            clean["ip"] = _clean_hostname(entry.get("ip"), f"{key} 的 IP")
+        if "port" in entry:
+            port = _clean_port(entry.get("port"), f"{key} 的端口", allow_zero=True)
+            # 端口留空 = 这个角色没有端口（安卓就是这样），别在 yaml 里留个 0
+            if port:
+                clean["port"] = port
+        if clean:
+            out[key] = clean
+    return out
+
+
+def _clean_probe(value: Any, current: Any) -> dict[str, Any]:
+    base = getattr(current, "probe", None) or ProbeConfig()
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("probe 必须是对象")
+    out: dict[str, Any] = {
+        "url": base.url,
+        "stale_ms": base.stale_ms,
+        "hub_url": base.hub_url,
+        "listen": base.listen,
+    }
+    if base.token:
+        out["token"] = base.token
+    if "url" in value:
+        out["url"] = _clean_http(value.get("url"), DEFAULT_PROBE_PORT, "探针地址")
+    if "hub_url" in value:
+        out["hub_url"] = _clean_http(
+            value.get("hub_url"), int(getattr(current, "port", 0) or 17890), "回连地址"
+        )
+    if "listen" in value:
+        out["listen"] = _clean_listen(value.get("listen"), "探针监听")
+    stale = str(value.get("stale_ms") or "").strip()
+    if stale:
+        if not stale.isdigit():
+            raise ValueError("失联阈值要是毫秒数")
+        out["stale_ms"] = max(200, min(600000, int(stale)))
+    token = str(value.get("token") or "").strip()
+    if token:
+        out["token"] = token
+    return out
+
+
+def _clean_mini(value: Any, current: Any) -> dict[str, Any]:
+    cur = getattr(current, "mini", None) or MiniLinkConfig()
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("mini 必须是对象")
+    enabled = bool(value.get("enabled", cur.enabled))
+    if not enabled:
+        return {"enabled": False}
+    out: dict[str, Any] = {
+        "enabled": True,
+        "base_url": cur.base_url,
+        "token": cur.token,
+        "pc_ms": cur.pc_ms,
+        "mijia_ms": cur.mijia_ms,
+    }
+    if "base_url" in value:
+        out["base_url"] = _clean_http(value.get("base_url"), 17891, "Mini 监控地址")
+    token = str(value.get("token") or "").strip()
+    if token:
+        out["token"] = token
+    for key, low, high, label in (
+        ("pc_ms", 400, 60000, "电脑刷新间隔"),
+        ("mijia_ms", 5000, 3600000, "米家刷新间隔"),
+    ):
+        text = str(value.get(key) or "").strip()
+        if not text:
+            continue
+        if not text.isdigit():
+            raise ValueError(f"{label}要是毫秒数")
+        out[key] = max(low, min(high, int(text)))
+    return out
+
+
+def _clean_tts(value: dict[str, Any], current: Any) -> dict[str, Any]:
+    comp = getattr(current, "companion", None)
+    out: dict[str, Any] = {}
+    if "base_url" in value:
+        out["base_url"] = _clean_http(value.get("base_url"), 18100, "朗读服务地址")
+    token = str(value.get("token") or "").strip()
+    if token:
+        out["token"] = token
+    if "deliver" in value:
+        out["deliver"] = bool(value.get("deliver"))
+    if not out.get("token") and getattr(comp, "tts_token", None):
+        out["token"] = comp.tts_token
+    return out
+
+
 def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
+    """把表单 → 一份完整的 yaml。
+
+    起点是**当前配置的完整导回**，不是一张空表：向导里没出现的段落（schedules、
+    dusk、alarm、theme、photos、访客模式…）必须原样带走，否则用户去功能开关里
+    配了日落联动，回来点一次「保存」就把它全洗掉了。表单提交的字段再逐项覆盖。
+    """
+    dumped = hub_config_to_raw(current)
+    raw: dict[str, Any] = dict(dumped)
+
     name = str(payload.get("name") or current.name).strip()
     token = str(payload.get("token") or current.token).strip()
     port = int(payload.get("port") or current.port)
-    raw: dict[str, Any] = {
-        "name": name,
-        "host": current.host,
-        "port": port,
-        "token": token,
-        "pc": payload.get("pc") if payload.get("pc") is not None else hub_config_to_raw(current).get("pc"),
-        "devices": _merge_devices(payload.get("devices") or [], current),
-    }
-    dumped = hub_config_to_raw(current)
+    if port < 1 or port > 65535:
+        raise ValueError("端口要落在 1–65535")
+    raw["name"] = name
+    raw["host"] = (
+        _clean_hostname(payload.get("host"), "监听地址")
+        if payload.get("host") is not None
+        else current.host
+    )
+    raw["port"] = port
+    raw["token"] = token
+
+    if payload.get("pc") is not None:
+        raw["pc"] = payload.get("pc")
+    # 设备：浏览器没带这一项就保留原清单；带了就按 id 合并（绑定字段从旧值继承）
+    if payload.get("devices") is not None:
+        raw["devices"] = _merge_devices(payload.get("devices") or [], current)
+
     if "temperature" in payload:
         temp = payload.get("temperature")
         if temp:
             raw["temperature"] = temp
-    elif current.temperature:
-        raw["temperature"] = dumped["temperature"]
-    if dumped.get("companion") is not None:
-        raw["companion"] = dumped["companion"]
-    # 主动播报的段向导里没有表单，保存时原样带过去，别让一次保存把它删了
+        else:
+            raw.pop("temperature", None)
+    if "nodes" in payload:
+        raw["nodes"] = _clean_nodes(payload.get("nodes"))
+    if "probe" in payload:
+        raw["probe"] = _clean_probe(payload.get("probe"), current)
+    if "mini" in payload:
+        raw["mini"] = _clean_mini(payload.get("mini"), current)
+    if "media" in payload:
+        raw["media"] = {"enabled": bool((payload.get("media") or {}).get("enabled", True))}
+    # 主动播报的段向导里没有表单，保持原样（dumped 已带上，这里只防丢）
     if dumped.get("proactive") is not None:
         raw["proactive"] = dumped["proactive"]
     # 大模型覆盖（配置网页）：只覆盖表单里真正填了值的字段，留空 = 保持原值
@@ -509,6 +725,24 @@ def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
             llm_raw["model"] = model_in
         if key_in:
             llm_raw["api_key"] = key_in
+    # 伴侣自己的开关与 TTS（Mac 那台）：只改提交的字段
+    companion_in = payload.get("companion")
+    if isinstance(companion_in, dict):
+        companion_raw = raw.get("companion")
+        if not isinstance(companion_raw, dict):
+            companion_raw = {}
+            raw["companion"] = companion_raw
+        if "enabled" in companion_in:
+            companion_raw["enabled"] = bool(companion_in.get("enabled"))
+        tts_in = companion_in.get("tts")
+        if isinstance(tts_in, dict):
+            tts_raw = companion_raw.get("tts")
+            if not isinstance(tts_raw, dict):
+                tts_raw = {}
+                companion_raw["tts"] = tts_raw
+            tts_raw.update(_clean_tts(tts_in, current))
+            if not tts_raw.get("base_url"):
+                companion_raw.pop("tts", None)
     if dumped.get("limits") is not None:
         # 向导的表单里没有限流那几格，不显式继承的话，用户手写在 yaml 里的
         # limits 会在点一次「保存」之后无声消失。
@@ -517,16 +751,6 @@ def _payload_to_raw(payload: dict[str, Any], current: Any) -> dict[str, Any]:
         # 表单里没有这一块：按设备的 token 只能手写 yaml，但点一次「保存」
         # 不能把它抹掉，否则那台设备下一次请求就是 401
         raw["tokens"] = dumped["tokens"]
-    if dumped.get("mini") is not None:
-        raw["mini"] = dumped["mini"]
-    if dumped.get("probe") is not None:
-        raw["probe"] = dumped["probe"]
-    # 场景不在这张表单里，但保存时不能把它抹掉
-    if dumped.get("scenes") is not None:
-        raw["scenes"] = dumped["scenes"]
-    # 专注联动向导里没有表单，保存时原样带过去
-    if dumped.get("focus") is not None:
-        raw["focus"] = dumped["focus"]
     return raw
 
 
@@ -570,6 +794,11 @@ def handle_setup_get(hub: DockHub, path: str, handler: Any) -> bool:
     if path == "/setup/api/mijia-login/status":
         handler._json(200, mijia_login_status())  # noqa: SLF001
         return True
+    if path == "/setup/api/features":
+        from dock_hub.features import describe
+
+        handler._json(200, {"ok": True, **describe(hub.config)})  # noqa: SLF001
+        return True
     return False
 
 
@@ -608,6 +837,16 @@ def handle_setup_post(hub: DockHub, path: str, body: dict[str, Any], handler: An
         try:
             result = apply_voice(hub, body)
         except ValueError as exc:
+            handler._json(400, {"ok": False, "message": str(exc)})  # noqa: SLF001
+            return True
+        handler._json(200, result)  # noqa: SLF001
+        return True
+    if path == "/setup/api/features":
+        from dock_hub.features import apply_feature
+
+        try:
+            result = apply_feature(hub, str(body.get("key") or ""), body.get("value"))
+        except (ValueError, TypeError) as exc:
             handler._json(400, {"ok": False, "message": str(exc)})  # noqa: SLF001
             return True
         handler._json(200, result)  # noqa: SLF001

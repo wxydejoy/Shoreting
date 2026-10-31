@@ -1188,11 +1188,11 @@ media:
 # companion:
 #   enabled: true
 #   llm:
-#     base_url: "http://10.83.22.121:11434"
+#     base_url: "http://mini.lan:11434"
 #     model: qwen3.5:4b
 #     timeout_sec: 30
 #   tts:
-#     base_url: "http://10.83.22.121:18100"
+#     base_url: "http://mini.lan:18100"
 #     timeout_sec: 20
 
 # 主屏那一个温度源（只允许一个）
@@ -1423,7 +1423,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://HOST:17890/v1/snapshot
 
 Windows Hub 继续报 Win 的 CPU / 内存 / GPU。Mac Mini 另开一个小服务，手机**单独填 Mini 地址**轮询，数字画在主屏 CPU 块的**第二行**。不经过 Hub。
 
-- 默认 `http://10.83.22.121:17891`，Token 由 `mini/install-launchd.sh` 生成并打印，需与 `hub.yaml` 的 `mini.token`、安卓「Mini CPU」栏一致
+- 默认 `http://mini.lan:17891`，Token 由 `mini/install-launchd.sh` 生成并打印，需与 `hub.yaml` 的 `mini.token`、安卓「Mini CPU」栏一致
 - snapshot / desk / telemetry 都需要 Bearer。**服务没有配置 token 时拒绝启动**，`/health` 仍无鉴权
 - 实现见仓库 [`mini/`](../mini/README.md)，与 `dock_hub` 包分开
 

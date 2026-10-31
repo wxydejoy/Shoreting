@@ -40,7 +40,6 @@ _STATIC = {
     "rare.js": "text/javascript; charset=utf-8",
 }
 
-
 def lan_ips() -> list[str]:
     found: list[str] = []
 
@@ -53,8 +52,8 @@ def lan_ips() -> list[str]:
         ):
             found.append(ip)
 
-    # 先探测 10.83.22 网段（安卓在这边），再走默认路由，避免只打出 Wi-Fi 的 192.168
-    for probe in ("10.83.22.1", "223.5.5.5", "8.8.8.8"):
+    # 先探测家里的 10.14.14 网段（三端都在这边），再走默认路由，避免只打出 Wi-Fi 的 192.168
+    for probe in ("10.14.14.1", "223.5.5.5", "8.8.8.8"):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(0.3)
@@ -68,7 +67,7 @@ def lan_ips() -> list[str]:
             add(info[4][0])
     except OSError:
         pass
-    found.sort(key=lambda ip: (0 if ip.startswith("10.83.22.") else 1, ip))
+    found.sort(key=lambda ip: (0 if ip.startswith("10.14.14.") else 1, ip))
     return found or ["127.0.0.1"]
 
 
@@ -327,6 +326,9 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     from dock_hub import setup_ui
 
                     setup_ui.ensure_local(self)
+                    # 配置写入要 application/json 且同源：本机免 Token，跨站页面
+                    # 用 text/plain 的简单请求就能改 token，必须挡在解析之前。
+                    setup_ui.guard_write(self)
                     body = self._read_json()
                     if setup_ui.handle_setup_post(hub, path, body, self):
                         return

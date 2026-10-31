@@ -13,7 +13,7 @@ Mac Mini 上的**本机监控**：CPU / 内存 / GPU，给岸亭主屏 CPU 块�
 
 **不要**在 Mini 上再开一份 `dock-hub:17890`。否则安卓把 Hub 栏填成 Mini IP 时，`/health` 会成功，米家和对话却打到错误的机器。
 
-本宅默认：`http://10.83.22.121:17891`。Token 由 `install-launchd.sh` 生成并写进 LaunchAgent（`HELM_MINI_TOKEN`），安装完会把口令打印出来 —— 请填进安卓设置里的「Mini CPU」那一栏。
+本宅默认：`http://mini.lan:17891`。Token 由 `install-launchd.sh` 生成并写进 LaunchAgent（`HELM_MINI_TOKEN`），安装完会把口令打印出来 —— 请填进安卓设置里的「Mini CPU」那一栏。
 
 **没有 `HELM_MINI_TOKEN` 时进程会拒绝启动**（以前会静默放行，等于全站免鉴权）。
 

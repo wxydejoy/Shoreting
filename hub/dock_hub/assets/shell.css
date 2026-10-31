@@ -493,4 +493,3 @@ input[type=checkbox] { width: auto; }
   body.toc-open #tocPane { transform: none; }
   [data-pane="setup"] .row, .grid-2, .split { grid-template-columns: 1fr; }
 }
-

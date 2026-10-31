@@ -216,9 +216,13 @@ class ServerTest(unittest.TestCase):
         base = f"http://127.0.0.1:{port}"
 
         page = urllib.request.urlopen(base + "/", timeout=2).read().decode()
-        self.assertIn("启动", page)
-        self.assertIn("关闭", page)
-        self.assertIn("重启", page)
+        # 页面是个壳，界面在 console.js 里按 # 路由渲染
+        self.assertIn('id="root"', page)
+        self.assertIn("/assets/console.js", page)
+
+        script = urllib.request.urlopen(base + "/assets/console.js", timeout=5)
+        self.assertIn("javascript", script.headers["Content-Type"])
+        self.assertTrue(script.read(64))
 
         status = json.loads(urllib.request.urlopen(base + "/api/status", timeout=2).read())
         self.assertEqual(status["services"][0]["id"], "hub")

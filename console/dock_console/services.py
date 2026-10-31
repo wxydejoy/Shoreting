@@ -309,6 +309,10 @@ class Controller:
         installed = plist.is_file()
         health_ok, payload, health_error = self.probe(spec.health_url)
         running = state == "running"
+        try:
+            log_file = str(spec.log_path.relative_to(self.repo))
+        except ValueError:
+            log_file = str(spec.log_path)
         row = {
             "id": spec.id,
             "name": spec.name,
@@ -316,6 +320,7 @@ class Controller:
             "label": spec.label,
             "port": spec.port,
             "install": spec.install,
+            "log_file": log_file,
             "loaded": loaded,
             "domain": domain if loaded else None,
             "state": state,

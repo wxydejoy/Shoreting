@@ -26,7 +26,8 @@ data class HubConnection(
     fun isMiniHost(): Boolean = lanHost(host) == MiniConnection.DEFAULT_HOST
 
     companion object {
-        const val DEFAULT_HOST = "10.83.22.121"
+        // 域名（路由器把 mini.lan 绑到 Mac 的 IP）：换网段不用重装 APK
+        const val DEFAULT_HOST = "mini.lan"
         const val DEFAULT_PORT = 17890
 
         /** 出厂不预置口令：token 只存在于 hub.yaml，装机时从配置向导复制。 */
@@ -45,7 +46,7 @@ data class MiniConnection(
     fun baseUrl(): String = lanHttpUrl(host, port)
 
     companion object {
-        const val DEFAULT_HOST = "10.83.22.121"
+        const val DEFAULT_HOST = "mini.lan"
         const val DEFAULT_PORT = 17891
 
         /** Mini 监控的口令由 install-launchd.sh 生成，不写进 APK。 */

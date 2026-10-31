@@ -8,7 +8,9 @@
 
 ## 三台机器
 
-下面 IP 是**本宅当前地址**。换网络请改成自己的，安卓的默认地址在 `HubPreferences` / `MiniConnection` 里；**口令没有默认值**，Hub 的从配置向导复制、Mini 的看 `install-launchd.sh` 装完那行。
+地址用路由器的静态 DNS：`mini.lan → 10.14.14.117`、`win.lan → 10.14.14.170`、`k20.lan → 10.14.14.177`。换网段只改路由器那三行，机器上的配置不用动——安卓默认 Hub 和 Mini 都是 `mini.lan`（`HubPreferences` / `MiniConnection`）；**口令没有默认值**，Hub 的从配置向导复制、Mini 的看 `install-launchd.sh` 装完那行。
+
+三端地址也在 `hub.yaml` 的 `nodes:` 段（控制台「三端配置」页可改），探针与 Mini 的地址都从那里取。
 
 ```
 K20 岸亭（脸+耳+字幕）
@@ -26,33 +28,33 @@ Windows 探针 :17892
 
 | 谁 | 地址 | 干什么 | 不干什么 |
 |---|---|---|---|
-| **K20 安卓** | `10.83.22.150`，包名 `cn.weiekko.dock` | 主屏、点灯、开程序、听你说话、显示字幕 | 不播守岸人声音；不直连 LLM / TTS / 在线 API |
-| **Mac Mini Hub** | **`10.83.22.121:17890`** `service=dock-hub` `name=study` | 米家、伴侣、配置；转发开程序 | 不跑 Windows 程序路径 |
-| **Windows 探针** | **`10.83.22.31:17892`** `service=dock-probe` | CPU、开机探测、开程序 | 不上米家、不当 Hub |
-| **Mac Mini 监控** | `10.83.22.121:17891` `service=helm-mini` | 主屏 CPU 块第二行 | **不是 Hub** |
+| **K20 安卓** | `k20.lan`，包名 `cn.weiekko.dock` | 主屏、点灯、开程序、听你说话、显示字幕 | 不播守岸人声音；不直连 LLM / TTS / 在线 API |
+| **Mac Mini Hub** | **`mini.lan:17890`** `service=dock-hub` `name=study` | 米家、伴侣、配置；转发开程序 | 不跑 Windows 程序路径 |
+| **Windows 探针** | **`win.lan:17892`** `service=dock-probe` | CPU、开机探测、开程序 | 不上米家、不当 Hub |
+| **Mac Mini 监控** | `mini.lan:17891` `service=helm-mini` | 主屏 CPU 块第二行 | **不是 Hub** |
 | **Mac Mini 嘴** | TTS **`:18100 --play`** | 本机出声 | 不当 Hub；安卓不连它 |
 
-**安卓设置：** Hub 栏填 Mini `10.83.22.121:17890`，Mini CPU 填 `10.83.22.121:17891`。健康检查若 `name=mini` 会拒绝。
+**安卓设置：** Hub 栏填 `mini.lan`、`17890`，Mini CPU 填 `mini.lan:17891`。健康检查若 `name=mini` 会拒绝。
 
 Hub 在 Mini 上，`hub.yaml` 里 llm / tts 用 `127.0.0.1`。
 
 ## 启动顺序（本宅）
 
-1. **Mini Hub**：`hub/install-launchd.sh`。探活：`curl -s http://10.83.22.121:17890/health` 应为 `service=dock-hub`、`name=study`。
-2. **Windows 探针**：`uv run dock-hub --probe`。探活：`curl -s http://10.83.22.31:17892/health` 应为 `service=dock-probe`。停掉旧的 `HelmDockHub`。
+1. **Mini Hub**：`hub/install-launchd.sh`。探活：`curl -s http://mini.lan:17890/health` 应为 `service=dock-hub`、`name=study`。
+2. **Windows 探针**：`uv run dock-hub --probe`。探活：`curl -s http://win.lan:17892/health` 应为 `service=dock-probe`。停掉旧的 `HelmDockHub`。
 3. **大脑**：默认走 Hub 本机 yaml 里的 OpenAI 兼容地址（如阿里云 MaaS `qwen3.8-flash`）。`api_key` 只写本机 yaml，不要写进 git / 安卓 / 文档示例。也仍可改回 Mini Ollama `:11434`。
 4. **Mini 嘴**：见下方 TTS。TTS **必须**仍指向 Mini 本机喇叭。
 5. **Mini 监控**（主屏第二行 CPU）：`mini/` 的 `helm-mini`，`:17891`。
-6. **K20**：设置里 Hub 填 Mini IP / `17890` / token；Mini CPU 填 `10.83.22.121:17891`。
+6. **K20**：设置里 Hub 填 `mini.lan` / `17890` / token；Mini CPU 填 `mini.lan:17891`。
 
-对话原文记在 Mini `~/.config/dock-hub/companion-chats.jsonl`。本机打开 `http://127.0.0.1:17890/chats`，局域网开 `http://10.83.22.121:17890/chats` 并填同一枚 Hub Token。朗读页：`http://127.0.0.1:17890/read`。
+对话原文记在 Mini `~/.config/dock-hub/companion-chats.jsonl`。本机打开 `http://127.0.0.1:17890/chats`，局域网开 `http://mini.lan:17890/chats` 并填同一枚 Hub Token。朗读页：`http://127.0.0.1:17890/read`。
 
 ## 安卓
 
 当前 debug 包 **versionName `0.9.0`**（`versionCode` 28）。主屏方块数量跟 Hub `devices[]` 一致，室内温湿度是传感器方块。
 
 - 设置只填 Hub 的 host / port / token。不要填 LLM、TTS、在线 API Key
-- Hub 占位默认 Mini `10.83.22.121`；粘贴 `IP:端口` 时会丢掉端口，避免拼成双端口
+- Hub 占位默认 `mini.lan`；粘贴 `域名:端口` 时会丢掉端口，避免拼成双端口
 - `companion != null && ready`：主屏可点人物（时钟区域）说话；说「小岸」同样开听
 - `null` 或 `ready == false`：不打开对话。`ready` 表示 LLM 探活成功（Ollama `/api/tags` 或 OpenAI 兼容 `/models`）
 - `POST /v1/companion/chat`，超时 90s；可带 `turn_id`
@@ -70,7 +72,7 @@ Hub 在 Mini 上，`hub.yaml` 里 llm / tts 用 `127.0.0.1`。
 | 空听超时 | 6.5s | 一直没出字 |
 | 上限 | 16s | 再说也截 |
 
-Hub 和 TTS 都跑在 Mini 上，`companion.tts.base_url` 填 `http://127.0.0.1:18100`（同一台机器，不用绕网络）；只有把 Hub 临时挪到别的机器调试时才写 `http://10.83.22.121:18100`。TTS 进程不要打进 `dock_hub` 包。`companion.llm` 可填 OpenAI 兼容网关，或仍填 Mini Ollama `http://10.83.22.121:11434`。
+Hub 和 TTS 都跑在 Mini 上，`companion.tts.base_url` 填 `http://127.0.0.1:18100`（同一台机器，不用绕网络）；只有把 Hub 临时挪到别的机器调试时才写 `http://mini.lan:18100`。TTS 进程不要打进 `dock_hub` 包。`companion.llm` 可填 OpenAI 兼容网关，或仍填 Mini Ollama `http://mini.lan:11434`。
 
 ## Mini TTS
 
@@ -174,9 +176,9 @@ companion:
     model: qwen3.8-flash
     api_key: "sk-..."
     timeout_sec: 45
-    # 本地 Ollama 备用：去掉 api_key，改成 http://10.83.22.121:11434 与 qwen3.5:4b
+    # 本地 Ollama 备用：去掉 api_key，改成 http://mini.lan:11434 与 qwen3.5:4b
   tts:
-    base_url: "http://10.83.22.121:18100"
+    base_url: "http://mini.lan:18100"
     timeout_sec: 20
     # deliver: true   # 才把 wav 交给手机。默认 false
 ```
@@ -201,7 +203,7 @@ companion:
 
 | 现象 | 原因 | 怎么办 |
 |---|---|---|
-| 测试 Hub 成功，灯和对话失败 | Hub 栏填的是 Windows 探针（`:17892`）或 Mini 监控（`:17891`）的地址 | 改成 Mini `10.83.22.121:17890`，`/health` 要回 `service=dock-hub` |
+| 测试 Hub 成功，灯和对话失败 | Hub 栏填的是 Windows 探针（`:17892`）或 Mini 监控（`:17891`）的地址 | 改成 Mini `mini.lan:17890`，`/health` 要回 `service=dock-hub` |
 | 有字幕没声音 | TTS 没 `--play`、没接音箱、或 Hub 没填 `tts.base_url` | Mini 上看 `/health` 的 `play` / `ready` |
 | 有字幕没声音，日志里有 `tts_muted` | TTS 连挂两次后 Hub 主动闭嘴 60s，免得每句都等满 3s 超时 | 修好 `:18100`（看 `/health` 的 `ready`）；冷却会自动过期，不用重启 Hub |
 | 说话一顿一顿 | 旧 TTS 在下一句合成时 `flush` 了上一句 | 用现在的 `server.py`：同轮只排队，只有 `/v1/stop` 才清空 |

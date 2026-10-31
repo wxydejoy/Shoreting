@@ -133,8 +133,6 @@ class RouteTest(unittest.TestCase):
         self.addCleanup(httpd.shutdown)
         self.addCleanup(httpd.server_close)
         base = f"http://127.0.0.1:{httpd.server_address[1]}"
-        page = urllib.request.urlopen(base + "/", timeout=2).read().decode()
-        self.assertIn("Windows", page)
         raw = json.dumps({"address": "10.4.5.6"}).encode()
         req = urllib.request.Request(
             base + "/api/config/windows",

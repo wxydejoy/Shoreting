@@ -132,10 +132,55 @@ class ProactiveConfig:
 @dataclass
 class MiniLinkConfig:
     enabled: bool = True
-    base_url: str = "http://10.83.22.121:17891"
+    base_url: str = "http://mini.lan:17891"
     token: str = "helm-mini-weiekko"
     pc_ms: int = 1000
     mijia_ms: int = 15000
+
+
+# 三端地址簿。主机名（FQDN）是稳定名字：路由器把 mini.lan / win.lan / k20.lan
+# 绑到当前 IP，换网段只改路由器那一行，三台机器上的配置一个字都不用动。
+# IP 只是备注，方便肉眼核对是不是同一个网段。
+NODE_KEYS = ("mac", "win", "android")
+DEFAULT_NODE_ADDRESSES: dict[str, tuple[str, str, int]] = {
+    "mac": ("mini.lan", "10.14.14.117", DEFAULT_PORT),
+    "win": ("win.lan", "10.14.14.170", 17892),
+    "android": ("k20.lan", "10.14.14.177", 0),
+}
+
+
+@dataclass
+class NodeConfig:
+    host: str = ""
+    ip: str = ""
+    port: int = 0
+
+    def url(self, scheme: str = "http") -> str:
+        host = self.host or self.ip
+        if not host:
+            return ""
+        return f"{scheme}://{host}" + (f":{self.port}" if self.port else "")
+
+    def address(self) -> str:
+        """安卓设置里「地址」那一栏要填的东西：主机名，没有就退回 IP。"""
+        return self.host or self.ip
+
+
+def default_node(key: str) -> NodeConfig:
+    host, ip, port = DEFAULT_NODE_ADDRESSES[key]
+    return NodeConfig(host=host, ip=ip, port=port)
+
+
+@dataclass
+class NodesConfig:
+    mac: NodeConfig = field(default_factory=lambda: default_node("mac"))
+    win: NodeConfig = field(default_factory=lambda: default_node("win"))
+    android: NodeConfig = field(default_factory=lambda: default_node("android"))
+
+    def node(self, key: str) -> NodeConfig:
+        if key not in NODE_KEYS:
+            raise KeyError(f"没有这一端：{key}")
+        return getattr(self, key)
 
 
 @dataclass
@@ -239,7 +284,7 @@ class CompanionConfig:
 
 DEFAULT_PROBE_PORT = 17892
 DEFAULT_PROBE_LISTEN = "0.0.0.0:17892"
-DEFAULT_PROBE_HUB_URL = "http://10.83.22.121:17890"
+DEFAULT_PROBE_HUB_URL = "http://mini.lan:17890"
 
 
 @dataclass
@@ -404,6 +449,8 @@ class HubConfig:
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     mini: MiniLinkConfig | None = None
     probe: ProbeConfig = field(default_factory=ProbeConfig)
+    # 三端地址簿：域名 → IP，控制台的「三端配置」页直接改这里
+    nodes: NodesConfig = field(default_factory=NodesConfig)
     schedules: list[ScheduleConfig] = field(default_factory=list)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     # 除主 token 之外按设备分发的 token；删一条即吊销一台
@@ -514,6 +561,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     companion = _parse_companion(raw.get("companion"))
     mini = _parse_mini(raw.get("mini"))
     probe = _parse_probe(raw.get("probe"))
+    nodes = _parse_nodes(raw.get("nodes"))
     limits = _parse_limits(raw.get("limits"))
     tokens = _parse_tokens(raw.get("tokens"), token)
     proactive = _parse_proactive(raw.get("proactive"))
@@ -552,6 +600,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         proactive=proactive,
         mini=mini,
         probe=probe,
+        nodes=nodes,
         schedules=_parse_schedules(raw.get("schedules"), devices),
         limits=limits,
         tokens=tokens,
@@ -1053,6 +1102,49 @@ def _parse_probe(raw: Any) -> ProbeConfig:
     )
 
 
+def _parse_nodes(raw: Any) -> NodesConfig:
+    """三端地址簿。没写的字段沿用默认域名，写了就以写的为准。"""
+    nodes = NodesConfig()
+    if raw is None or raw is False:
+        return nodes
+    if not isinstance(raw, dict):
+        raise ValueError("nodes 必须是对象")
+    for key in NODE_KEYS:
+        entry = raw.get(key)
+        if entry is None:
+            continue
+        if not isinstance(entry, dict):
+            raise ValueError(f"nodes.{key} 必须是对象")
+        node = nodes.node(key)
+        if "host" in entry:
+            node.host = str(entry.get("host") or "").strip()
+        if "ip" in entry:
+            node.ip = str(entry.get("ip") or "").strip()
+        port = entry.get("port")
+        if port not in (None, ""):
+            value = int(port)
+            if value < 0 or value > 65535:
+                raise ValueError(f"nodes.{key}.port 无效")
+            node.port = value
+    return nodes
+
+
+def nodes_to_raw(nodes: NodesConfig) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key in NODE_KEYS:
+        node = nodes.node(key)
+        entry: dict[str, Any] = {}
+        if node.host:
+            entry["host"] = node.host
+        if node.ip:
+            entry["ip"] = node.ip
+        if node.port:
+            entry["port"] = node.port
+        if entry:
+            out[key] = entry
+    return out
+
+
 def _parse_pc(raw: Any) -> PcConfig | None:
     if raw is None:
         return None
@@ -1095,7 +1187,7 @@ def _parse_mini(raw: Any) -> MiniLinkConfig:
     token = str(raw.get("token") or "helm-mini-weiekko").strip() or "helm-mini-weiekko"
     return MiniLinkConfig(
         enabled=True,
-        base_url=str(raw.get("base_url") or "http://10.83.22.121:17891").strip(),
+        base_url=str(raw.get("base_url") or "http://mini.lan:17891").strip(),
         token=token,
         pc_ms=max(400, int(raw.get("pc_ms") or 1000)),
         mijia_ms=max(5000, int(raw.get("mijia_ms") or 15000)),
@@ -1746,6 +1838,9 @@ def hub_config_to_raw(config: HubConfig, *, mask_secrets: bool = False) -> dict[
             {"id": item.id, "value": item.value, **({"name": item.name} if item.name else {})}
             for item in config.tokens
         ]
+    nodes_raw = nodes_to_raw(config.nodes)
+    if nodes_raw:
+        raw["nodes"] = nodes_raw
     probe = config.probe
     if probe.url or probe.token or probe.stale_ms != 4000 or probe.hub_url != DEFAULT_PROBE_HUB_URL or probe.listen != DEFAULT_PROBE_LISTEN:
         dumped: dict[str, Any] = {}

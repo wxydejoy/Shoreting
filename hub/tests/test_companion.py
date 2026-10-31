@@ -540,11 +540,11 @@ class CompanionLogicTest(unittest.TestCase):
     def test_parse_mini_defaults(self) -> None:
         cfg = parse_config({"name": "study", "token": "secret-token-value", "devices": []})
         self.assertTrue(cfg.mini.enabled)
-        self.assertEqual(cfg.mini.base_url, "http://10.83.22.121:17891")
+        self.assertEqual(cfg.mini.base_url, "http://mini.lan:17891")
         self.assertEqual(cfg.mini.pc_ms, 1000)
         self.assertEqual(cfg.mini.mijia_ms, 15000)
         dumped = hub_config_to_raw(cfg)
-        self.assertEqual(dumped["mini"]["base_url"], "http://10.83.22.121:17891")
+        self.assertEqual(dumped["mini"]["base_url"], "http://mini.lan:17891")
         off = parse_config(
             {"name": "study", "token": "secret-token-value", "devices": [], "mini": False}
         )
