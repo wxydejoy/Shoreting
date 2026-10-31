@@ -78,6 +78,7 @@ import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Density
@@ -96,6 +97,7 @@ import cn.weiekko.dock.data.HubDevice
 import cn.weiekko.dock.data.MediaInfo
 import cn.weiekko.dock.data.ModuleRect
 import cn.weiekko.dock.data.PcStatus
+import cn.weiekko.dock.data.Scene
 import cn.weiekko.dock.data.TimerStatus
 import cn.weiekko.dock.data.WeatherInfo
 import cn.weiekko.dock.data.WinApp
@@ -126,6 +128,7 @@ fun HomeScreen(
     onPower: (HubDevice, Boolean) -> Unit,
     onWinClick: (WinApp) -> Unit,
     onMedia: (String) -> Unit,
+    onScene: (Scene) -> Unit = {},
     onSelectModule: (DockModule?) -> Unit = {},
     onMoveModule: (DockModule, Float, Float, Float, Float, Float, Float) -> Unit = { _, _, _, _, _, _, _ -> },
     onResizeModule: (DockModule, Float, Float, Float, Float, Float, Float) -> Unit = { _, _, _, _, _, _, _ -> },
@@ -526,6 +529,21 @@ fun HomeScreen(
                             .padding(top = 8.dp)
                             .padding(horizontal = 48.dp)
                             .zIndex(8f),
+                    )
+                }
+
+                // 场景（F7）：右下角一列按钮，点一下让 Hub 把一组设备一次做完。
+                // 编辑态收起别挡拖拽；睡着了屏幕本来就黑，不画。
+                val scenes = state.snapshot?.scenes.orEmpty()
+                if (scenes.isNotEmpty() && !editing && !state.hubSleeping) {
+                    SceneDock(
+                        scenes = scenes,
+                        busy = state.sceneBusy,
+                        onRun = onScene,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 20.dp, bottom = 32.dp)
+                            .zIndex(9f),
                     )
                 }
 
@@ -1313,6 +1331,48 @@ private fun MediaButton(
             tint = if (emphasized) Color.White else Color.White.copy(alpha = 0.88f),
             modifier = Modifier.size(if (emphasized) 22.dp else 18.dp),
         )
+    }
+}
+
+/** 右下角一列场景（F7）：点一下让 Hub 把一组设备一次做完。 */
+@Composable
+private fun SceneDock(
+    scenes: List<Scene>,
+    busy: Set<String>,
+    onRun: (Scene) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val type = LocalTypeLook.current
+    val family = type.font.toFamily()
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        scenes.take(4).forEach { scene ->
+            val working = scene.id in busy
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = Color.White.copy(alpha = if (working) 0.08f else 0.18f),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable(enabled = !working) { onRun(scene) },
+            ) {
+                Text(
+                    text = if (working) "…" else scene.name,
+                    fontFamily = family,
+                    fontSize = type.chipSize.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color.White.copy(alpha = if (working) 0.55f else 0.94f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier
+                        .widthIn(max = 132.dp)
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                )
+            }
+        }
     }
 }
 

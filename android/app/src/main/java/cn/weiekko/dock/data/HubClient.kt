@@ -118,6 +118,17 @@ class HubClient(
         return decode(body)
     }
 
+    /** 场景（F7）：Hub 侧一次开关一组设备，返回每台的结果。 */
+    fun runScene(connection: HubConnection, sceneId: String): SceneRun {
+        val id = sceneId.trim()
+        if (id.isEmpty()) throw HubException("bad_request", "scene id 为空")
+        val request = authorized(connection, "/v1/scenes/$id")
+            .post("{}".toRequestBody(JSON))
+            .build()
+        val body = execute(request, readTimeoutMs = SCENE_TIMEOUT_MS)
+        return decode(body)
+    }
+
     fun mediaCommand(connection: HubConnection, action: String): MediaInfo {
         val payload = buildJsonObject {
             put("media", JsonPrimitive(action))
@@ -369,6 +380,8 @@ class HubClient(
     companion object {
         const val SNAPSHOT_TIMEOUT_MS = 5_000L
         const val COMMAND_TIMEOUT_MS = 10_000L
+        /** 场景一次要动好几台设备，比单台命令给得宽一点。 */
+        const val SCENE_TIMEOUT_MS = 15_000L
         const val COMPANION_TIMEOUT_MS = 90_000L
         const val STOP_TIMEOUT_MS = 2_000L
         private val AUDIO_ID = Regex("^[A-Za-z0-9._-]+$")

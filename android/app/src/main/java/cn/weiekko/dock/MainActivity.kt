@@ -194,6 +194,7 @@ class MainActivity : ComponentActivity() {
                                     onPower = viewModel::setPower,
                                     onWinClick = viewModel::tapWinApp,
                                     onMedia = viewModel::sendMedia,
+                                    onScene = viewModel::runScene,
                                     onSelectModule = viewModel::selectModule,
                                     onMoveModule = viewModel::moveModule,
                                     onResizeModule = viewModel::resizeModule,

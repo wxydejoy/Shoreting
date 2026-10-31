@@ -105,6 +105,10 @@ object DemoSnapshot {
                 on = false,
             ),
         ),
+        scenes = listOf(
+            Scene(id = "work", name = "干活"),
+            Scene(id = "bedtime", name = "晚安"),
+        ),
     )
 
     val mini = PcStatus(
