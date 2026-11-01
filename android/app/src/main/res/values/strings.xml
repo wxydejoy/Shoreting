@@ -9,6 +9,6 @@
     <string name="relay_channel_desc">书桌/微信给你捎的话（对讲与留言）</string>
     <string name="relay_title">书桌说</string>
     <string name="wake_word_channel">语音唤醒</string>
-    <string name="wake_word_title">小岸 待命中</string>
-    <string name="wake_word_text">说「小岸」可以唤醒</string>
+    <string name="wake_word_title">守岸人 待命中</string>
+    <string name="wake_word_text">说「守岸人」可以唤醒</string>
 </resources>

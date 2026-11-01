@@ -57,6 +57,9 @@ class WakeWordService : Service() {
     /** 现在这只识别器用的是第几版热词表；-1 表示它没带热词。 */
     @Volatile
     private var builtHotwords = -1
+    /** 断句用的神经 VAD；装不上就退回 RMS 门。 */
+    @Volatile
+    private var speechVad: SpeechVad? = null
     /** 带热词装不起来过，就别每句话都再试一遍。 */
     @Volatile
     private var hotwordsDisabled = false
@@ -135,6 +138,8 @@ class WakeWordService : Service() {
         asr = null
         voiceprint?.release()
         voiceprint = null
+        speechVad?.release()
+        speechVad = null
         vpExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -165,6 +170,8 @@ class WakeWordService : Service() {
                 kws = null
                 asr?.release()
                 asr = null
+                speechVad?.release()
+                speechVad = null
             }
         }
     }
@@ -195,6 +202,7 @@ class WakeWordService : Service() {
         kws = spotter
         val wakeStream = spotter.createStream(WakeKeywords.STREAM)
         kwsStream = wakeStream
+        speechVad = SpeechVad.create(assets)
         // ASR 模型比唤醒词大一个量级，加载要几百毫秒。原来是在这里同步加载，
         // 麦克风要等它加载完才开：开机头一秒喊「守岸人」是没人应的。
         // 现在先开麦，模型在后台线程里装，装好之前叫醒的那一句会等它一会儿。
@@ -327,6 +335,7 @@ class WakeWordService : Service() {
         var skipMs = 0L
         var lastEmitted = ""
         var gate = UtteranceGate()
+        var turnGate = VadTurnGate()
         var vadMs = 0L
         var bargeMs = 0L
         var partial = StablePartial()
@@ -346,6 +355,8 @@ class WakeWordService : Service() {
                     emitTranscript("", settled = true)
                 }
                 spotter.reset(wakeStream)
+                speechVad?.reset()
+                turnGate = VadTurnGate()
             }
             if (capturing && asr == null && !asrFailed &&
                 SystemClock.elapsedRealtime() - turnAt < ASR_WAIT_MS
@@ -392,6 +403,8 @@ class WakeWordService : Service() {
                     asrAt = 0L
                     loggedPartial = false
                     gate = UtteranceGate()
+                    turnGate = VadTurnGate()
+                    speechVad?.reset()
                     partial = StablePartial()
                 }
                 if (skipMs > 0L) {
@@ -414,6 +427,7 @@ class WakeWordService : Service() {
                 val text = AsrModels.display(recognizer.getResult(stream).text)
                 if (text.isNotBlank()) {
                     gate.noteHeard()
+                    turnGate.onText(processedMs)
                     lastEmitted = text
                     // 只往后长 + 节流：字幕别抖，也别一句话重组十几次主屏
                     val fresh = partial.offer(text, now)
@@ -429,26 +443,36 @@ class WakeWordService : Service() {
                         emitTranscript(fresh, settled = false)
                     }
                 }
-                gate.onAudio(audioRms(samples), dtMs)
-                val reason = gate.shouldStop(processedMs)
+                // 断句决策：优先神经 VAD（说话与否模型说了算），
+                // 装不上退回老的 RMS 门。两者只做「要不要停」，不碰识别。
+                val vadEngine = speechVad
+                val reason: String? = if (vadEngine != null) {
+                    vadEngine.feed(samples)
+                    if (vadEngine.speechActive()) turnGate.onSpeech(processedMs)
+                    if (vadEngine.pollSegment() != null) turnGate.onSegment(processedMs)
+                    turnGate.shouldStop(processedMs)?.name
+                } else {
+                    gate.onAudio(audioRms(samples), dtMs)
+                    gate.shouldStop(processedMs)?.name
+                }
                 if (reason != null) {
                     Log.i(
                         TAG,
-                        "asr stop ${reason.name} elapsed=${processedMs}ms heard=${gate.heard} " +
+                        "asr stop $reason elapsed=${processedMs}ms heard=${turnGate.heard || gate.heard} " +
                             "dropped=${queue.dropped}",
                     )
                     capturing = false
                     asrStream = null
                     // F5：认人跟收尾解码并行——她先开口，声纹在旁边算，发广播前等一小会儿
-                    val speakerJob = startSpeakerTask(gate.heard)
+                    val speakerJob = startSpeakerTask(turnGate.heard || gate.heard)
                     val finalText = finishUtterance(recognizer, stream, lastEmitted)
                     val speaker = awaitSpeaker(speakerJob)
                     emitTranscript(finalText, settled = true, speaker = speaker)
                     HelmLatency.log(
                         currentTurn,
                         "asr_end",
-                        "ms=$processedMs reason=${reason.name} chars=${finalText.length} " +
-                            "heard=${if (gate.heard) 1 else 0}",
+                        "ms=$processedMs reason=$reason chars=${finalText.length} " +
+                            "heard=${if (turnGate.heard || gate.heard) 1 else 0}",
                     )
                     lastDetectAt = SystemClock.elapsedRealtime()
                     spotter.reset(wakeStream)

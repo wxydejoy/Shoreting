@@ -9,8 +9,8 @@ package cn.weiekko.dock.voice
  */
 object AsrHotwords {
     val BASE = listOf(
-        "岸宝",
-        "嘿岸宝",
+        "守岸人",
+        "嘿守岸人",
         "无畏契约",
         "打瓦",
         "台灯",

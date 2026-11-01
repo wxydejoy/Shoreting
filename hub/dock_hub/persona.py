@@ -29,7 +29,7 @@ _RECENT_CLIP = 72
 _USER_TIRED = re.compile(r"(累|困|乏|不想动|好累|疲惫)")
 _USER_FRUSTRATED = re.compile(r"(烦|气死|吵|够了|烦死)")
 _USER_BRIGHT = re.compile(r"(开心|谢谢|哈哈|好呀|不错)")
-_USER_GREET = re.compile(r"^(小岸|岸宝|晚上好|早上好|中午好|下午好|晚安|嗨|你好)[。！？.?]*$")
+_USER_GREET = re.compile(r"^(守岸人|小岸|岸宝|晚上好|早上好|中午好|下午好|晚安|嗨|你好)[。！？.?]*$")
 
 
 _CN_SMALL = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
