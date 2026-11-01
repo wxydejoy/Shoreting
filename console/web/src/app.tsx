@@ -104,9 +104,9 @@ function MobileNav({ route }: { route: Route }) {
           <Menu />
         </Button>
       </DialogTrigger>
-      <DialogContent className="left-0 h-dvh max-w-[260px] translate-x-0 translate-y-0 gap-0 rounded-none border-y-0 border-l-0 p-0 sm:max-w-[260px]">
+      <DialogContent className="top-0 left-0 h-dvh max-h-dvh w-[260px] max-w-[260px] translate-x-0 translate-y-0 grid-rows-[1fr] gap-0 overflow-hidden rounded-none border-y-0 border-l-0 p-0 sm:max-w-[260px]">
         <DialogTitle className="sr-only">导航</DialogTitle>
-        <div className="h-full" onClick={() => setOpen(false)}>
+        <div className="h-full min-h-0 overflow-hidden" onClick={() => setOpen(false)}>
           <AppSidebar route={route} />
         </div>
       </DialogContent>
