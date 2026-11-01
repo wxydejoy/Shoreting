@@ -37,6 +37,7 @@ from dock_hub.intents import (
     parse_volume_action,
     resolve_skill,
 )
+from dock_hub.mijia_catalog import infer_catalog_set, value_list_desc
 from dock_hub.notify import parse_relay
 from dock_hub.persona import speak_timer
 from dock_hub.timers import speak_stopwatch_result
@@ -217,6 +218,9 @@ class DeskMixin:
         climate = self._run_temp(text, turn)
         if climate:
             return climate
+        catalog = self._run_catalog_set(text, turn)
+        if catalog:
+            return catalog
         return None
 
     def _run_slow_dim(
@@ -427,6 +431,49 @@ class DeskMixin:
             run_skill=self._run_skill,
             note=_latency,
         )
+
+    def _run_catalog_set(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """米家目录兜底：「空调二十四度」「空调制热」这类高频口令不赌模型。
+
+        技能表（老路）没接住的温度/枚举指令，按目录数据确定性落到
+        device_prop。没配目录或没命中就 None，让话继续走对话。
+        """
+        get_entries = self._world.get("catalog_entries")
+        if not callable(get_entries):
+            return None
+        entries = get_entries()
+        if not entries:
+            return None
+        wanted = infer_catalog_set(text, entries)
+        if not wanted:
+            return None
+        runner = self._world.get("device_prop")
+        if not callable(runner):
+            return None
+        events: list[dict[str, Any]] = []
+        spoken = ""
+        for entry, prop, value in wanted:
+            name = entry.name
+            try:
+                payload = runner(entry.id, prop.name, value)
+            except HubError as exc:
+                _latency(turn, "skill_error", id=entry.id, what=prop.name, code=exc.code)
+                return f"{name}没动成。", [
+                    {"id": entry.id, "name": name, "what": prop.name, "ok": False, "code": exc.code}
+                ]
+            _latency(turn, "skill_ok", id=entry.id, what=prop.name)
+            events.append({"id": entry.id, "name": name, "what": prop.name, "ok": True})
+            if isinstance(payload, dict) and payload.get("value") is not None:
+                value = payload["value"]
+            if prop.type == "bool":
+                spoken = f"好，{name}{'开' if value else '关'}了。"
+            elif "temperature" in prop.name or "温度" in prop.desc:
+                spoken = f"好，{name}调到{value}度。"
+            elif value_list_desc(prop, value):
+                spoken = f"好，{name}调到{value_list_desc(prop, value)}。"
+            else:
+                spoken = f"好，{name}调好了。"
+        return spoken, events
 
     def _run_media(self, action: str, turn: str) -> str:
         fn = self._world.get("media_command")

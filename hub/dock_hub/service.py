@@ -948,6 +948,7 @@ class DockHub:
                 "music": self.companion_music,
                 "calendar": self._calendar_events,
                 "catalog": lambda: catalog_prompt(self._catalog),
+                "catalog_entries": lambda: self._catalog,
                 "catalog_read": self._catalog_read,
                 "device_prop": self._run_device_prop,
                 "device_action": self._run_device_action,

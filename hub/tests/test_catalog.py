@@ -19,6 +19,7 @@ from dock_hub.mijia_catalog import (
     catalog_prompt,
     coerce_catalog_value,
     entries_mentioned,
+    infer_catalog_set,
     read_plan,
     reading_lines,
 )
@@ -307,6 +308,101 @@ class ApplyCatalogTest(unittest.TestCase):
         self.assertFalse(applied)
         self.assertEqual(events[0]["code"], "offline")
         self.assertFalse(events[0]["ok"])
+
+
+class InferCatalogSetTest(unittest.TestCase):
+    def _ac(self) -> CatalogEntry:
+        return CatalogEntry(
+            id="m111",
+            name="空调",
+            model="m",
+            did="111",
+            props=[
+                CatalogProp(name="on-3", siid=3, piid=1, type="bool", desc="开关", writable=True, readable=True),
+                CatalogProp(
+                    name="target-temperature",
+                    siid=3,
+                    piid=4,
+                    type="float",
+                    desc="目标温度",
+                    writable=True,
+                    readable=True,
+                    value_min=16,
+                    value_max=30,
+                ),
+                CatalogProp(
+                    name="mode",
+                    siid=3,
+                    piid=2,
+                    type="uint",
+                    desc="模式",
+                    writable=True,
+                    readable=True,
+                    value_list=[("0", "制冷"), ("1", "制热"), ("2", "自动")],
+                ),
+            ],
+        )
+
+    def _lamp(self) -> CatalogEntry:
+        return CatalogEntry(
+            id="lamp",
+            name="台灯",
+            model="m",
+            did="2",
+            props=[
+                CatalogProp(name="brightness", siid=2, piid=2, type="uint", desc="亮度", writable=True, readable=True, value_min=1, value_max=100),
+            ],
+        )
+
+    def test_temp_by_number_and_chinese(self) -> None:
+        ac = self._ac()
+        for text in ("空调调到二十四度", "空调二十六度", "空调 24 度"):
+            got = infer_catalog_set(text, [ac, self._lamp()])
+            self.assertEqual(len(got), 1, text)
+            entry, prop, value = got[0]
+            self.assertEqual(entry.id, "m111")
+            self.assertEqual(prop.name, "target-temperature")
+            self.assertIn(value, (24, 26))
+
+    def test_mode_enum_word(self) -> None:
+        ac = self._ac()
+        got = infer_catalog_set("空调制热", [ac, self._lamp()])
+        self.assertEqual([(e.id, p.name, v) for e, p, v in got], [("m111", "mode", "1")])
+        got = infer_catalog_set("空调制冷", [ac, self._lamp()])
+        self.assertEqual(got[0][2], "0")
+
+    def test_no_temp_prop_no_hit(self) -> None:
+        got = infer_catalog_set("台灯调到三十度", [self._lamp()])
+        self.assertEqual(got, [])
+
+    def test_brightness_not_temperature(self) -> None:
+        ac = self._ac()
+        got = infer_catalog_set("亮度调到五十", [ac, self._lamp()])
+        self.assertEqual(got, [])
+
+    def test_unique_device_without_name(self) -> None:
+        ac = self._ac()
+        got = infer_catalog_set("调到二十度", [ac])
+        self.assertEqual(len(got), 1)
+
+    def test_prompt_desc_chinese_and_order(self) -> None:
+        ac = CatalogEntry(
+            id="m111",
+            name="投影仪",
+            model="m",
+            did="1",
+            props=[
+                CatalogProp(name="rec-one", siid=1, piid=1, type="uint", desc="循环定时参数1", writable=True, readable=False),
+                CatalogProp(name="on", siid=2, piid=1, type="bool", desc="Switch Status / 开关", writable=True, readable=True),
+                CatalogProp(name="electric-power", siid=2, piid=3, type="float", desc="Electric Power", writable=False, readable=True),
+            ],
+        )
+        text = catalog_prompt([ac])
+        self.assertIn("开关（on） 开/关", text)
+        # 只读且无中文描述的调试字段不进 prompt
+        self.assertNotIn("electric-power", text)
+        # 可写的排在只读前面
+        self.assertLess(text.index("开关（on）"), text.index("循环定时参数1"))
 
 
 if __name__ == "__main__":

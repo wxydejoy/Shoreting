@@ -13,9 +13,11 @@ API 从外面传进来，所以能离线测。
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from dock_hub.intents import parse_cn_int
 from dock_hub.mijia_bridge import _voice_device_id
 
 # 目录里每台设备最多列多少条，防止一台网关类设备把提示词撑爆
@@ -186,8 +188,21 @@ def build_catalog(
     return entries
 
 
+def _clean_desc(desc: str) -> str:
+    """spec 的描述常是「Switch Status / 开关」这种英前中后——取带中文的那段。"""
+    text = (desc or "").strip()
+    if not text:
+        return ""
+    if "/" in text:
+        parts = [p.strip() for p in text.split("/") if p.strip()]
+        chinese = [p for p in parts if re.search(r"[\u4e00-\u9fff]", p)]
+        if chinese:
+            text = chinese[-1]
+    return text[:16]
+
+
 def _prop_line(prop: CatalogProp) -> str | None:
-    label = prop.desc or prop.name
+    label = _clean_desc(prop.desc) or prop.name
     bits: list[str] = []
     if prop.writable:
         if prop.type == "bool":
@@ -206,21 +221,36 @@ def _prop_line(prop: CatalogProp) -> str | None:
     return text
 
 
+def _prompt_sort_key(prop: CatalogProp) -> tuple[int, int]:
+    """能写的排前面，其中开/关再排最前——大脑最常写的就是这些。"""
+    if prop.writable:
+        return (0, 0 if prop.type == "bool" else 1)
+    return (1, 0)
+
+
 def catalog_prompt(entries: list[CatalogEntry]) -> str:
     """目录 prompt 块。没有任何可控设备就返回空串，别浪费 token。"""
     lines: list[str] = []
     for entry in entries:
-        props = [
-            _prop_line(p)
-            for p in entry.props
-            if p.writable or p.readable
-        ]
-        props = [p for p in props if p][:MAX_PROPS_PER_DEVICE]
+        props = sorted(
+            (p for p in entry.props if p.writable or p.readable),
+            key=_prompt_sort_key,
+        )[:MAX_PROPS_PER_DEVICE]
+        # 只读属性若描述里没中文（纯调试字段），丢出 prompt
+        kept: list[str] = []
+        for prop in props:
+            text = _prop_line(prop)
+            if text is None:
+                continue
+            if not prop.writable and not re.search(r"[\u4e00-\u9fff]", _clean_desc(prop.desc) or ""):
+                continue
+            kept.append(text)
         actions = [
-            f"{a.desc or a.name}（{a.name}）" for a in entry.actions[:MAX_ACTIONS_PER_DEVICE]
+            f"{_clean_desc(a.desc) or a.name}（{a.name}）"
+            for a in entry.actions[:MAX_ACTIONS_PER_DEVICE]
         ]
         head = f"- {entry.name}（{entry.id}）"
-        segs = props + ([("动作: " + "、".join(actions))] if actions else [])
+        segs = kept + ([("动作: " + "、".join(actions))] if actions else [])
         if not segs:
             continue
         lines.append(head + "：" + "；".join(segs))
@@ -332,3 +362,86 @@ def _clamp(prop: CatalogProp, value: float) -> float:
     if prop.value_max is not None:
         value = min(prop.value_max, value)
     return value
+
+
+def value_list_desc(prop: CatalogProp, value: Any) -> str:
+    """枚举值 → 中文含义。没有就空串。"""
+    for item_value, desc in prop.value_list:
+        if str(item_value) == str(value):
+            return desc or ""
+    return ""
+
+
+# ---- 常规口令的确定性兜底 --------------------------------------------------
+# 「空调二十四度」「空调制热」「风速调大」这类高频指令不该赌模型自觉写
+# ACTION 行（Home Assistant Assist 也是这么分层的：简单口令确定性执行，
+# 复杂的才交给模型）。这里按目录数据匹配，猜不出就交回对话。
+
+_CAT_TEMP = re.compile(r"(?:调到|调成|设成|设为|设定|调至|开到)?\s*([0-9]{1,2}|[零〇一二两三四五六七八九十]+)\s*度")
+_TEMP_PROP_NAMES = ("target-temperature", "target_temperature", "temperature")
+
+
+def _temp_props(entry: CatalogEntry) -> list[CatalogProp]:
+    return [
+        prop
+        for prop in entry.props
+        if prop.writable
+        and (
+            prop.name in _TEMP_PROP_NAMES
+            or _clean_desc(prop.desc) in {"目标温度", "温度设定", "设定温度"}
+        )
+    ]
+
+
+def _entry_in_text(entry: CatalogEntry, text: str) -> bool:
+    return len(entry.name) >= 2 and entry.name in text
+
+
+def infer_catalog_set(
+    text: str,
+    entries: list[CatalogEntry],
+) -> list[tuple[CatalogEntry, CatalogProp, Any]]:
+    """原话 → [(设备, 属性, 值)]。认不出返回空表。
+
+    现在管两类：温度（N 度）与枚举词（制冷/制热、低中高风速这类，直接拿
+    value-list 的中文描述对原话）。设备点名了就只动那台；没点名但唯一命中
+    也算——家里通常就一台空调。
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return []
+    out: list[tuple[CatalogEntry, CatalogProp, Any]] = []
+    # 温度
+    if "亮度" not in stripped and "色温" not in stripped:
+        match = _CAT_TEMP.search(stripped)
+        if match:
+            value = parse_cn_int(match.group(1))
+            if value is not None:
+                candidates = [
+                    (entry, prop)
+                    for entry in entries
+                    for prop in _temp_props(entry)
+                ]
+                named = [
+                    (entry, prop)
+                    for entry, prop in candidates
+                    if _entry_in_text(entry, stripped)
+                    or ("空调" in stripped and "空调" in entry.name)
+                ]
+                picked = named or (candidates if len(candidates) == 1 else [])
+                for entry, prop in picked[:1]:
+                    out.append((entry, prop, value))
+    # 枚举词：拿 value-list 的中文描述对原话
+    for entry in entries:
+        if not _entry_in_text(entry, stripped) and len(entries) > 1:
+            continue
+        for prop in entry.props:
+            if not prop.writable or not prop.value_list:
+                continue
+            if prop in [p for e, p, _v in out]:
+                continue
+            for value, desc in prop.value_list:
+                if desc and len(desc) <= 4 and desc in stripped:
+                    out.append((entry, prop, value))
+                    break
+    return out
