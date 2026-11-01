@@ -418,11 +418,21 @@ class ChatFlowMixin:
             return None
         with self._lock:
             self._speaking = True
+            # 估个时长随快照发给手机（见 set_speaking 注释）
+            self._speaking_left_until = time.monotonic() + min(
+                len(spoken) * 0.26 + 2.5,
+                30.0,
+            )
         try:
             wav = self.tts.speak(spoken, turn)
         finally:
-            with self._lock:
-                self._speaking = False
+            # play_only（cue 完即返回）时不能在这儿摘旗标——真正的播放才
+            # 刚开始，交给上面的 ETA 到点自然过期；deliver 模式拿到成品
+            # wav 才算真的说完了
+            if self.tts.deliver:
+                with self._lock:
+                    self._speaking = False
+                    self._speaking_left_until = 0.0
         if not self.tts.deliver or not wav:
             return None
         self.keep_clip(turn, wav)
@@ -449,7 +459,7 @@ class ChatFlowMixin:
         self.reads.cancel_all()
         with self._lock:
             self._seq += 1
-            self._speaking = True
+        self.set_speaking(True)
         self.tts.stop()
 
     def cue_story_sentence(self, text: str) -> bool:
@@ -457,12 +467,17 @@ class ChatFlowMixin:
             return False
         with self._lock:
             seq = self._seq
-        return bool(self._cue_sentence(text, "story", seq))
+        ok = bool(self._cue_sentence(text, "story", seq))
+        if ok:
+            # 每句都给抑制窗续 30s：故事多长说不准，旗标跟着 cue 走，
+            # 念完最后一句后 30s 自然过期
+            self.set_speaking(True)
+        return ok
 
     def stop_story_audio(self) -> None:
         with self._lock:
             self._seq += 1
-            self._speaking = False
+        self.set_speaking(False)
         self.tts.stop()
 
     def stop(self) -> dict[str, Any]:
@@ -569,9 +584,23 @@ class ChatFlowMixin:
         with self._lock:
             return seq == self._seq
 
-    def set_speaking(self, speaking: bool) -> None:
+    def set_speaking(self, speaking: bool, eta_sec: float | None = None) -> None:
+        """说话旗标 + 预计还要说多久。
+
+        TTS 是「cue 完即返回」的异步播放：旗标要是只亮几毫秒，手机永远
+        看不到「她在说」，B2 抑制和 F2 打断的门就都废了。所以说话时必须
+        把预估时长一起写进 _speaking_left_until，快照按剩余毫秒发出去，
+        到点自然过期。不报时长的路径（朗读故事）按 30s 保活、由下一次
+        cue 续命。
+        """
         with self._lock:
             self._speaking = speaking
+            if not speaking:
+                self._speaking_left_until = 0.0
+            else:
+                self._speaking_left_until = time.monotonic() + (
+                    eta_sec if eta_sec is not None else 30.0
+                )
 
     def keep_clip(self, ident: str, wav: bytes) -> None:
         with self._lock:

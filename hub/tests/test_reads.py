@@ -73,8 +73,9 @@ class FakeHost:
     def still_current(self, seq: int) -> bool:
         return seq == self.seq
 
-    def set_speaking(self, speaking: bool) -> None:
+    def set_speaking(self, speaking: bool, eta_sec: float | None = None) -> None:
         self.speaking = speaking
+        self.eta_sec = eta_sec
 
     def keep_clip(self, ident: str, wav: bytes) -> None:
         self.clips[ident] = wav
@@ -142,7 +143,11 @@ class ReadJobsTest(unittest.TestCase):
         self.assertEqual([text for _, text in self.host.cued], ["第一句。", "第二句。"])
         self.assertGreaterEqual(self.host.stopped, 1)
         self.assertFalse((self.dir / "abc123.wav").exists())
-        self.assertFalse(self.host.speaking, "念完要把字幕状态放回去")
+        # 播放发生在 TTS 服务器侧（cue 完即返回），旗标要按整篇 ETA 持有——
+        # 立刻摘掉的话，手机永远看不到「她在说」（B2 抑制 / F2 打断全废）
+        self.assertTrue(self.host.speaking, "play 模式念完旗标要由 ETA 持有")
+        self.assertIsNotNone(self.host.eta_sec)
+        self.assertGreater(self.host.eta_sec, 0)
 
     def test_job_public_hides_internals(self) -> None:
         job = self._submit()

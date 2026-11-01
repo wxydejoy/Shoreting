@@ -220,6 +220,27 @@ def _fake_ollama(content: str = "晚上好，漂泊者。", wav: bytes | None = 
 
 
 class CompanionLogicTest(unittest.TestCase):
+    def test_snapshot_reports_speaking_left_ms(self) -> None:
+        # F1/F2 的关键：快照带「还要说多久」，手机抑制/打断窗按剩余续。
+        # TTS 是 cue 完即返回的异步播放，旗标必须按 ETA 持有。
+        comp = Companion(CompanionConfig(enabled=True))
+        snap = comp.snapshot()
+        self.assertFalse(snap["speaking"])
+        self.assertEqual(snap["speaking_left_ms"], 0)
+        comp.set_speaking(True, eta_sec=1.0)
+        snap = comp.snapshot()
+        self.assertTrue(snap["speaking"])
+        self.assertGreater(snap["speaking_left_ms"], 0)
+        self.assertLessEqual(snap["speaking_left_ms"], 1000)
+        # ETA 过期＝她说完了，旗标不许再立着
+        with comp._lock:
+            comp._speaking_left_until = time.monotonic() - 0.1
+        snap = comp.snapshot()
+        self.assertFalse(snap["speaking"])
+        self.assertEqual(snap["speaking_left_ms"], 0)
+        comp.set_speaking(False)
+        self.assertFalse(comp.snapshot()["speaking"])
+
     def test_strips_think_and_action(self) -> None:
         raw = "<think>long</think>\n晚上好。\nACTION: lamp.on\n还早。"
         self.assertEqual(_clean_reply(raw), "晚上好。\n还早。")
