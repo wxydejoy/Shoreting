@@ -1636,6 +1636,18 @@ components:
           type: boolean
         speaking:
           type: boolean
+        speaking_left_ms:
+          type: integer
+          description: >-
+            Milliseconds left in the current utterance. 0 means unknown
+            (long-form playback); the phone keeps the wake-word suppression
+            window alive for 30 s at a time.
+        reading:
+          type: boolean
+          description: >-
+            Reading a whole book aloud (F10). A long monologue, not a reply:
+            the phone raises the barge-in gate and drops long transcripts as
+            self-echo (B2). Defaults to false.
         timer:
           nullable: true
           $ref: "#/components/schemas/TimerStatus"

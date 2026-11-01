@@ -77,6 +77,9 @@ from dock_hub.companion_support import (
 
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
+# 朗读旗标的保活：每念一句续一次，末句念完后这么久自然过期。
+# 比 speaking 的 30s 保活宽一档——小说句子长，句间还有合成耗时。
+READING_KEEPALIVE_SEC = 60.0
 
 # 自闻/噪音转出来的无实义音节。真进大脑她就回「嗯。」，出喇叭又被麦收走，
 # 转出来还是这种东西——「一直嗯」的自激就是这么烧起来的。
@@ -548,6 +551,7 @@ class ChatFlowMixin:
         self.reads.cancel_all()
         with self._lock:
             self._seq += 1
+        self.set_reading(True)
         self.set_speaking(True)
         self.tts.stop()
 
@@ -561,12 +565,14 @@ class ChatFlowMixin:
             # 每句都给抑制窗续 30s：故事多长说不准，旗标跟着 cue 走，
             # 念完最后一句后 30s 自然过期
             self.set_speaking(True)
+            self.set_reading(True)
         return ok
 
     def stop_story_audio(self) -> None:
         with self._lock:
             self._seq += 1
         self.set_speaking(False)
+        self.set_reading(False)
         self.tts.stop()
 
     def stop(self) -> dict[str, Any]:
@@ -582,6 +588,7 @@ class ChatFlowMixin:
             self._turn_cancel.set()
             self._dim_gen += 1
         self.reads.cancel_all()
+        self.set_reading(False)
         self.tts.stop()
         _latency("-", "stop")
         return {"ok": True}
@@ -707,6 +714,13 @@ class ChatFlowMixin:
                 self._speaking_left_until = time.monotonic() + (
                     eta_sec if eta_sec is not None else 30.0
                 )
+
+    def set_reading(self, on: bool) -> None:
+        """整本小说在念（F10）：手机端据此把「插话打断」的门再抬一档，
+        并对长句做回声过滤——念书时最响的那个人是她自己（B2）。"""
+        with self._lock:
+            self._reading = on
+            self._reading_until = time.monotonic() + READING_KEEPALIVE_SEC if on else 0.0
 
     def keep_clip(self, ident: str, wav: bytes) -> None:
         with self._lock:

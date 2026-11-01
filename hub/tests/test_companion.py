@@ -241,6 +241,21 @@ class CompanionLogicTest(unittest.TestCase):
         comp.set_speaking(False)
         self.assertFalse(comp.snapshot()["speaking"])
 
+    def test_reading_flag_marks_a_long_story_not_a_reply(self) -> None:
+        # B2：念小说是长任务，和「回你一句」分开报——手机端据此把插话
+        # 门再抬一档，并对长句做回声过滤（她自己的声音最响）
+        comp = Companion(CompanionConfig(enabled=True))
+        self.assertFalse(comp.snapshot()["reading"])
+        comp.begin_story_audio()
+        self.assertTrue(comp.snapshot()["reading"])
+        comp.stop_story_audio()
+        self.assertFalse(comp.snapshot()["reading"])
+        # 旗标靠每句续命；续不上（进程被强杀之类的遗留路径）就不算朗读
+        comp.set_reading(True)
+        with comp._lock:
+            comp._reading_until = time.monotonic() - 0.1
+        self.assertFalse(comp.snapshot()["reading"])
+
     def test_reply_carries_listen_policy(self) -> None:
         # F1 裁决权在大脑：问句开 20s 等回答，陈述句 8s，随回复下发
         runs: list[tuple[str, bool]] = []

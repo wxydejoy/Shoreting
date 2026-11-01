@@ -171,4 +171,27 @@ class ConversationBusTest {
         assertFalse(ConversationBus.speaking(now + 30_000))
         ConversationBus.close()
     }
+
+    @Test
+    fun readingFlagTracksHubSnapshots() {
+        // B2：hub 报 reading=true 时续一段朗读旗标（和抑制窗同节奏），
+        // 断了更新自然过期——过期之后一次偏长的转写不再当回声丢
+        ConversationBus.close()
+        assertFalse(ConversationBus.reading(0))
+        var now = 0L
+        repeat(3) {
+            now += 25_800L
+            ConversationBus.readingUntil(now + 30_000)
+            assertTrue(ConversationBus.reading(now + 1))
+        }
+        assertFalse(ConversationBus.reading(now + 30_000))
+        ConversationBus.close()
+    }
+
+    @Test
+    fun readingSurvivesClose() {
+        ConversationBus.readingUntil(9_000)
+        ConversationBus.close()
+        assertFalse(ConversationBus.reading(1_000))
+    }
 }

@@ -1611,6 +1611,11 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                     Log.i("DockVM", "hub speaking: suppress ${keepMs}ms (left=$leftMs)")
                     ConversationBus.suppressUntil(SystemClock.elapsedRealtime() + keepMs)
                 }
+                // B2：hub 说「正在念整本小说」。这跟「回你一句」分开记——念书
+                // 期间插话门要更高，转写偏长的当回声丢掉（EchoGuard）。
+                if (companion?.reading == true) {
+                    ConversationBus.readingUntil(SystemClock.elapsedRealtime() + SPEAK_SUPPRESS_MS)
+                }
                 _ui.update {
                     it.copy(
                         snapshot = snapshot,

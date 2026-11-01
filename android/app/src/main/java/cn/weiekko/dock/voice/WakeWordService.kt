@@ -483,12 +483,25 @@ class WakeWordService : Service() {
                     val speakerJob = startSpeakerTask(turnGate.heard || gate.heard)
                     val finalText = finishUtterance(recognizer, stream, lastEmitted)
                     val speaker = awaitSpeaker(speakerJob)
-                    emitTranscript(finalText, settled = true, speaker = speaker)
+                    // B2：念小说时收到几十字的长句，九成是她自己的声音绕回麦克风。
+                    // 丢掉整句（只报一条空转，让主屏把「在听」收回去），别喂给大脑。
+                    val echo = EchoGuard.isEcho(ConversationBus.reading(now), finalText)
+                    if (echo) {
+                        Log.i(
+                            TAG,
+                            "asr echo_drop chars=${EchoGuard.spokenChars(finalText)} " +
+                                "reading=true",
+                        )
+                        emitTranscript("", settled = true, speaker = speaker)
+                    } else {
+                        emitTranscript(finalText, settled = true, speaker = speaker)
+                    }
                     HelmLatency.log(
                         currentTurn,
                         "asr_end",
                         "ms=$processedMs reason=$reason chars=${finalText.length} " +
-                            "heard=${if (turnGate.heard || gate.heard) 1 else 0}",
+                            "heard=${if (turnGate.heard || gate.heard) 1 else 0}" +
+                            (if (echo) " echo=1" else ""),
                     )
                     lastDetectAt = SystemClock.elapsedRealtime()
                     spotter.reset(wakeStream)
@@ -508,11 +521,16 @@ class WakeWordService : Service() {
                     vadMs = 0L
                 }
                 // 插话打断（F2）：她正在说时，明显的人声（更响、持续更久）直接抢过来。
-                // 阈值比窗口内的高：免得她自己的声音从 Mini 喇叭飘过来就把自己打断
+                // 阈值比窗口内的高：免得她自己的声音从 Mini 喇叭飘过来就把自己打断。
+                // 念整本小说时再抬一档（B2）：她那会儿是一句接一句地大声念。
                 if (!capturing && ConversationBus.speaking(now)) {
-                    if (audioRms(samples) >= BARGE_RMS) bargeMs += dtMs else bargeMs = 0L
-                    if (bargeMs >= BARGE_TRIGGER_MS) {
+                    val reading = ConversationBus.reading(now)
+                    val gateRms = if (reading) BARGE_READING_RMS else BARGE_RMS
+                    val gateMs = if (reading) BARGE_READING_TRIGGER_MS else BARGE_TRIGGER_MS
+                    if (audioRms(samples) >= gateRms) bargeMs += dtMs else bargeMs = 0L
+                    if (bargeMs >= gateMs) {
                         bargeMs = 0L
+                        Log.i(TAG, "barge in (reading=$reading)")
                         onHeardSpeech(barge = true)
                     }
                 } else {
@@ -891,6 +909,11 @@ class WakeWordService : Service() {
         private const val VAD_RMS = 0.080f
         private const val BARGE_TRIGGER_MS = 800L
         private const val BARGE_RMS = 0.112f
+        // 朗读（F10 整本小说）时她自己在连续大声念，喇叭声从桌面绕回麦克风
+        // 足够把上面那道门顶开——每 20 秒就是一条几十字的「用户输入」。
+        // 念书期间只认更大声、更久的插话，剩下的交给 EchoGuard 按字数丢。
+        private const val BARGE_READING_TRIGGER_MS = 1_400L
+        private const val BARGE_READING_RMS = 0.24f
 
         /** AudioRecord 内置缓冲：400ms 的 16bit 单声道。 */
         private const val MIC_BUFFER_MS = 400

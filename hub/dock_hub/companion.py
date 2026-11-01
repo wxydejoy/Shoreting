@@ -184,6 +184,10 @@ class Companion(ChatFlowMixin, DeskMixin, LlmMixin):
         # 抑制窗按剩余时长续（B2），而不是见到 speaking 就一刀切 30s——
         # 不然 F1 的免唤醒对话窗（8–15s）永远开不起来
         self._speaking_left_until = 0.0
+        # 整本小说正在念（F10）：这是长任务，和「回你一句」不是一回事——
+        # 手机端据此把插话打断的高门再抬一档，并对长句做回声过滤（B2）
+        self._reading = False
+        self._reading_until = 0.0
         self._seq = 0
         self._lock = threading.Lock()
         # 在飞那一轮的取消令牌：新一轮进来就 set，旧的流式循环立刻收手
@@ -233,6 +237,8 @@ class Companion(ChatFlowMixin, DeskMixin, LlmMixin):
         with self._lock:
             self._speaking = False
             self._speaking_left_until = 0.0
+            self._reading = False
+            self._reading_until = 0.0
             self._seq += 1
             self._dim_gen += 1
             self._clips.clear()
@@ -284,6 +290,8 @@ class Companion(ChatFlowMixin, DeskMixin, LlmMixin):
         with self._lock:
             speaking = self._speaking
             left_until = self._speaking_left_until
+            reading = self._reading
+            reading_until = self._reading_until
         now = time.monotonic()
         # 旗标立着但 ETA 已过期（遗留路径）＝她其实已经说完了
         effective = speaking and left_until > now
@@ -293,6 +301,9 @@ class Companion(ChatFlowMixin, DeskMixin, LlmMixin):
             "voice": self.voice(),
             "speaking": effective,
             "speaking_left_ms": left_ms,
+            # 整本小说在念（F10）：手机端拿它区分「回你一句」和「念书」，
+            # 后者不按普通插话处理——那是她自己的声音（B2）
+            "reading": reading and reading_until > now,
             "timer": self.timers.snapshot(),
         }
         return body

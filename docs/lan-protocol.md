@@ -275,6 +275,8 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `ready` | 是 | 大脑（LLM）现在能否回答。Ollama 守护进程活着则为 `true` |
 | `voice` | 是 | Mini TTS `/health` 探活且 `ready`。没配 `tts.base_url` 或连不上则为 `false` |
 | `speaking` | 是 | Hub 正在向 TTS 提交或拉取音频时为 `true`。`POST /v1/companion/stop` 后应变回 `false` |
+| `speaking_left_ms` | 否 | 这一轮还要说多久（毫秒）。`0` = 没报（长任务），手机按 30 秒保活续抑制窗 |
+| `reading` | 否 | 正在念整本小说（F10）时为 `true`。这是**长任务**，不是「回你一句」——手机据此把插话打断的门槛抬高一档，并对偏长的转写做回声过滤（B2：念书时最响的是她自己）。缺省 `false` |
 | `timer` | 是 | 番茄钟 / 正计时状态（F9），没有就是 `null`。见下 |
 
 `timer` 两种形态：

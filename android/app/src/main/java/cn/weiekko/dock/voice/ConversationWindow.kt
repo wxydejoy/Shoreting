@@ -92,6 +92,9 @@ object ConversationBus {
     @Volatile
     private var suppressUntilAt = 0L
 
+    @Volatile
+    private var readingUntilAt = 0L
+
     fun openUntil(atMs: Long) {
         if (atMs > openUntilAt) openUntilAt = atMs
     }
@@ -100,9 +103,17 @@ object ConversationBus {
         if (atMs > suppressUntilAt) suppressUntilAt = atMs
     }
 
+    /** 整本小说在念（hub 报 reading）：随快照续，念完自然过期。 */
+    fun readingUntil(atMs: Long) {
+        if (atMs > readingUntilAt) readingUntilAt = atMs
+    }
+
+    fun reading(nowMs: Long): Boolean = nowMs < readingUntilAt
+
     fun close() {
         openUntilAt = 0L
         suppressUntilAt = 0L
+        readingUntilAt = 0L
     }
 
     fun bypass(nowMs: Long): Boolean = nowMs < openUntilAt && nowMs >= suppressUntilAt

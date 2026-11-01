@@ -316,6 +316,8 @@ data class CompanionStatus(
     val speaking: Boolean = false,
     /** 她这轮还要说多久（毫秒）。0 = 没报（朗读中的长任务走老的 30s 保活）。 */
     val speakingLeftMs: Long = 0,
+    /** 正在念整本小说（F10）：长任务，不是「回你一句」——B2 回声过滤靠它。 */
+    val reading: Boolean = false,
     val timer: TimerStatus? = null,
 )
 
