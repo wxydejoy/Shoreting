@@ -32,6 +32,17 @@ internal class ConversationWindow(
         return wait
     }
 
+    /**
+     * 大脑裁决版：等多久、开多久都由 Hub 下发（listen.wait_ms/open_ms），
+     * 手机不再自己猜问句和语速。返回 wait 供 suppress 窗用。
+     */
+    fun onReplyFor(waitMs: Long, openMs: Long, nowMs: Long): Long {
+        startAt = nowMs + waitMs
+        until = startAt + openMs
+        misses = 0
+        return waitMs
+    }
+
     /** 一轮听完没有有效输入（空转 / 没听清）。窗口没开就当没这回事。 */
     fun onMiss(nowMs: Long) {
         if (!listening(nowMs)) return

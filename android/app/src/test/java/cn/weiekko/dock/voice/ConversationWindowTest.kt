@@ -80,6 +80,24 @@ class ConversationWindowTest {
         assertEquals(2_800L, ConversationWindow.speakMs(5))
         assertEquals(20_000L, ConversationWindow.speakMs(200))
     }
+
+    @Test
+    fun hubPolicyOverridesLocalHeuristic() {
+        // 大脑裁决版：等多久、开多久直接照办，不再看问句正则
+        val wait = window.onReplyFor(waitMs = 3_300L, openMs = 20_000L, nowMs = 1_000)
+        assertEquals(3_300L, wait)
+        assertFalse(window.listening(1_000 + 3_300L - 1))
+        assertTrue(window.listening(1_000 + 3_300L))
+        assertTrue(window.listening(1_000 + 3_300L + 20_000L - 1))
+        assertFalse(window.listening(1_000 + 3_300L + 20_000L))
+    }
+
+    @Test
+    fun hubPolicyShortStatementWindow() {
+        window.onReplyFor(waitMs = 2_000L, openMs = 8_000L, nowMs = 0)
+        assertTrue(window.listening(2_000L))
+        assertFalse(window.listening(2_000L + 8_000L))
+    }
 }
 
 class ConversationBusTest {

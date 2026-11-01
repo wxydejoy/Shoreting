@@ -1175,7 +1175,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     noteSubtitle(turn, reply.text.length)
                     holdSubtitle()
-                    openConversation(reply.text)
+                    openConversation(reply.text, reply.listenWaitMs, reply.listenOpenMs)
                 },
                 onFailure = { error ->
                     if (error is CancellationException) throw error
@@ -1192,10 +1192,20 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun openConversation(reply: String) {
+    /**
+     * 开免唤醒窗（F1）。开多久听大脑的：回复里带 listen 策略就照办
+     * （wait=她还要说多久，open=说完后开窗多久）；老 hub 没这字段才退回
+     * 本地启发式（问句 15s/陈述 8s、字数估时）。
+     */
+    private fun openConversation(reply: String, waitMsOverride: Long? = null, openMsOverride: Long? = null) {
         if (!_ui.value.wakeWordEnabled) return
         val now = HelmLatency.now()
-        val waitMs = conversationWindow.onReply(reply, now)
+        val waitMs = if (waitMsOverride != null && openMsOverride != null && openMsOverride > 0) {
+            conversationWindow.onReplyFor(waitMsOverride.coerceIn(0L, 30_000L), openMsOverride.coerceIn(0L, 30_000L), now)
+            waitMsOverride.coerceIn(0L, 30_000L)
+        } else {
+            conversationWindow.onReply(reply, now)
+        }
         val until = conversationWindow.listeningUntil()
         ConversationBus.suppressUntil(now + waitMs)
         ConversationBus.openUntil(until)

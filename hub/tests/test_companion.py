@@ -241,6 +241,22 @@ class CompanionLogicTest(unittest.TestCase):
         comp.set_speaking(False)
         self.assertFalse(comp.snapshot()["speaking"])
 
+    def test_reply_carries_listen_policy(self) -> None:
+        # F1 裁决权在大脑：问句开 20s 等回答，陈述句 8s，随回复下发
+        runs: list[tuple[str, bool]] = []
+
+        def run(ident: str, on: bool, **_: object) -> None:
+            runs.append((ident, on))
+
+        comp = Companion(CompanionConfig(enabled=True))
+        comp.set_skills([{"id": "lamp", "name": "台灯", "kind": "toggle"}], run)
+        asked = comp.chat({"text": "把它关掉", "id": "t1"})
+        listen = asked.get("listen") or {}
+        self.assertEqual(listen.get("open_ms"), 20_000)  # 「要关哪个？」是问句
+        self.assertGreater(listen.get("wait_ms", 0), 0)
+        done = comp.chat({"text": "台灯", "id": "t2"})
+        self.assertEqual(done["listen"]["open_ms"], 8_000)  # 「好。」是陈述句
+
     def test_filler_input_is_silent(self) -> None:
         # 自闻/噪音转出来的「嗯」不进大脑、不出声、不开新一轮——
         # 「一直嗯」自激（喇叭出声→麦收走→乱码→她回「嗯。」→循环）的断路器

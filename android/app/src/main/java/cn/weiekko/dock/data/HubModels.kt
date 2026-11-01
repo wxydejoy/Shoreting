@@ -341,6 +341,9 @@ data class CompanionChatRequest(
 data class CompanionChatResponse(
     val text: String,
     val audioId: String? = null,
+    /** 大脑裁决的免唤醒开麦策略：wait=她还要说多久，open=说完后开窗多久。缺省=旧 hub，手机走自己的启发式。 */
+    val listenWaitMs: Long? = null,
+    val listenOpenMs: Long? = null,
 )
 
 /** 她记得的事（F28）：条目可见、逐条可删，key 是删除句柄。 */

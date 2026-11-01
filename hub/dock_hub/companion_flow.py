@@ -86,6 +86,21 @@ def _is_filler(text: str) -> bool:
     return not t or t in _FILLER_WORDS
 
 
+# F1 免唤醒窗口的裁决权在大脑：回复是谁生成的谁最清楚「要不要等回答、
+# 还要说多久」。手机只执行下发的策略，不再自己拿问句正则和字数估时猜。
+# 问句开 20s（留足读字幕、想答案的时间），陈述句 8s；wait_ms 是她还要
+# 说的估时，说完才开窗。等模型升级后可以让 LLM 直接给这个判定。
+QUESTION_WINDOW_MS = 20_000
+STATEMENT_WINDOW_MS = 8_000
+
+
+def listen_policy(text: str) -> dict[str, int]:
+    t = (text or "").strip()
+    wait = min(len(t) * 260 + 1500, 20_000)
+    open_ms = QUESTION_WINDOW_MS if re.search(r"[？?]", t) else STATEMENT_WINDOW_MS
+    return {"wait_ms": wait, "open_ms": open_ms}
+
+
 class ChatFlowMixin:
     """混合进 Companion：一轮对话的流程与出声的缝。"""
 
@@ -315,6 +330,7 @@ class ChatFlowMixin:
     ) -> dict[str, Any]:
         self._ready = True
         self._ready_at = time.monotonic()
+        listen = listen_policy(spoken)
         audio_id = None
         cue_as_we_go = self.tts.configured and not self.tts.deliver
         if not cue_as_we_go:
@@ -322,7 +338,7 @@ class ChatFlowMixin:
                 if seq != self._seq:
                     _latency(turn, "barge_in", ms=_ms(started))
                     self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
-                    return {"text": spoken, "audio_id": None}
+                    return {"text": spoken, "audio_id": None, "listen": listen}
             audio_id = self._maybe_speak(spoken, turn)
         else:
             with self._lock:
@@ -334,7 +350,7 @@ class ChatFlowMixin:
         _latency(turn, "chat_total", ms=_ms(started), audio=1 if audio_id else 0)
         self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
         self._remember(user, spoken)
-        return {"text": spoken, "audio_id": audio_id}
+        return {"text": spoken, "audio_id": audio_id, "listen": listen}
 
     def _record_turn(
         self,
