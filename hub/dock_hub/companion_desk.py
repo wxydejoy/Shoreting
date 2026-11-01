@@ -37,7 +37,7 @@ from dock_hub.intents import (
     parse_volume_action,
     resolve_skill,
 )
-from dock_hub.mijia_catalog import infer_catalog_set, value_list_desc
+from dock_hub.mijia_catalog import entries_mentioned, infer_catalog_set, value_list_desc
 from dock_hub.notify import parse_relay
 from dock_hub.persona import speak_timer
 from dock_hub.timers import speak_stopwatch_result
@@ -192,12 +192,15 @@ class DeskMixin:
         if seconds is not None:
             spoken = self._arm_timer(seconds)
             return spoken, [{"id": "timer", "sec": seconds, "ok": True}]
-        media_act = infer_media(text)
+        # 点名了米家目录里的设备（洗衣机/投影仪…）时，桌面口令（暂停/下一首/
+        # 音量）不抢——「洗衣机暂停」不是叫电脑停歌。
+        catalog_named = self._catalog_named(text)
+        media_act = None if catalog_named else infer_media(text)
         if media_act:
             spoken = self._run_media(media_act, turn)
             ok = spoken not in {"这次没动成。", "播放控制关着。", "这台电脑还不能控播放。"}
             return spoken, [{"id": "media", "action": media_act, "ok": ok}]
-        volume_act = infer_volume(text)
+        volume_act = None if catalog_named else infer_volume(text)
         if volume_act:
             spoken = self._run_volume(volume_act, turn)
             ok = spoken not in {"这次没动成。", "音量我还调不了。"}
@@ -207,7 +210,7 @@ class DeskMixin:
             spoken = self._run_noise(noise_act, turn)
             ok = spoken not in _NOISE_FAIL_SPOKEN
             return spoken, [{"id": "noise", **noise_act, "ok": ok}]
-        music_act = infer_music(text)
+        music_act = None if catalog_named else infer_music(text)
         if music_act:
             spoken = self._run_music(music_act, turn)
             ok = spoken not in _NOISE_FAIL_SPOKEN
@@ -431,6 +434,16 @@ class DeskMixin:
             run_skill=self._run_skill,
             note=_latency,
         )
+
+    def _catalog_named(self, text: str) -> bool:
+        """原话里点名了米家目录里的哪台设备。目录没配就是 False。"""
+        get_entries = self._world.get("catalog_entries")
+        if not callable(get_entries):
+            return False
+        entries = get_entries()
+        if not entries:
+            return False
+        return bool(entries_mentioned(entries, text))
 
     def _run_catalog_set(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         """米家目录兜底：「空调二十四度」「空调制热」这类高频口令不赌模型。
