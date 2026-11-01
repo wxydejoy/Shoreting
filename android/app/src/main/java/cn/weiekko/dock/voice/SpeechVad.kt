@@ -62,7 +62,7 @@ internal class SpeechVad private constructor(private val vad: Vad) {
     companion object {
         private const val TAG = "SpeechVad"
         private const val MODEL = "vad/ten-vad.onnx"
-        private const val THRESHOLD = 0.42f
+        private const val THRESHOLD = 0.38f
         private const val MIN_SILENCE_S = 0.7f
         private const val MIN_SPEECH_S = 0.25f
         private const val MAX_SPEECH_S = 20f

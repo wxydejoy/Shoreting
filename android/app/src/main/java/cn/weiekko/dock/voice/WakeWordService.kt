@@ -233,7 +233,7 @@ class WakeWordService : Service() {
                 val n = mic.read(buffer, 0, buffer.size)
                 if (n > 0) {
                     faults.data()
-                    // 数字增益（≈+9.5dB）：摆件离人一米开外，拾音电平低，
+                    // 数字增益（≈+12dB）：摆件离人一米开外，拾音电平低，
                     // KWS/ASR/VAD 三条链对整个低电平信号的概率都上不去——
                     // 只压唤醒阈值没用（实测 -16dB 照样不醒），先把信号抬起来。
                     // 靠近喊到削波就钳到满幅， distortion 一点点，换来远场能用。
@@ -883,17 +883,17 @@ class WakeWordService : Service() {
         private const val KWS_TRACE_MS = 5_000L
         private const val CHIME_SKIP_MS = 500L
         private const val VAD_TRIGGER_MS = 300L
-        // RMS 门按 MIC_GAIN 之前的原始电平标定：0.030/0.045 × 3 增益，
-        // 免唤醒触发与打断的行为保持增益前不变
-        private const val VAD_RMS = 0.090f
+        // RMS 门按 MIC_GAIN 之前的原始电平标定（×4 增益）：
+        // 0.020/0.028 × 4，比 ×3 时代整体下探一档——极小声也要能进对话/打断
+        private const val VAD_RMS = 0.080f
         private const val BARGE_TRIGGER_MS = 800L
-        private const val BARGE_RMS = 0.135f
+        private const val BARGE_RMS = 0.112f
 
         /** AudioRecord 内置缓冲：400ms 的 16bit 单声道。 */
         private const val MIC_BUFFER_MS = 400
 
-        /** 采集后的数字增益（×3 ≈ +9.5dB），远场小声的唤醒/识别/VAD 全靠它。 */
-        private const val MIC_GAIN = 3.0f
+        /** 采集后的数字增益（×4 ≈ +12dB），远场小声的唤醒/识别/VAD 全靠它。 */
+        private const val MIC_GAIN = 4.0f
 
         /** 队列最多存 2s 音频；再慢就丢最旧的，别把采集线程堵住。 */
         private const val QUEUE_CHUNKS = 40
