@@ -174,6 +174,10 @@ class MentionsTest(unittest.TestCase):
         ac = CatalogEntry(id="m-111", name="空调伴侣", model="m", did="111")
         self.assertEqual(entries_mentioned([ac], "空调伴侣多少度"), [ac])
         self.assertEqual(entries_mentioned([ac], "灯开着吗"), [])
+        washer = CatalogEntry(id="m-2", name="米家洗衣机", model="m", did="2")
+        self.assertEqual(entries_mentioned([washer], "帮我把洗衣机暂停"), [washer])
+        cam = CatalogEntry(id="m-3", name="小米智能摄像机3 云台版", model="m", did="3")
+        self.assertEqual(entries_mentioned([cam], "看看摄像机"), [cam])
 
     def test_cap_read_devices(self) -> None:
         entries = [

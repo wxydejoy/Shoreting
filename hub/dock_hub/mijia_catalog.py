@@ -267,6 +267,31 @@ def catalog_prompt(entries: list[CatalogEntry]) -> str:
     return "\n".join(doc)
 
 
+_BRAND_PREFIXES = ("米家", "小米", "智能", "Xiaomi", "MIJIA")
+
+
+def _name_needles(entry: CatalogEntry) -> list[str]:
+    """设备名可能被怎么叫：全名、剥掉品牌前缀的短名、连续中文段的短后缀。
+
+    「米家洗衣机」会被叫成「洗衣机」，「小米智能摄像机3 云台版」会被叫成
+    「摄像机」——都靠后缀捞。短后缀至少 3 字，避免「空调」这种全名以外的
+    碎片乱命中。
+    """
+    name = entry.name.strip()
+    needles = [name]
+    for prefix in _BRAND_PREFIXES:
+        if name.startswith(prefix) and len(name) - len(prefix) >= 2:
+            needles.append(name[len(prefix):])
+    for run in re.findall(r"[\u4e00-\u9fff]{2,}", name):
+        if len(run) >= 3:
+            needles.extend(run[i:] for i in range(len(run) - 2))
+    unique: list[str] = []
+    for needle in needles:
+        if len(needle) >= 2 and needle not in unique:
+            unique.append(needle)
+    return unique
+
+
 def entries_mentioned(entries: list[CatalogEntry], text: str) -> list[CatalogEntry]:
     """原话里点名的设备。名字 >=2 字才算命中，别让「一」这种单字瞎匹配。"""
     stripped = (text or "").strip()
@@ -275,8 +300,7 @@ def entries_mentioned(entries: list[CatalogEntry], text: str) -> list[CatalogEnt
     lowered = stripped.lower()
     hits: list[CatalogEntry] = []
     for entry in entries:
-        needle = entry.name.strip()
-        if len(needle) >= 2 and needle in stripped:
+        if any(needle in stripped for needle in _name_needles(entry)):
             hits.append(entry)
             continue
         if len(entry.id) >= 3 and entry.id.lower() in lowered:
