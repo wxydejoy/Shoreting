@@ -40,6 +40,15 @@ class BuildMessagesTest(unittest.TestCase):
         # F6：中英混着说、带口音，她听意思不挑发音
         self.assertIn("中英混着说", DEFAULT_PERSONA)
 
+    def test_persona_has_no_unfillable_time_template(self) -> None:
+        # 「拿到的是几时之前的信息」这种模板填不上（模型不知道几时），
+        # 曾经被它原样抄出来当回复。人设里不许再出现没有数据来源的占位话术
+        self.assertNotIn("几时之前", DEFAULT_PERSONA)
+        # 预测/建议类题必须给实质内容，不许拿实时数据躲
+        self.assertIn("不许拿「没有实时数据」躲", DEFAULT_PERSONA)
+        # 现在的时间由 chat 的 facts 注入（companion_flow），人设只说怎么用
+        self.assertIn("现在的时间", DEFAULT_PERSONA)
+
     def test_custom_persona_wins(self) -> None:
         messages = build_messages("在吗", "", persona="你是别的助手。")
         self.assertEqual(messages[0]["content"], "你是别的助手。")

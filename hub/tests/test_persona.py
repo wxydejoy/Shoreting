@@ -36,6 +36,7 @@ from dock_hub.persona import (
     speak_temp,
     speak_time,
     speak_timer,
+    speak_weather,
     unsolicited_block_reason,
 )
 
@@ -226,6 +227,21 @@ class IndependenceTest(unittest.TestCase):
 
         self.assertIs(companion.speak_temp, speak_temp)
         self.assertIs(companion.load_mood, load_mood)
+
+    def test_weather_never_invents_numbers(self) -> None:
+        # 没有实时数据时，一个数字都不能编出来
+        out = speak_weather("今天天气怎么样")
+        self.assertNotIn("℃", out)
+        self.assertNotIn("度", out)
+        self.assertIn("没有实时", out)
+
+    def test_weather_outfit_uses_season_not_data(self) -> None:
+        from datetime import datetime
+
+        out = speak_weather("我明天该穿什么衣服", now=datetime(2026, 11, 1))
+        self.assertNotIn("℃", out)
+        self.assertIn("没有实时", out)
+        self.assertIn("外套", out)  # 十一月的季节建议
 
 
 if __name__ == "__main__":

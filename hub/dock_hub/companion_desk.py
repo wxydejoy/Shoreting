@@ -112,8 +112,50 @@ class DeskMixin:
             )
         ok = bool(result.get("ok"))
         _latency(turn, "scene_ok", id=ident, ok=1 if ok else 0)
+        if not ok:
+            # 场景跑了但没成全：照实说动到哪一步，不能把预置话术当成功播出去
+            return self._scene_partial_report(ident, name, result)
         spoken = str(item.get("say") or "").strip() or f"好，{name}。"
-        return spoken, [{"id": ident, "name": name, "scene": True, "ok": ok}]
+        return spoken, [{"id": ident, "name": name, "scene": True, "ok": True}]
+
+    def _scene_partial_report(
+        self, ident: str, name: str, result: dict[str, Any]
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """部分成功要报部分成功：动了的报动了，没动成的带上原因。"""
+        names = {
+            str(s.get("id")): str(s.get("name") or s.get("id"))
+            for s in (self._skills or [])
+        }
+        actions = result.get("actions") or []
+        done_bits: list[str] = []
+        fail_bits: list[str] = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            dev = names.get(str(action.get("id")), str(action.get("id") or "设备"))
+            if action.get("ok"):
+                if action.get("on") is False:
+                    done_bits.append(f"{dev}关了")
+                elif action.get("brightness") is not None:
+                    done_bits.append(f"{dev}亮度调好了")
+                elif action.get("run"):
+                    done_bits.append(f"{dev}启动了")
+                else:
+                    done_bits.append(f"{dev}开了")
+            else:
+                why = str(action.get("message") or "").strip()
+                why = f"（{why}）" if why and len(why) <= 20 else ""
+                fail_bits.append(f"{dev}没动成{why}")
+        if done_bits and fail_bits:
+            spoken = "，".join(done_bits) + "；" + "、".join(fail_bits) + "。"
+        elif fail_bits:
+            spoken = "这次没动成，你再喊我一声。"
+        else:
+            spoken = f"{name}跑了，但我不确定有没有都成。"
+        return (
+            spoken,
+            [{"id": ident, "name": name, "scene": True, "ok": False, "partial": bool(done_bits)}],
+        )
 
     def _handle_relay(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         """「跟她说我晚点回」（F33 反向 / F4 语音留言）：递到手机，她只确认一句。

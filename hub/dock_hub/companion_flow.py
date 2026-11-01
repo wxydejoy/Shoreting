@@ -17,6 +17,8 @@ from dock_hub.config import ID_RE
 from dock_hub.diary import clean_entry, diary_messages
 from dock_hub.errors import HubError
 from dock_hub import logs
+
+_WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 from dock_hub.memory import parse_forget as parse_memory_forget
 from dock_hub.memory import parse_teach as parse_memory_teach
 from dock_hub.persona import (
@@ -31,6 +33,7 @@ from dock_hub.persona import (
     save_mood,
     speak_last,
     speak_light,
+    speak_weather,
     speak_media,
     speak_mini,
     speak_pc,
@@ -257,6 +260,13 @@ class ChatFlowMixin:
         catalog = skill_prompt(self._skills)
         memory = recent_prompt(self._recent)
         desk_facts = desk_facts_prompt(_call_world(self._world.get("desk")))
+        # 当前时间必须告诉她：问「明天穿什么」「今天几号」全指着这个，
+        # 也不知道现在几点的话，人设里的时效话术都填不上
+        _now = datetime.now().astimezone()
+        now_line = (
+            f"现在的时间：{_now.year}年{_now.month}月{_now.day}日"
+            f"{_WEEKDAYS[_now.weekday()]} {_now.strftime('%H:%M')}。"
+        )
         # 全量米家目录 + 原话点到的设备实况读数（没点名就是空串，零开销）
         mijia_catalog = _call_world(self._world.get("catalog")) or ""
         readings = ""
@@ -267,6 +277,7 @@ class ChatFlowMixin:
         extra = "\n".join(
             part
             for part in (
+                now_line,
                 catalog,
                 mood_extra,
                 memory,
@@ -411,6 +422,8 @@ class ChatFlowMixin:
         if kind == "light":
             getter = self._world.get("device")
             return speak_light(text, self._skills, getter if callable(getter) else None)
+        if kind == "weather":
+            return speak_weather(text)
         if kind == "media":
             return speak_media(_call_world(self._world.get("media")))
         if kind == "schedule":

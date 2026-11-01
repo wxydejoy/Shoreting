@@ -57,6 +57,9 @@ _QUERY_LIGHT = re.compile(r"(开了没|亮着吗|开着吗|关了没|亮着没�
 _QUERY_MEDIA = re.compile(r"(在播什么|放的什么|在放什么|现在放的|播放的是什么|放什么歌)")
 _QUERY_LAST = re.compile(r"(刚才那句|刚才你说|刚才说了什么|上一句|你刚说)")
 _QUERY_MINI = re.compile(r"(mac\s*mini|mini|麦金塔|迷你|咪妮|麦克迷)", re.IGNORECASE)
+_QUERY_WEATHER = re.compile(
+    r"(天气|下雨|下雪|带伞|降雨|降温|穿什么|穿多少|什么衣服|加衣服|添衣服|冷不冷|热不热)"
+)
 
 # ---- 亮度与温度 ----
 
@@ -263,6 +266,14 @@ def query_kind(text: str) -> str | None:
             return "temp"
     if _QUERY_LIGHT.search(stripped) and ("灯" in stripped or "台灯" in stripped):
         return "light"
+    # 天气/穿衣：模型没有实时数据时会编温度，这里拦下来走确定性回答。
+    # 屋里/室内的冷暖是温湿度传感器的事，空调等设备的冷暖归设备，都别抢。
+    if (
+        _QUERY_WEATHER.search(stripped)
+        and not re.search(r"(屋里|室内|房间)", stripped)
+        and not _CONTROL_DEVICES.search(stripped)
+    ):
+        return "weather"
     return None
 
 
