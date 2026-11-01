@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import cn.weiekko.dock.DockApp
 import cn.weiekko.dock.background.BackgroundLibrary
 import cn.weiekko.dock.background.BackgroundRejected
@@ -1590,11 +1591,15 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 // 词表变了语音服务会在下一句之间重装识别器，这里只管喂名字。
                 AsrHotwords.setExtra(snapshot.devices.map { it.name })
                 // B2：她在说话/朗读（hub 端 speaking），亭子麦克风听到的是她自己的声音——
-                // 抑制窗一路续到下一次快照。停了之后窗到点自然过期，不用显式清。
-                if (snapshot.companion?.speaking == true) {
-                    ConversationBus.suppressUntil(
-                        SystemClock.elapsedRealtime() + SPEAK_SUPPRESS_MS,
-                    )
+                // 抑制窗续到「这轮说完」：hub 报剩余毫秒就按剩余续（一小段余量），
+                // 没报的长任务（朗读故事）才走 30s 保活。一刀切 30s 会把 F1 的
+                // 免唤醒对话窗（8–15s）整个饿死——她一答完窗就没了。
+                val companion = snapshot.companion
+                if (companion?.speaking == true) {
+                    val leftMs = companion.speakingLeftMs
+                    val keepMs = if (leftMs > 0L) leftMs + 1_500L else SPEAK_SUPPRESS_MS
+                    Log.i("DockVM", "hub speaking: suppress ${keepMs}ms (left=$leftMs)")
+                    ConversationBus.suppressUntil(SystemClock.elapsedRealtime() + keepMs)
                 }
                 _ui.update {
                     it.copy(

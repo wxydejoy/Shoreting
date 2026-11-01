@@ -314,6 +314,8 @@ data class CompanionStatus(
     val ready: Boolean,
     val voice: Boolean = false,
     val speaking: Boolean = false,
+    /** 她这轮还要说多久（毫秒）。0 = 没报（朗读中的长任务走老的 30s 保活）。 */
+    val speakingLeftMs: Long = 0,
     val timer: TimerStatus? = null,
 )
 

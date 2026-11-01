@@ -529,14 +529,17 @@ class WakeWordService : Service() {
                             val keyword = result.keyword
                             if (keyword.isBlank()) {
                                 // 诊断：`adb shell setprop log.tag.WakeWord DEBUG` 后每 5 秒
-                                // 报一次 KWS 手上听到了什么，用来区分「麦克风没声音」和
-                                // 「有声音但没命中关键词」——这两种在用户看来都是「喊了没反应」。
+                                // 报一次 KWS 听到了什么 + 对话窗/抑制窗状态，用来区分
+                                // 「麦克风没声音」「没命中关键词」「免唤醒窗没开」——
+                                // 这几种在用户看来都是「喊了没反应」。
                                 if (now - kwsTraceAt >= KWS_TRACE_MS && Log.isLoggable(TAG, Log.DEBUG)) {
                                     kwsTraceAt = now
                                     Log.d(
                                         TAG,
                                         "kws listening rms=${audioRms(samples)} " +
-                                            "tokens=${result.tokens.size}",
+                                            "tokens=${result.tokens.size} " +
+                                            "bypass=${ConversationBus.bypass(now)} " +
+                                            "speaking=${ConversationBus.speaking(now)}",
                                     )
                                 }
                                 continue
