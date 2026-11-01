@@ -436,33 +436,53 @@ export function ReadPage() {
 
       {/* 音量放在页面顶上，不藏在书架卡片里 —— 不管是挑书、看正文还是
           合成语音，调音量这一步都在手边（念的是 Mini 那台喇叭）。 */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border/60 px-3 py-2">
-        <div className="flex items-center gap-1.5">
+      <div className="rounded-lg border border-border/60 px-2.5 py-2">
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            className="text-muted-foreground transition-colors hover:text-foreground"
+            className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
             aria-label={volume ? "静音" : "恢复音量"}
             disabled={volume === null}
             onClick={() => pushVolume(volume ? 0 : volumeBeforeMute.current)}
           >
-            {volume ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
+            {volume ? <Volume2 className="size-5" /> : <VolumeX className="size-5" />}
           </button>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={1}
-            value={volume ?? 0}
-            disabled={volume === null}
-            aria-label="音量"
-            onChange={(event) => pushVolume(Number(event.target.value))}
-            className="h-1 w-40 cursor-pointer accent-primary disabled:cursor-default sm:w-56"
-          />
-          <span className="w-6 text-right text-[11.5px] text-muted-foreground tabular-nums">
+          {/* 滑块自己做：原生 range 的滑轨只有 4px 高、拇指十来像素，
+              手机上既看不清也捏不住。这里把可点区域撑到 36px 高，
+              底下画 8px 的轨道和已选部分，拇指单独放大到 22px。 */}
+          <div className="relative flex h-9 min-w-0 flex-1 items-center sm:max-w-[420px]">
+            <div className="pointer-events-none absolute inset-x-0 h-2 rounded-full bg-secondary" />
+            <div
+              className="pointer-events-none absolute h-2 rounded-full bg-primary"
+              style={{
+                left: 0,
+                // 拇指中心的路程是 [11px, 宽度-11px]（拇指直径 22），
+                // 进度条跟着拇指中心走，看起来才是「到这儿了」
+                width: `calc(11px + (100% - 22px) * ${(volume ?? 0) / 100})`,
+              }}
+            />
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={volume ?? 0}
+              disabled={volume === null}
+              aria-label="音量"
+              onChange={(event) => pushVolume(Number(event.target.value))}
+              className="relative h-9 w-full cursor-pointer appearance-none bg-transparent disabled:cursor-default
+                [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:bg-transparent
+                [&::-webkit-slider-thumb]:size-[22px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-background [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:active:scale-110
+                [&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-secondary
+                [&::-moz-range-progress]:h-2 [&::-moz-range-progress]:rounded-full [&::-moz-range-progress]:bg-primary
+                [&::-moz-range-thumb]:size-[22px] [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-background [&::-moz-range-thumb]:bg-primary"
+            />
+          </div>
+          <span className="w-7 shrink-0 text-right text-[12.5px] text-muted-foreground tabular-nums">
             {volume ?? "—"}
           </span>
         </div>
-        <span className="text-[11px] text-muted-foreground">Mini 喇叭音量 · 拖动即刻生效</span>
+        <p className="pl-1 text-[11px] text-muted-foreground">Mini 喇叭音量 · 拖动即刻生效</p>
       </div>
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as ReadTab)}>
