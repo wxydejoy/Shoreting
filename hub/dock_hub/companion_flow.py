@@ -14,7 +14,7 @@ from typing import Any
 
 from dock_hub.clarify import clarify_for
 from dock_hub.config import ID_RE
-from dock_hub.diary import clean_entry, diary_messages
+from dock_hub.diary import clean_entry, clean_impression, diary_messages, impression_messages
 from dock_hub.errors import HubError
 from dock_hub import logs
 
@@ -608,6 +608,23 @@ class ChatFlowMixin:
         cleaned = clean_entry(text)
         if not cleaned:
             raise HubError("companion_unavailable", "日记没写出来")
+        return cleaned
+
+    def impression_compose(self, material: str, current: str) -> str:
+        """F41 对主人的印象：日记写完的同一晚，把记忆里那条滚动更新一版。
+
+        同 diary_compose 的规矩：一次性问完，不流式、不进对话史；大脑不在
+        就抛错，由调用方决定「不动」——旧印象比错印象好。
+        """
+        if not self.config.enabled:
+            raise HubError("not_found", "未开启桌面伴侣")
+        text = self._complete(
+            impression_messages(str(material or ""), str(current or "")),
+            temperature=0.7,
+        )
+        cleaned = clean_impression(text)
+        if not cleaned:
+            raise HubError("companion_unavailable", "印象没写出来")
         return cleaned
 
     # ---- 朗读任务的回调 ------------------------------------------------------

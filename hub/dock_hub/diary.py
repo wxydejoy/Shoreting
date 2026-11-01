@@ -126,6 +126,41 @@ def diary_messages(material: str) -> list[dict[str, str]]:
     ]
 
 
+# ---- F41 对主人的印象：写日记的同一晚顺手更新，落进记忆（MemoryStore 一条滚动条目） ----
+
+IMPRESSION_KEY = "主人印象"
+IMPRESSION_MAX = 160
+
+IMPRESSION_PROMPT = """你是守岸人，在写完今天的日记之后，更新你对漂泊者的印象。这条印象是你的记忆，明天对话时你会自然用它。
+下面给了今天的材料，和你现在的印象。把它更新成新的版本：两三句以内、一百二十字以内，慢、短、轻，不卖萌，不煽情。
+只写从材料和现有印象里长得出来的判断：他今天忙不忙、聊了什么、状态怎么样、你从这些里看出了什么。
+至少带一件材料里的具体事（他忙到几点、问了什么、说了哪句让你留意的话），不要写成「忙碌，疲惫」这种体检报告。
+材料里没有的事不许编；今天的材料和现有印象对不上时，以今天的材料为准，把过时的部分换掉；真的没有新东西才原样照抄现在的印象。
+只回印象本身，不解释，不写「印象：」这样的开头，不用列表。"""
+
+
+def impression_messages(material: str, current: str) -> list[dict[str, str]]:
+    current = (current or "").strip()
+    body = str(material or "").strip()
+    if current:
+        body += f"\n\n你现在的印象：{current}"
+    return [
+        {"role": "system", "content": IMPRESSION_PROMPT},
+        {"role": "user", "content": body},
+    ]
+
+
+def clean_impression(raw: str) -> str:
+    """她写回来的印象清洗：同日记的路数，截到印象自己的上限。"""
+    text = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL | re.IGNORECASE)
+    text = text.strip().strip("\"'「」『』“”‘’")
+    text = re.sub(r"^印象[:：]\s*", "", text).strip()
+    text = re.sub(r"\s*\n+\s*", " ", text).strip()
+    if len(text) > IMPRESSION_MAX:
+        text = text[: IMPRESSION_MAX - 1] + "…"
+    return text
+
+
 def fallback_text(m: DayMaterial) -> str:
     """大脑不在场时的兜底：一句干巴巴的事实。没什么可说就空着，别硬凑。"""
     parts: list[str] = []
@@ -286,10 +321,14 @@ class DiaryWriter:
         store: DiaryStore,
         material: Callable[[], DayMaterial | None],
         compose: Callable[[DayMaterial], str],
+        after: Callable[[DayMaterial], None] | None = None,
     ) -> None:
         self.store = store
         self._material = material
         self._compose = compose
+        # 写完日记后的顺手事（更新对主人的印象）。拿到的是同一份材料，
+        # 只在真写了日记的晚上才叫——空材料的日子她没什么可观察的。
+        self._after = after
         self.enabled = True
         self.at = "21:30"
         self._done_day: str | None = None
@@ -321,4 +360,9 @@ class DiaryWriter:
         if not text:
             return None
         self.store.write(day, text, source, now.isoformat(timespec="seconds"))
+        if self._after is not None:
+            try:
+                self._after(m)
+            except Exception:  # noqa: BLE001 - 顺手事挂了不连累日记本身
+                pass
         return text

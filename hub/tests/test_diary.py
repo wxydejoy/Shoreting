@@ -12,11 +12,15 @@ from dock_hub.diary import (
     DayMaterial,
     DiaryStore,
     DiaryWriter,
+    IMPRESSION_KEY,
+    IMPRESSION_MAX,
     build_material,
     clean_entry,
+    clean_impression,
     diary_due,
     diary_messages,
     fallback_text,
+    impression_messages,
     render_material,
 )
 from dock_hub.weekly import DailyLedger
@@ -206,6 +210,125 @@ class DiaryWriterTest(unittest.TestCase):
         messages = diary_messages("材料")
         self.assertIn("两句话以内", messages[0]["content"])
         self.assertIn("材料", messages[1]["content"])
+
+    def test_after_runs_with_same_material_once_written(self) -> None:
+        # F41：日记真写了，印象更新才跟着来；空材料的日子不叫
+        with tempfile.TemporaryDirectory() as tmp:
+            seen: list[DayMaterial] = []
+            writer = DiaryWriter(
+                DiaryStore(Path(tmp) / "d.jsonl"),
+                _material,
+                lambda m: "灯留了一盏，人走了。",
+                after=seen.append,
+            )
+            writer.tick(_at(21, 30))
+            self.assertEqual(len(seen), 1)
+            self.assertEqual(seen[0].day, "2026-10-31")
+
+    def test_after_not_called_on_empty_day(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            seen: list[DayMaterial] = []
+            writer = DiaryWriter(
+                DiaryStore(Path(tmp) / "d.jsonl"),
+                lambda: build_material(now=_at(21)),
+                lambda m: "不该被叫到",
+                after=seen.append,
+            )
+            writer.tick(_at(21, 30))
+            self.assertEqual(seen, [])
+
+    def test_after_failure_does_not_hurt_diary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            def boom(m: DayMaterial) -> None:
+                raise RuntimeError("印象挂了")
+
+            writer = DiaryWriter(
+                DiaryStore(Path(tmp) / "d.jsonl"), _material, lambda m: "灯留了一盏。", after=boom
+            )
+            self.assertEqual(writer.tick(_at(21, 30)), "灯留了一盏。")
+            self.assertIsNotNone(writer.store.get("2026-10-31"))
+
+
+class ImpressionTest(unittest.TestCase):
+    def test_messages_carry_current_impression_and_rules(self) -> None:
+        messages = impression_messages("在桌 5 小时", "他今天话不多。")
+        self.assertIn("不许编", messages[0]["content"])
+        self.assertIn("原样照抄", messages[0]["content"])
+        self.assertIn("他今天话不多。", messages[1]["content"])
+        self.assertIn("在桌 5 小时", messages[1]["content"])
+
+    def test_messages_without_current(self) -> None:
+        messages = impression_messages("在桌 5 小时", "")
+        self.assertNotIn("你现在的印象", messages[1]["content"])
+
+    def test_clean_impression_strips_and_caps(self) -> None:
+        self.assertEqual(clean_impression("「他今晚聊了股票。」"), "他今晚聊了股票。")
+        self.assertEqual(clean_impression("印象：他忙。"), "他忙。")
+        long = "很" * (IMPRESSION_MAX + 20)
+        out = clean_impression(long)
+        self.assertLessEqual(len(out), IMPRESSION_MAX)
+        self.assertTrue(out.endswith("…"))
+
+    def test_key_is_stable(self) -> None:
+        # 记忆里就认这条 key，改名会丢掉她已经攒下的印象
+        self.assertEqual(IMPRESSION_KEY, "主人印象")
+
+
+class UpdateImpressionTest(unittest.TestCase):
+    """service._update_impression：只摸 memory 和 companion，用 seam 造最小对象。"""
+
+    def _hub(self, tmp: str, compose):
+        from types import SimpleNamespace
+
+        from dock_hub.memory import MemoryStore
+        from dock_hub.service import DockHub
+
+        hub = object.__new__(DockHub)
+        hub.memory = MemoryStore(Path(tmp) / "memory.yaml")
+        hub.companion = SimpleNamespace(impression_compose=compose)
+        return hub
+
+    def test_impression_lands_in_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = self._hub(tmp, lambda material, current: "他今晚连问三次股票，心里没底。")
+            hub._update_impression(_material())
+            items = hub.memory.entries()
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["key"], "主人印象")
+            self.assertIn("股票", items[0]["value"])
+            self.assertEqual(items[0]["source"], "diary")
+            # 记忆的 facts 会把她带进明天的对话
+            self.assertIn("股票", hub.memory.facts())
+
+    def test_brain_down_keeps_old_impression(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            def boom(material: str, current: str) -> str:
+                raise RuntimeError("大脑不在")
+
+            hub = self._hub(tmp, boom)
+            hub._update_impression(_material())
+            self.assertEqual(len(hub.memory), 0)
+
+            # 已有旧印象时：写不动就保持原样（记忆会剥句尾标点）
+            hub.memory.remember("主人印象", "旧印象。", source="diary")
+            hub._update_impression(_material())
+            self.assertEqual(hub.memory.entries()[0]["value"], "旧印象")
+
+    def test_unchanged_reply_does_not_touch_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+
+            def same(material: str, current: str) -> str:
+                calls.append(current)
+                return current or "第一版印象。"
+
+            hub = self._hub(tmp, same)
+            hub._update_impression(_material())
+            first = hub.memory.entries()[0]["learned_at"]
+            hub._update_impression(_material())
+            self.assertEqual(hub.memory.entries()[0]["learned_at"], first)
+            # 第二轮拿到了当前的印象作为底稿（记忆剥了句尾标点）
+            self.assertEqual(calls[1], "第一版印象")
 
 
 class DiaryConfigTest(unittest.TestCase):

@@ -45,6 +45,7 @@ from dock_hub.diary import (
     DayMaterial,
     DiaryStore,
     DiaryWriter,
+    IMPRESSION_KEY,
     build_material,
     render_material,
 )
@@ -144,7 +145,9 @@ class DockHub:
         self.diary_store = DiaryStore(
             (config.path or default_config_path()).with_name("companion-diary.jsonl")
         )
-        self.diary = DiaryWriter(self.diary_store, self._diary_material, self._diary_compose)
+        self.diary = DiaryWriter(
+            self.diary_store, self._diary_material, self._diary_compose, after=self._update_impression
+        )
         self.diary.configure(config.diary.enabled, config.diary.at)
         # F33/F4/F34：往手机递话的一条通道（对讲反向、语音留言、微信共用）
         self.notify = NotifyBoard()
@@ -1229,6 +1232,26 @@ class DockHub:
         if not self.companion.config.enabled:
             raise HubError("not_found", "未开启桌面伴侣")
         return self.companion.diary_compose(render_material(m))
+
+    def _update_impression(self, m: DayMaterial) -> None:
+        """F41 日记写完的同一晚，把对主人的印象更新进记忆。
+
+        印象是记忆里滚动的一条（key=主人印象，source=diary），明天对话
+        随 facts 注入她自然用得上。大脑没写出来就不动——旧印象比错印象好；
+        她说「没新东西」时 LLM 会原样抄回来，等于没变。
+        """
+        current = ""
+        for item in self.memory.entries():
+            if item.get("key") == IMPRESSION_KEY:
+                current = str(item.get("value") or "")
+                break
+        try:
+            new = self.companion.impression_compose(render_material(m), current)
+        except Exception as exc:  # noqa: BLE001 - 大脑不在就保持旧印象
+            logs.swallowed("印象更新", exc)
+            return
+        if new and new != current:
+            self.memory.remember(IMPRESSION_KEY, new, source="diary")
 
     def _start_diary(self) -> None:
         """每半分钟问一次「今天写了吗」。关着就不起线程。"""
