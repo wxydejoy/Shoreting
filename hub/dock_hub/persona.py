@@ -29,7 +29,7 @@ _RECENT_CLIP = 72
 _USER_TIRED = re.compile(r"(累|困|乏|不想动|好累|疲惫)")
 _USER_FRUSTRATED = re.compile(r"(烦|气死|吵|够了|烦死)")
 _USER_BRIGHT = re.compile(r"(开心|谢谢|哈哈|好呀|不错)")
-_USER_GREET = re.compile(r"^(小岸|岸宝|晚上好|早上好|中午好|下午好|晚安|嗨|你好)[。！？.?]*$")
+_USER_GREET = re.compile(r"^(守岸人|小岸|岸宝|晚上好|早上好|中午好|下午好|晚安|嗨|你好)[。！？.?]*$")
 
 
 _CN_SMALL = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
@@ -356,6 +356,32 @@ def speak_light(text: str, skills: list[dict[str, str]], getter) -> str:
             return f"{name}亮着，亮度{bri}。"
         return f"{name}亮着。"
     return f"{name}关着。"
+
+
+_SEASON_HINT = {
+    12: "冬天正冷，出门裹厚一点。",
+    1: "一年最冷的时候，围巾手套都用得上。",
+    2: "还冷着，外套先别收。",
+    3: "开春了，早晚还凉，外套随身带。",
+    4: "春天舒服，薄外套正好。",
+    5: "快入夏了，单衣就行，怕早晚凉就带件薄的。",
+    6: "入夏了，穿透气点，出门可以带把伞。",
+    7: "一年最热的时候，防晒和水都别省。",
+    8: "还热着，短袖为主，空调房里备件薄的。",
+    9: "暑气在退，早晚开始凉了。",
+    10: "秋意上来了，长袖加件外套正合适。",
+    11: "入冬了，毛衣外套穿上身。",
+}
+
+
+def speak_weather(text: str, now: datetime | None = None) -> str:
+    """天气/穿衣：手头没有实时数据，绝不编一个温度出来。按季节给建议。"""
+    _now = now or datetime.now()
+    season = _SEASON_HINT.get(_now.month, "")
+    wants_outfit = re.search(r"(穿什么|穿多少|穿点|穿件|什么衣服|冷不冷|热不热)", text or "")
+    if wants_outfit and season:
+        return f"手头没有实时的天气，你出门前瞄一眼预报。按季节说，{season}"
+    return "手头没有实时的天气，你瞄一眼天气预报，比我准。"
 
 
 def speak_media(payload: Any) -> str:

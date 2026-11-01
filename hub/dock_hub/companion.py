@@ -180,6 +180,10 @@ class Companion(ChatFlowMixin, DeskMixin, LlmMixin):
         self._probe_at = 0.0
         self._probing = False
         self._speaking = False
+        # 这轮还要说多久（monotonic 截止时刻）：随快照发给手机，
+        # 抑制窗按剩余时长续（B2），而不是见到 speaking 就一刀切 30s——
+        # 不然 F1 的免唤醒对话窗（8–15s）永远开不起来
+        self._speaking_left_until = 0.0
         self._seq = 0
         self._lock = threading.Lock()
         # 在飞那一轮的取消令牌：新一轮进来就 set，旧的流式循环立刻收手
@@ -226,6 +230,7 @@ class Companion(ChatFlowMixin, DeskMixin, LlmMixin):
         self._probe_at = 0.0
         with self._lock:
             self._speaking = False
+            self._speaking_left_until = 0.0
             self._seq += 1
             self._dim_gen += 1
             self._clips.clear()
@@ -276,10 +281,16 @@ class Companion(ChatFlowMixin, DeskMixin, LlmMixin):
             return None
         with self._lock:
             speaking = self._speaking
+            left_until = self._speaking_left_until
+        now = time.monotonic()
+        # 旗标立着但 ETA 已过期（遗留路径）＝她其实已经说完了
+        effective = speaking and left_until > now
+        left_ms = max(0, int((left_until - now) * 1000)) if effective else 0
         body: dict[str, Any] = {
             "ready": self.ready(),
             "voice": self.voice(),
-            "speaking": speaking,
+            "speaking": effective,
+            "speaking_left_ms": left_ms,
             "timer": self.timers.snapshot(),
         }
         return body

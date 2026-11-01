@@ -80,6 +80,24 @@ class ConversationWindowTest {
         assertEquals(2_800L, ConversationWindow.speakMs(5))
         assertEquals(20_000L, ConversationWindow.speakMs(200))
     }
+
+    @Test
+    fun hubPolicyOverridesLocalHeuristic() {
+        // 大脑裁决版：等多久、开多久直接照办，不再看问句正则
+        val wait = window.onReplyFor(waitMs = 3_300L, openMs = 20_000L, nowMs = 1_000)
+        assertEquals(3_300L, wait)
+        assertFalse(window.listening(1_000 + 3_300L - 1))
+        assertTrue(window.listening(1_000 + 3_300L))
+        assertTrue(window.listening(1_000 + 3_300L + 20_000L - 1))
+        assertFalse(window.listening(1_000 + 3_300L + 20_000L))
+    }
+
+    @Test
+    fun hubPolicyShortStatementWindow() {
+        window.onReplyFor(waitMs = 2_000L, openMs = 8_000L, nowMs = 0)
+        assertTrue(window.listening(2_000L))
+        assertFalse(window.listening(2_000L + 8_000L))
+    }
 }
 
 class ConversationBusTest {
@@ -136,5 +154,21 @@ class ConversationBusTest {
         assertFalse(ConversationBus.speaking(6_000)) // 说完了，之后是窗口不是插话时段
         ConversationBus.close()
         assertFalse(ConversationBus.speaking(1_000)) // 关了就都不算
+    }
+
+    @Test
+    fun storySuppressesUntilHubStopsReporting() {
+        // B2：朗读期间每次快照 speaking=true 都续一段保活窗（长轮询约 25s 一圈，
+        // 保活 30s），全程 kws 都不该把她自己的声音当唤醒词；停更之后窗自然过期。
+        ConversationBus.close()
+        var now = 0L
+        repeat(3) {
+            now += 25_800L // 长轮询一圈回到快照
+            ConversationBus.suppressUntil(now + 30_000)
+            assertTrue(ConversationBus.speaking(now + 1))
+        }
+        // 朗读停了：不再续窗，最后一段到点就放行
+        assertFalse(ConversationBus.speaking(now + 30_000))
+        ConversationBus.close()
     }
 }

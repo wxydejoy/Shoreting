@@ -382,6 +382,41 @@ class SceneVoiceTest(unittest.TestCase):
         self.assertEqual(spoken, "这次没动成。")
         self.assertFalse(events[0]["ok"])
 
+    def test_partial_failure_is_reported_honestly(self) -> None:
+        # 有的步骤成了、有的没成：照实报，预置话术（「灯我关了」）不许当成功播
+        comp = Companion(CompanionConfig(enabled=True))
+
+        def half(ident, say=True):
+            return {
+                "ok": False,
+                "actions": [
+                    {"id": "lamp", "on": False, "ok": True},
+                    {
+                        "id": "desk-led",
+                        "on": True,
+                        "brightness": 8,
+                        "ok": False,
+                        "message": "灯带还没接到 Hub。",
+                    },
+                ],
+            }
+
+        comp.set_skills(
+            [{"id": "lamp", "name": "台灯"}, {"id": "desk-led", "name": "灯带"}],
+            None,
+            None,
+            world={
+                "scene": half,
+                "scenes": [{"id": "bedtime", "name": "睡前", "say": "灯我关了，书还读吗？", "phrases": ["晚安"]}],
+            },
+        )
+        spoken, events = comp._handle_scene("晚安", "t6")
+        self.assertIn("台灯关了", spoken)
+        self.assertIn("灯带没动成", spoken)
+        self.assertNotIn("灯我关了", spoken)
+        self.assertFalse(events[0]["ok"])
+        self.assertTrue(events[0]["partial"])
+
 
 class SceneHttpTest(unittest.TestCase):
     def setUp(self) -> None:

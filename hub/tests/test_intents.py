@@ -150,6 +150,17 @@ class SkillTest(unittest.TestCase):
         self.assertEqual(query_kind("看一下日程"), "schedule")
         self.assertIsNone(query_kind("帮我安排一下"))
 
+    def test_query_kind_routes_weather(self) -> None:
+        # 天气/穿衣走确定性回答：模型没实时数据时会编温度，不许它答
+        self.assertEqual(query_kind("今天天气怎么样"), "weather")
+        self.assertEqual(query_kind("明天会下雨吗"), "weather")
+        self.assertEqual(query_kind("我明天该穿什么衣服"), "weather")
+        self.assertEqual(query_kind("外面冷不冷"), "weather")
+        # 屋里/室内的冷暖是传感器的事，归 temp 交给读数
+        self.assertNotEqual(query_kind("屋里冷不冷"), "weather")
+        # 开空调的口令不能被天气抢走
+        self.assertNotEqual(query_kind("空调热不热"), "weather")
+
     def test_schedule_day_picks_the_day(self) -> None:
         self.assertEqual(schedule_day("今天有什么事"), 0)
         self.assertEqual(schedule_day("明天有什么事"), 1)

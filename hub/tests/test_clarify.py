@@ -68,6 +68,43 @@ class ClarifyForTest(unittest.TestCase):
         self.assertIsNone(clarify_for("把它关掉", []))
 
 
+class FragmentClarifyTest(unittest.TestCase):
+    """B1：chat-log 00:31–00:32 的回归——「把」「把电脑关」「打」不许再回「嗯。」"""
+
+    def test_ba_alone_asks_what(self) -> None:
+        pending = clarify_for("把", SKILLS)
+        assert pending is not None
+        self.assertIn("把什么", pending.asked)
+
+    def test_ba_with_device_asks_on_or_off(self) -> None:
+        for text in ("把灯", "把台灯", "帮我把"):
+            with self.subTest(text=text):
+                pending = clarify_for(text, SKILLS)
+                assert pending is not None
+                self.assertIn("把什么", pending.asked)
+
+    def test_ba_trailing_verb_keeps_attitude(self) -> None:
+        # 「把电脑关」态度还是关——power 没接上时也该追问，不是落闲聊
+        pending = clarify_for("把电脑关", SKILLS)
+        assert pending is not None
+        self.assertFalse(pending.on)
+        self.assertIn("关", pending.asked)
+
+    def test_lone_verb_asks(self) -> None:
+        pending = clarify_for("打", SKILLS)
+        assert pending is not None
+        self.assertTrue(pending.on)
+        pending2 = clarify_for("关吧", SKILLS)
+        assert pending2 is not None
+        self.assertFalse(pending2.on)
+
+    def test_chatter_and_game_words_still_pass_through(self) -> None:
+        # 真闲聊和游戏黑话不许被残句兜底误伤
+        for text in ("你", "呃", "飞机", "打瓦", "开黑", "开黑。", "把手举起来", "今天好累"):
+            with self.subTest(text=text):
+                self.assertIsNone(clarify_for(text, SKILLS))
+
+
 class TakeAnswerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.pending = PendingClarify(on=False, asked="要关哪个？台灯还是灯带？")

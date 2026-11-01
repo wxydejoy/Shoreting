@@ -26,12 +26,27 @@ _ACTION_TEMP = re.compile(
     r"^\s*ACTION:\s*(\S+?)\.(?:temp|temperature)\.(\d{1,2})\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+_ACTION_SET = re.compile(
+    r"^\s*ACTION:\s*(\S+?)\.set\.([A-Za-z0-9_-]+)\.(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ACTION_DO = re.compile(
+    r"^\s*ACTION:\s*(\S+?)\.do\.([A-Za-z0-9_-]+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 _CONTROL_HINT = re.compile(
     r"(打开|关掉|关闭|关上|开启|开一下|关一下|开灯|关灯|开空调|关空调|启动|"
     r"无畏契约|valorant|打瓦|开黑|打游戏|玩游戏|启动游戏|开游戏|wegame|"
     r"抖音|亮一点|调亮|暗一点|调暗|调到|调成|设成|设为|设定|再亮|再暗|灯带|台灯|挂灯|"
     r"暂停|下一首|上一首|切歌|继续播放|继续放|静音|音量|声音大|声音小|"
     r"叫我|提醒我|喊我)"
+)
+# 全量米家设备目录放进来以后，控制的词面大了：空调温度/风速/模式、扫地机、
+# 加湿器这些都算控制。查状态（多少度/开着吗）不在此列，别把提问挡进执行器。
+_CONTROL_DEVICES = re.compile(
+    r"(空调|扫地机器人?|加湿器?|除湿器?|净化器|新风机?|电风扇?|塔扇|"
+    r"窗帘|晾衣机?|热水器|饮水机|电暖|暖气|投影仪?|电视机?|插座|"
+    r"风速|风量|摆风|扫风|风向|模式调|调.{0,4}模式)"
 )
 _QUERY_TIME = re.compile(r"(几点|几号|星期几|周几|礼拜几|什么日子|现在.*时间)")
 _QUERY_TEMP = re.compile(
@@ -42,6 +57,9 @@ _QUERY_LIGHT = re.compile(r"(开了没|亮着吗|开着吗|关了没|亮着没�
 _QUERY_MEDIA = re.compile(r"(在播什么|放的什么|在放什么|现在放的|播放的是什么|放什么歌)")
 _QUERY_LAST = re.compile(r"(刚才那句|刚才你说|刚才说了什么|上一句|你刚说)")
 _QUERY_MINI = re.compile(r"(mac\s*mini|mini|麦金塔|迷你|咪妮|麦克迷)", re.IGNORECASE)
+_QUERY_WEATHER = re.compile(
+    r"(天气|下雨|下雪|带伞|降雨|降温|穿什么|穿多少|什么衣服|加衣服|添衣服|冷不冷|热不热)"
+)
 
 # ---- 亮度与温度 ----
 
@@ -140,6 +158,22 @@ def parse_temp_actions(raw: str) -> list[tuple[str, dict[str, int]]]:
     return found
 
 
+def parse_set_actions(raw: str) -> list[tuple[str, str, str]]:
+    """通用属性写：ACTION: <id>.set.<属性>.<值> → [(id, 属性, 原始值)]。"""
+    found: list[tuple[str, str, str]] = []
+    for match in _ACTION_SET.finditer(raw or ""):
+        found.append((match.group(1), match.group(2), match.group(3)))
+    return found
+
+
+def parse_do_actions(raw: str) -> list[tuple[str, str]]:
+    """通用动作：ACTION: <id>.do.<动作> → [(id, 动作)]。"""
+    found: list[tuple[str, str]] = []
+    for match in _ACTION_DO.finditer(raw or ""):
+        found.append((match.group(1), match.group(2)))
+    return found
+
+
 def fold_game_asr(text: str) -> str:
     """把打瓦 / 无畏契约 / 灯带台灯的常见口误折回技能能认的词。"""
     out = (text or "").strip()
@@ -159,7 +193,8 @@ def fold_game_asr(text: str) -> str:
 
 
 def looks_like_control(text: str) -> bool:
-    return bool(_CONTROL_HINT.search(fold_game_asr(text)))
+    folded = fold_game_asr(text)
+    return bool(_CONTROL_HINT.search(folded)) or bool(_CONTROL_DEVICES.search(folded))
 
 
 def turn_intent(text: str) -> bool | None:
@@ -225,9 +260,20 @@ def query_kind(text: str) -> str | None:
     if _QUERY_SCHEDULE.search(stripped):
         return "schedule"
     if _QUERY_TEMP.search(stripped):
-        return "temp"
+        # 点名了具体设备（空调/加湿器…）的温度湿度是那台设备的事，
+        # 不是室温——交给对话，让实况读数去答。
+        if not _CONTROL_DEVICES.search(stripped):
+            return "temp"
     if _QUERY_LIGHT.search(stripped) and ("灯" in stripped or "台灯" in stripped):
         return "light"
+    # 天气/穿衣：模型没有实时数据时会编温度，这里拦下来走确定性回答。
+    # 屋里/室内的冷暖是温湿度传感器的事，空调等设备的冷暖归设备，都别抢。
+    if (
+        _QUERY_WEATHER.search(stripped)
+        and not re.search(r"(屋里|室内|房间)", stripped)
+        and not _CONTROL_DEVICES.search(stripped)
+    ):
+        return "weather"
     return None
 
 
@@ -482,6 +528,10 @@ def infer_temp(
     else:
         if "空调" not in text and len(climate) != 1:
             return []
+        # 点名了空调但技能表里没有空调（它在米家目录里）：这是目录的活，
+        # 别把唯一的 climate 技能硬抓过来乱写。
+        if "空调" in text and "空调" not in chosen.get("name", ""):
+            return []
     lo = int(chosen.get("temp_min") or 16)
     hi = int(chosen.get("temp_max") or 30)
     if parsed < lo or parsed > hi:
@@ -641,6 +691,7 @@ _POWER_SHUTDOWN = re.compile(
     r"(?:电脑|主机|pc).{0,2}?(?:关掉|关了|关上|关机)"  # 电脑关了 / 把电脑关机
     r"|(?:关掉|关了|关上)(?:电脑|主机|pc)"  # 关掉电脑
     r"|关电脑"  # 关电脑
+    r"|(?:电脑|主机|pc)\s*关[吧。.!！]?$"  # 把电脑关——ASR 截断了「掉/了」，还是关机（B1）
     r"|^(?:帮我)?关机[吧。.!！]?$"  # 裸的「关机」整句才算，别从长句里捞
 )
 _POWER_SLEEP = re.compile(

@@ -17,6 +17,8 @@ from dock_hub.config import ID_RE
 from dock_hub.diary import clean_entry, diary_messages
 from dock_hub.errors import HubError
 from dock_hub import logs
+
+_WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 from dock_hub.memory import parse_forget as parse_memory_forget
 from dock_hub.memory import parse_teach as parse_memory_teach
 from dock_hub.persona import (
@@ -31,6 +33,7 @@ from dock_hub.persona import (
     save_mood,
     speak_last,
     speak_light,
+    speak_weather,
     speak_media,
     speak_mini,
     speak_pc,
@@ -73,6 +76,33 @@ from dock_hub.companion_support import (
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
 
+# 自闻/噪音转出来的无实义音节。真进大脑她就回「嗯。」，出喇叭又被麦收走，
+# 转出来还是这种东西——「一直嗯」的自激就是这么烧起来的。
+_FILLER_WORDS = {
+    "嗯", "嗯嗯", "嗯呐", "啊", "啊啊", "哦", "哦哦", "噢", "喔",
+    "诶", "欸", "喂", "嘿", "哈", "哈哈", "呃", "唔",
+}
+
+
+def _is_filler(text: str) -> bool:
+    t = text.strip().strip("。，,．.?？!！~… ").lower()
+    return not t or t in _FILLER_WORDS
+
+
+# F1 免唤醒窗口的裁决权在大脑：回复是谁生成的谁最清楚「要不要等回答、
+# 还要说多久」。手机只执行下发的策略，不再自己拿问句正则和字数估时猜。
+# 问句开 20s（留足读字幕、想答案的时间），陈述句 8s；wait_ms 是她还要
+# 说的估时，说完才开窗。等模型升级后可以让 LLM 直接给这个判定。
+QUESTION_WINDOW_MS = 20_000
+STATEMENT_WINDOW_MS = 8_000
+
+
+def listen_policy(text: str) -> dict[str, int]:
+    t = (text or "").strip()
+    wait = min(len(t) * 260 + 1500, 20_000)
+    open_ms = QUESTION_WINDOW_MS if re.search(r"[？?]", t) else STATEMENT_WINDOW_MS
+    return {"wait_ms": wait, "open_ms": open_ms}
+
 
 class ChatFlowMixin:
     """混合进 Companion：一轮对话的流程与出声的缝。"""
@@ -88,6 +118,12 @@ class ChatFlowMixin:
         if not heard:
             raise HubError("bad_request", "text 不能为空")
         text = fold_game_asr(heard)
+        # 无实义输入直接吞掉：不进大模型、不出声、不开新一轮（也就不停她
+        # 正在说的话）。澄清待答时例外——「嗯」「没有」都可能是正经答案。
+        pending_now = self._pending_clarify
+        if (pending_now is None or pending_now.expired()) and _is_filler(text):
+            _latency(_turn_id(body), "chat_filler", chars=len(heard))
+            return {"text": "", "audio_id": None}
         speaker = _clean_speaker(body.get("speaker"))
         turn = _turn_id(body)
         started = time.monotonic()
@@ -224,9 +260,33 @@ class ChatFlowMixin:
         catalog = skill_prompt(self._skills)
         memory = recent_prompt(self._recent)
         desk_facts = desk_facts_prompt(_call_world(self._world.get("desk")))
+        # 当前时间必须告诉她：问「明天穿什么」「今天几号」全指着这个，
+        # 也不知道现在几点的话，人设里的时效话术都填不上
+        _now = datetime.now().astimezone()
+        now_line = (
+            f"现在的时间：{_now.year}年{_now.month}月{_now.day}日"
+            f"{_WEEKDAYS[_now.weekday()]} {_now.strftime('%H:%M')}。"
+        )
+        # 全量米家目录 + 原话点到的设备实况读数（没点名就是空串，零开销）
+        mijia_catalog = _call_world(self._world.get("catalog")) or ""
+        readings = ""
+        if mijia_catalog:
+            readings = _call_world(self._world.get("catalog_read"), text)
+            if readings:
+                readings = "设备实况（仅自己看。对方问状态直接用这些数，不要说不知道）：\n" + readings
         extra = "\n".join(
             part
-            for part in (catalog, mood_extra, memory, facts, speaker_prompt(speaker), desk_facts)
+            for part in (
+                now_line,
+                catalog,
+                mood_extra,
+                memory,
+                facts,
+                speaker_prompt(speaker),
+                desk_facts,
+                mijia_catalog,
+                readings,
+            )
             if part.strip()
         )
         messages = build_messages(text, extra, self.config.persona)
@@ -281,6 +341,7 @@ class ChatFlowMixin:
     ) -> dict[str, Any]:
         self._ready = True
         self._ready_at = time.monotonic()
+        listen = listen_policy(spoken)
         audio_id = None
         cue_as_we_go = self.tts.configured and not self.tts.deliver
         if not cue_as_we_go:
@@ -288,7 +349,7 @@ class ChatFlowMixin:
                 if seq != self._seq:
                     _latency(turn, "barge_in", ms=_ms(started))
                     self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
-                    return {"text": spoken, "audio_id": None}
+                    return {"text": spoken, "audio_id": None, "listen": listen}
             audio_id = self._maybe_speak(spoken, turn)
         else:
             with self._lock:
@@ -300,7 +361,7 @@ class ChatFlowMixin:
         _latency(turn, "chat_total", ms=_ms(started), audio=1 if audio_id else 0)
         self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
         self._remember(user, spoken)
-        return {"text": spoken, "audio_id": audio_id}
+        return {"text": spoken, "audio_id": audio_id, "listen": listen}
 
     def _record_turn(
         self,
@@ -361,6 +422,8 @@ class ChatFlowMixin:
         if kind == "light":
             getter = self._world.get("device")
             return speak_light(text, self._skills, getter if callable(getter) else None)
+        if kind == "weather":
+            return speak_weather(text)
         if kind == "media":
             return speak_media(_call_world(self._world.get("media")))
         if kind == "schedule":
@@ -402,11 +465,21 @@ class ChatFlowMixin:
             return None
         with self._lock:
             self._speaking = True
+            # 估个时长随快照发给手机（见 set_speaking 注释）
+            self._speaking_left_until = time.monotonic() + min(
+                len(spoken) * 0.26 + 2.5,
+                30.0,
+            )
         try:
             wav = self.tts.speak(spoken, turn)
         finally:
-            with self._lock:
-                self._speaking = False
+            # play_only（cue 完即返回）时不能在这儿摘旗标——真正的播放才
+            # 刚开始，交给上面的 ETA 到点自然过期；deliver 模式拿到成品
+            # wav 才算真的说完了
+            if self.tts.deliver:
+                with self._lock:
+                    self._speaking = False
+                    self._speaking_left_until = 0.0
         if not self.tts.deliver or not wav:
             return None
         self.keep_clip(turn, wav)
@@ -433,7 +506,7 @@ class ChatFlowMixin:
         self.reads.cancel_all()
         with self._lock:
             self._seq += 1
-            self._speaking = True
+        self.set_speaking(True)
         self.tts.stop()
 
     def cue_story_sentence(self, text: str) -> bool:
@@ -441,12 +514,17 @@ class ChatFlowMixin:
             return False
         with self._lock:
             seq = self._seq
-        return bool(self._cue_sentence(text, "story", seq))
+        ok = bool(self._cue_sentence(text, "story", seq))
+        if ok:
+            # 每句都给抑制窗续 30s：故事多长说不准，旗标跟着 cue 走，
+            # 念完最后一句后 30s 自然过期
+            self.set_speaking(True)
+        return ok
 
     def stop_story_audio(self) -> None:
         with self._lock:
             self._seq += 1
-            self._speaking = False
+        self.set_speaking(False)
         self.tts.stop()
 
     def stop(self) -> dict[str, Any]:
@@ -553,9 +631,23 @@ class ChatFlowMixin:
         with self._lock:
             return seq == self._seq
 
-    def set_speaking(self, speaking: bool) -> None:
+    def set_speaking(self, speaking: bool, eta_sec: float | None = None) -> None:
+        """说话旗标 + 预计还要说多久。
+
+        TTS 是「cue 完即返回」的异步播放：旗标要是只亮几毫秒，手机永远
+        看不到「她在说」，B2 抑制和 F2 打断的门就都废了。所以说话时必须
+        把预估时长一起写进 _speaking_left_until，快照按剩余毫秒发出去，
+        到点自然过期。不报时长的路径（朗读故事）按 30s 保活、由下一次
+        cue 续命。
+        """
         with self._lock:
             self._speaking = speaking
+            if not speaking:
+                self._speaking_left_until = 0.0
+            else:
+                self._speaking_left_until = time.monotonic() + (
+                    eta_sec if eta_sec is not None else 30.0
+                )
 
     def keep_clip(self, ident: str, wav: bytes) -> None:
         with self._lock:

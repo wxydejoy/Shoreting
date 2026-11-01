@@ -6,10 +6,10 @@ import org.junit.Test
 
 class WakeKeywordsTest {
     @Test
-    fun anbaoUsesInitialFinalPinyin() {
-        val line = WakeKeywords.LINES.first { it.contains("@岸宝") }
-        assertTrue(line.startsWith("àn b ǎo"))
-        assertTrue(line.contains("#0.12"))
+    fun shouAnRenUsesInitialFinalPinyin() {
+        val line = WakeKeywords.LINES.first { it.contains("@守岸人") }
+        assertTrue(line.startsWith("sh ǒu àn r én"))
+        assertTrue(line.contains("#0.07"))
     }
 
     @Test
@@ -20,21 +20,21 @@ class WakeKeywordsTest {
             assertTrue(line, line.contains(":"))
             assertTrue(line, line.contains("#"))
             assertTrue(line, line.contains("@"))
-            assertTrue(line, line.endsWith("宝"))
+            assertTrue(line, line.endsWith("人"))
         }
     }
 
     @Test
     fun streamJoinsWithSlash() {
         assertTrue(WakeKeywords.STREAM.contains("/"))
-        assertTrue(WakeKeywords.STREAM.contains("@岸宝"))
-        assertTrue(WakeKeywords.STREAM.contains("@嘿岸宝"))
+        assertTrue(WakeKeywords.STREAM.contains("@守岸人"))
+        assertTrue(WakeKeywords.STREAM.contains("@嘿守岸人"))
         assertTrue(!WakeKeywords.STREAM.contains("\n"))
     }
 
     @Test
     fun asrDisplayStripsBpeMarks() {
-        assertEquals("你好 岸宝", AsrModels.display("▁你好▁岸宝"))
+        assertEquals("你好 守岸人", AsrModels.display("▁你好▁守岸人"))
         assertEquals("把灯打开", AsrModels.display("  把灯打开  "))
     }
 }

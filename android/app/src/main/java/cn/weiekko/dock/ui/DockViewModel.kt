@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import cn.weiekko.dock.DockApp
 import cn.weiekko.dock.background.BackgroundLibrary
 import cn.weiekko.dock.background.BackgroundRejected
@@ -1174,7 +1175,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     noteSubtitle(turn, reply.text.length)
                     holdSubtitle()
-                    openConversation(reply.text)
+                    openConversation(reply.text, reply.listenWaitMs, reply.listenOpenMs)
                 },
                 onFailure = { error ->
                     if (error is CancellationException) throw error
@@ -1191,10 +1192,20 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun openConversation(reply: String) {
+    /**
+     * 开免唤醒窗（F1）。开多久听大脑的：回复里带 listen 策略就照办
+     * （wait=她还要说多久，open=说完后开窗多久）；老 hub 没这字段才退回
+     * 本地启发式（问句 15s/陈述 8s、字数估时）。
+     */
+    private fun openConversation(reply: String, waitMsOverride: Long? = null, openMsOverride: Long? = null) {
         if (!_ui.value.wakeWordEnabled) return
         val now = HelmLatency.now()
-        val waitMs = conversationWindow.onReply(reply, now)
+        val waitMs = if (waitMsOverride != null && openMsOverride != null && openMsOverride > 0) {
+            conversationWindow.onReplyFor(waitMsOverride.coerceIn(0L, 30_000L), openMsOverride.coerceIn(0L, 30_000L), now)
+            waitMsOverride.coerceIn(0L, 30_000L)
+        } else {
+            conversationWindow.onReply(reply, now)
+        }
         val until = conversationWindow.listeningUntil()
         ConversationBus.suppressUntil(now + waitMs)
         ConversationBus.openUntil(until)
@@ -1589,6 +1600,17 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 // 设备名进 ASR 热词：主屏上叫什么，嘴上就该听得懂什么。
                 // 词表变了语音服务会在下一句之间重装识别器，这里只管喂名字。
                 AsrHotwords.setExtra(snapshot.devices.map { it.name })
+                // B2：她在说话/朗读（hub 端 speaking），亭子麦克风听到的是她自己的声音——
+                // 抑制窗续到「这轮说完」：hub 报剩余毫秒就按剩余续（一小段余量），
+                // 没报的长任务（朗读故事）才走 30s 保活。一刀切 30s 会把 F1 的
+                // 免唤醒对话窗（8–15s）整个饿死——她一答完窗就没了。
+                val companion = snapshot.companion
+                if (companion?.speaking == true) {
+                    val leftMs = companion.speakingLeftMs
+                    val keepMs = if (leftMs > 0L) leftMs + 1_500L else SPEAK_SUPPRESS_MS
+                    Log.i("DockVM", "hub speaking: suppress ${keepMs}ms (left=$leftMs)")
+                    ConversationBus.suppressUntil(SystemClock.elapsedRealtime() + keepMs)
+                }
                 _ui.update {
                     it.copy(
                         snapshot = snapshot,
@@ -1803,6 +1825,9 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         const val POLL_PC_MS = 3_000L
         const val LONG_POLL_SEC = 25
         const val LONG_POLL_MIN_GAP_MS = 800L
+
+        /** B2：hub 报「她在说」时的抑制保活窗。比最坏轮询间隔（长轮询 25s + 0.8s gap）宽。 */
+        const val SPEAK_SUPPRESS_MS = 30_000L
         const val PHONE_MEDIA_MS = 1_000L
         const val FRAME_PHOTO_MS = 45_000L
         const val WEATHER_OK_MS = 20 * 60 * 1000L

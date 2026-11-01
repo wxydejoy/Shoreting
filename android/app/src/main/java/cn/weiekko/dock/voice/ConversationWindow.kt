@@ -1,7 +1,7 @@
 package cn.weiekko.dock.voice
 
 /**
- * 免唤醒连续对话（F1）：喊一次「岸宝」，接下来一段时间内直接说话就能接上。
+ * 免唤醒连续对话（F1）：喊一次「守岸人」，接下来一段时间内直接说话就能接上。
  *
  * 窗口规则（features.md F1）：
  * - 她每说完一句开一个窗口：问句给 15 秒（等着你回答），陈述句给 8 秒——
@@ -30,6 +30,17 @@ internal class ConversationWindow(
         until = startAt + span
         misses = 0
         return wait
+    }
+
+    /**
+     * 大脑裁决版：等多久、开多久都由 Hub 下发（listen.wait_ms/open_ms），
+     * 手机不再自己猜问句和语速。返回 wait 供 suppress 窗用。
+     */
+    fun onReplyFor(waitMs: Long, openMs: Long, nowMs: Long): Long {
+        startAt = nowMs + waitMs
+        until = startAt + openMs
+        misses = 0
+        return waitMs
     }
 
     /** 一轮听完没有有效输入（空转 / 没听清）。窗口没开就当没这回事。 */

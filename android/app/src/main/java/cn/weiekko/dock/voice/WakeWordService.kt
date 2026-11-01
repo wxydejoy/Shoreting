@@ -57,6 +57,9 @@ class WakeWordService : Service() {
     /** 现在这只识别器用的是第几版热词表；-1 表示它没带热词。 */
     @Volatile
     private var builtHotwords = -1
+    /** 断句用的神经 VAD；装不上就退回 RMS 门。 */
+    @Volatile
+    private var speechVad: SpeechVad? = null
     /** 带热词装不起来过，就别每句话都再试一遍。 */
     @Volatile
     private var hotwordsDisabled = false
@@ -135,6 +138,8 @@ class WakeWordService : Service() {
         asr = null
         voiceprint?.release()
         voiceprint = null
+        speechVad?.release()
+        speechVad = null
         vpExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -165,6 +170,8 @@ class WakeWordService : Service() {
                 kws = null
                 asr?.release()
                 asr = null
+                speechVad?.release()
+                speechVad = null
             }
         }
     }
@@ -195,8 +202,9 @@ class WakeWordService : Service() {
         kws = spotter
         val wakeStream = spotter.createStream(WakeKeywords.STREAM)
         kwsStream = wakeStream
+        speechVad = SpeechVad.create(assets)
         // ASR 模型比唤醒词大一个量级，加载要几百毫秒。原来是在这里同步加载，
-        // 麦克风要等它加载完才开：开机头一秒喊「岸宝」是没人应的。
+        // 麦克风要等它加载完才开：开机头一秒喊「守岸人」是没人应的。
         // 现在先开麦，模型在后台线程里装，装好之前叫醒的那一句会等它一会儿。
         startAsrLoader()
 
@@ -225,7 +233,16 @@ class WakeWordService : Service() {
                 val n = mic.read(buffer, 0, buffer.size)
                 if (n > 0) {
                     faults.data()
-                    queue.offer(FloatArray(n) { buffer[it] / 32768.0f })
+                    // 数字增益（≈+12dB）：摆件离人一米开外，拾音电平低，
+                    // KWS/ASR/VAD 三条链对整个低电平信号的概率都上不去——
+                    // 只压唤醒阈值没用（实测 -16dB 照样不醒），先把信号抬起来。
+                    // 靠近喊到削波就钳到满幅， distortion 一点点，换来远场能用。
+                    queue.offer(
+                        FloatArray(n) {
+                            val s = buffer[it] / 32768.0f * MIC_GAIN
+                            if (s > 1f) 1f else if (s < -1f) -1f else s
+                        },
+                    )
                     continue
                 }
                 if (n == 0) {
@@ -326,7 +343,9 @@ class WakeWordService : Service() {
         var processedMs = 0L
         var skipMs = 0L
         var lastEmitted = ""
+        var prevText = ""
         var gate = UtteranceGate()
+        var turnGate = VadTurnGate()
         var vadMs = 0L
         var bargeMs = 0L
         var partial = StablePartial()
@@ -346,6 +365,8 @@ class WakeWordService : Service() {
                     emitTranscript("", settled = true)
                 }
                 spotter.reset(wakeStream)
+                speechVad?.reset()
+                turnGate = VadTurnGate()
             }
             if (capturing && asr == null && !asrFailed &&
                 SystemClock.elapsedRealtime() - turnAt < ASR_WAIT_MS
@@ -382,16 +403,19 @@ class WakeWordService : Service() {
                     stream = recognizer.createStream()
                     asrStream = stream
                     utteranceAudio.clear()
-                    // 喊岸宝后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了。
+                    // 喊守岸人后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了。
                     // 只丢「音频」不按墙钟丢：等过模型之后队列里排着的是刚唤醒时的
                     // 音频，按墙钟会把用户的话丢掉。
                     skipMs = if (chimePending) CHIME_SKIP_MS else 0L
                     chimePending = false
                     processedMs = 0L
                     lastEmitted = ""
+                    prevText = ""
                     asrAt = 0L
                     loggedPartial = false
                     gate = UtteranceGate()
+                    turnGate = VadTurnGate()
+                    speechVad?.reset()
                     partial = StablePartial()
                 }
                 if (skipMs > 0L) {
@@ -414,6 +438,12 @@ class WakeWordService : Service() {
                 val text = AsrModels.display(recognizer.getResult(stream).text)
                 if (text.isNotBlank()) {
                     gate.noteHeard()
+                    // 只在转写真的长出新字时才报 onText——静音时识别器不清空结果，
+                    // getResult 每帧都是同一句非空文本，要是每帧都报，VadTurnGate 的
+                    // 「等转写收尾」永远凑不齐，每句话都得等 16s 上限（UtteranceGate
+                    // 注释里记过同一个坑，这里不能再见一次）
+                    if (text != prevText) turnGate.onText(processedMs)
+                    prevText = text
                     lastEmitted = text
                     // 只往后长 + 节流：字幕别抖，也别一句话重组十几次主屏
                     val fresh = partial.offer(text, now)
@@ -429,33 +459,46 @@ class WakeWordService : Service() {
                         emitTranscript(fresh, settled = false)
                     }
                 }
-                gate.onAudio(audioRms(samples), dtMs)
-                val reason = gate.shouldStop(processedMs)
+                // 断句决策：优先神经 VAD（说话与否模型说了算），
+                // 装不上退回老的 RMS 门。两者只做「要不要停」，不碰识别。
+                val vadEngine = speechVad
+                val reason: String? = if (vadEngine != null) {
+                    vadEngine.feed(samples)
+                    if (vadEngine.speechActive()) turnGate.onSpeech(processedMs)
+                    if (vadEngine.pollSegment() != null) turnGate.onSegment(processedMs)
+                    turnGate.shouldStop(processedMs)?.name
+                } else {
+                    gate.onAudio(audioRms(samples), dtMs)
+                    gate.shouldStop(processedMs)?.name
+                }
                 if (reason != null) {
                     Log.i(
                         TAG,
-                        "asr stop ${reason.name} elapsed=${processedMs}ms heard=${gate.heard} " +
+                        "asr stop $reason elapsed=${processedMs}ms heard=${turnGate.heard || gate.heard} " +
                             "dropped=${queue.dropped}",
                     )
                     capturing = false
                     asrStream = null
                     // F5：认人跟收尾解码并行——她先开口，声纹在旁边算，发广播前等一小会儿
-                    val speakerJob = startSpeakerTask(gate.heard)
+                    val speakerJob = startSpeakerTask(turnGate.heard || gate.heard)
                     val finalText = finishUtterance(recognizer, stream, lastEmitted)
                     val speaker = awaitSpeaker(speakerJob)
                     emitTranscript(finalText, settled = true, speaker = speaker)
                     HelmLatency.log(
                         currentTurn,
                         "asr_end",
-                        "ms=$processedMs reason=${reason.name} chars=${finalText.length} " +
-                            "heard=${if (gate.heard) 1 else 0}",
+                        "ms=$processedMs reason=$reason chars=${finalText.length} " +
+                            "heard=${if (turnGate.heard || gate.heard) 1 else 0}",
                     )
                     lastDetectAt = SystemClock.elapsedRealtime()
                     spotter.reset(wakeStream)
                 }
             } else {
-                // 对话窗口内：不用喊岸宝，持续人声够 300ms 就直接进听写
-                if (ConversationBus.bypass(now)) {
+                // 对话窗口内：不用喊守岸人，持续人声够 300ms 就直接进听写。
+                // 她正在说话时此门必须关：自己的 TTS 出喇叭再进麦，转出来全是
+                // 「受害人/小安人」这类乱码，喂给大脑她回「嗯。」，出声又被
+                // 听到——自闻死循环。插话走下面的 barge 高门，别从这儿过。
+                if (ConversationBus.bypass(now) && !ConversationBus.speaking(now)) {
                     if (audioRms(samples) >= VAD_RMS) vadMs += dtMs else vadMs = 0L
                     if (vadMs >= VAD_TRIGGER_MS) {
                         vadMs = 0L
@@ -476,32 +519,42 @@ class WakeWordService : Service() {
                     bargeMs = 0L
                 }
                 if (!capturing) {
-                    wakeStream.acceptWaveform(samples, SAMPLE_RATE)
-                    while (spotter.isReady(wakeStream)) {
-                        spotter.decode(wakeStream)
-                        val result = spotter.getResult(wakeStream)
-                        val keyword = result.keyword
-                        if (keyword.isBlank()) {
-                            // 诊断：`adb shell setprop log.tag.WakeWord DEBUG` 后每 5 秒
-                            // 报一次 KWS 手上听到了什么，用来区分「麦克风没声音」和
-                            // 「有声音但没命中关键词」——这两种在用户看来都是「喊了没反应」。
-                            if (now - kwsTraceAt >= KWS_TRACE_MS && Log.isLoggable(TAG, Log.DEBUG)) {
-                                kwsTraceAt = now
-                                Log.d(
-                                    TAG,
-                                    "kws listening rms=${audioRms(samples)} " +
-                                        "tokens=${result.tokens.size}",
-                                )
-                            }
-                            continue
-                        }
-                        if (now - lastDetectAt < COOLDOWN_MS) {
-                            spotter.reset(wakeStream)
-                            continue
-                        }
-                        lastDetectAt = now
+                    // B2：她正在说话（对话回复或朗读）时，kws 别把 Mini 喇叭里
+                    // 她自己的声音当成唤醒词——整段不喂波形、顺手 reset。
+                    // 插话（F2）走上面的 RMS 闸，跟这儿不搭界。
+                    if (ConversationBus.speaking(now)) {
                         spotter.reset(wakeStream)
-                        onDetected(keyword)
+                    } else {
+                        wakeStream.acceptWaveform(samples, SAMPLE_RATE)
+                        while (spotter.isReady(wakeStream)) {
+                            spotter.decode(wakeStream)
+                            val result = spotter.getResult(wakeStream)
+                            val keyword = result.keyword
+                            if (keyword.isBlank()) {
+                                // 诊断：`adb shell setprop log.tag.WakeWord DEBUG` 后每 5 秒
+                                // 报一次 KWS 听到了什么 + 对话窗/抑制窗状态，用来区分
+                                // 「麦克风没声音」「没命中关键词」「免唤醒窗没开」——
+                                // 这几种在用户看来都是「喊了没反应」。
+                                if (now - kwsTraceAt >= KWS_TRACE_MS && Log.isLoggable(TAG, Log.DEBUG)) {
+                                    kwsTraceAt = now
+                                    Log.d(
+                                        TAG,
+                                        "kws listening rms=${audioRms(samples)} " +
+                                            "tokens=${result.tokens.size} " +
+                                            "bypass=${ConversationBus.bypass(now)} " +
+                                            "speaking=${ConversationBus.speaking(now)}",
+                                    )
+                                }
+                                continue
+                            }
+                            if (now - lastDetectAt < COOLDOWN_MS) {
+                                spotter.reset(wakeStream)
+                                continue
+                            }
+                            lastDetectAt = now
+                            spotter.reset(wakeStream)
+                            onDetected(keyword)
+                        }
                     }
                 }
             }
@@ -833,12 +886,17 @@ class WakeWordService : Service() {
         private const val KWS_TRACE_MS = 5_000L
         private const val CHIME_SKIP_MS = 500L
         private const val VAD_TRIGGER_MS = 300L
-        private const val VAD_RMS = 0.030f
+        // RMS 门按 MIC_GAIN 之前的原始电平标定（×4 增益）：
+        // 0.020/0.028 × 4，比 ×3 时代整体下探一档——极小声也要能进对话/打断
+        private const val VAD_RMS = 0.080f
         private const val BARGE_TRIGGER_MS = 800L
-        private const val BARGE_RMS = 0.045f
+        private const val BARGE_RMS = 0.112f
 
         /** AudioRecord 内置缓冲：400ms 的 16bit 单声道。 */
         private const val MIC_BUFFER_MS = 400
+
+        /** 采集后的数字增益（×4 ≈ +12dB），远场小声的唤醒/识别/VAD 全靠它。 */
+        private const val MIC_GAIN = 4.0f
 
         /** 队列最多存 2s 音频；再慢就丢最旧的，别把采集线程堵住。 */
         private const val QUEUE_CHUNKS = 40

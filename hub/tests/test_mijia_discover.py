@@ -27,6 +27,16 @@ def _info(model: str, cache_path=None) -> dict:
         return {"properties": [_prop("on")]}
     if model == "plug":
         return {"properties": [_prop("switch-status")]}
+    if model == "acpartner":
+        # 空调伴侣 X2：空调开关叫 on-3，还有一个 on-6（辅热之类）；没有裸 on
+        return {
+            "properties": [
+                _prop("on-3", siid=3, piid=1),
+                _prop("mode", "uint", 3, 2),
+                _prop("target-temperature", "float", 3, 4),
+                _prop("on-6", siid=6, piid=1),
+            ]
+        }
     return {"properties": [_prop("temperature", "float", 3, 1)]}
 
 
@@ -60,6 +70,18 @@ class DiscoverTest(unittest.TestCase):
         names = {item.cfg.name for item in extras}
         self.assertEqual(names, {"加湿器", "客厅插座"})
         self.assertTrue(all(item.voice_only for item in extras))
+
+    def test_discovers_ac_partner_on_numbered_prop(self) -> None:
+        # 空调伴侣的开关叫 on-3（不是候选表里的裸 on），之前永远发现不了，
+        # 「帮我把空调打开」只能追问「要开哪个？」
+        listed = {
+            "空调": {"did": "555", "model": "acpartner", "name": "空调"},
+        }
+        with patch("dock_hub.mijia_bridge.get_device_info", side_effect=_info):
+            extras = discover_switchable(listed, taken_names=set(), taken_ids=set())
+        self.assertEqual([item.cfg.name for item in extras], ["空调"])
+        self.assertEqual(extras[0].on_prop.name, "on-3")
+        self.assertEqual((extras[0].on_prop.siid, extras[0].on_prop.piid), (3, 1))
 
     def test_bind_adds_extras_without_polling_them(self) -> None:
         lamp = DeviceConfig(id="lamp", name="台灯", type="light", mijia_name="台灯")

@@ -136,6 +136,28 @@ def login_or_qr(
 
 ON_PROP_CANDIDATES = ("on", "switch-status", "power", "switch")
 
+_ON_NUMBERED = re.compile(r"^(on|switch-status|power|switch)-(\d+)$")
+
+
+def _on_like_prop(props: dict[str, Any]) -> PropRef | None:
+    """找一个「开关」属性。先按候选表精确找；找不到再认 on-2 / switch-1 这种
+    带编号的——米家一个模型常有好几个开关服务，编号靠后缀区分，空调伴侣
+    的空调开关就叫 on-3（siid 3 = 空调本体）。多个编号时取编号最小的：
+    主开关的服务号几乎总是排在前面（on-6 那种多半是辅热、指示灯）。"""
+    for candidate in ON_PROP_CANDIDATES:
+        found = _find_prop(props, candidate)
+        if found:
+            return found
+    numbered: list[tuple[int, str]] = []
+    for key in props:
+        match = _ON_NUMBERED.match(key)
+        if match:
+            numbered.append((int(match.group(2)), key))
+    if not numbered:
+        return None
+    numbered.sort()
+    return _find_prop(props, numbered[0][1])
+
 
 def bind_from_config(
     api: mijiaAPI,
@@ -235,11 +257,7 @@ def discover_switchable(
         except GetDeviceInfoError:
             continue
         props = _alias_props(info.get("properties", []))
-        on_prop = None
-        for candidate in ON_PROP_CANDIDATES:
-            on_prop = _find_prop(props, candidate)
-            if on_prop:
-                break
+        on_prop = _on_like_prop(props)
         if on_prop is None:
             continue
         ident = _voice_device_id(did, used)

@@ -37,6 +37,13 @@ from dock_hub.intents import (
     parse_volume_action,
     resolve_skill,
 )
+from dock_hub.mijia_catalog import (
+    action_label,
+    entries_mentioned,
+    infer_catalog_action,
+    infer_catalog_set,
+    value_list_desc,
+)
 from dock_hub.notify import parse_relay
 from dock_hub.persona import speak_timer
 from dock_hub.timers import speak_stopwatch_result
@@ -105,8 +112,50 @@ class DeskMixin:
             )
         ok = bool(result.get("ok"))
         _latency(turn, "scene_ok", id=ident, ok=1 if ok else 0)
+        if not ok:
+            # 场景跑了但没成全：照实说动到哪一步，不能把预置话术当成功播出去
+            return self._scene_partial_report(ident, name, result)
         spoken = str(item.get("say") or "").strip() or f"好，{name}。"
-        return spoken, [{"id": ident, "name": name, "scene": True, "ok": ok}]
+        return spoken, [{"id": ident, "name": name, "scene": True, "ok": True}]
+
+    def _scene_partial_report(
+        self, ident: str, name: str, result: dict[str, Any]
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """部分成功要报部分成功：动了的报动了，没动成的带上原因。"""
+        names = {
+            str(s.get("id")): str(s.get("name") or s.get("id"))
+            for s in (self._skills or [])
+        }
+        actions = result.get("actions") or []
+        done_bits: list[str] = []
+        fail_bits: list[str] = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            dev = names.get(str(action.get("id")), str(action.get("id") or "设备"))
+            if action.get("ok"):
+                if action.get("on") is False:
+                    done_bits.append(f"{dev}关了")
+                elif action.get("brightness") is not None:
+                    done_bits.append(f"{dev}亮度调好了")
+                elif action.get("run"):
+                    done_bits.append(f"{dev}启动了")
+                else:
+                    done_bits.append(f"{dev}开了")
+            else:
+                why = str(action.get("message") or "").strip()
+                why = f"（{why}）" if why and len(why) <= 20 else ""
+                fail_bits.append(f"{dev}没动成{why}")
+        if done_bits and fail_bits:
+            spoken = "，".join(done_bits) + "；" + "、".join(fail_bits) + "。"
+        elif fail_bits:
+            spoken = "这次没动成，你再喊我一声。"
+        else:
+            spoken = f"{name}跑了，但我不确定有没有都成。"
+        return (
+            spoken,
+            [{"id": ident, "name": name, "scene": True, "ok": False, "partial": bool(done_bits)}],
+        )
 
     def _handle_relay(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
         """「跟她说我晚点回」（F33 反向 / F4 语音留言）：递到手机，她只确认一句。
@@ -191,12 +240,15 @@ class DeskMixin:
         if seconds is not None:
             spoken = self._arm_timer(seconds)
             return spoken, [{"id": "timer", "sec": seconds, "ok": True}]
-        media_act = infer_media(text)
+        # 点名了米家目录里的设备（洗衣机/投影仪…）时，桌面口令（暂停/下一首/
+        # 音量）不抢——「洗衣机暂停」不是叫电脑停歌。
+        catalog_named = self._catalog_named(text)
+        media_act = None if catalog_named else infer_media(text)
         if media_act:
             spoken = self._run_media(media_act, turn)
             ok = spoken not in {"这次没动成。", "播放控制关着。", "这台电脑还不能控播放。"}
             return spoken, [{"id": "media", "action": media_act, "ok": ok}]
-        volume_act = infer_volume(text)
+        volume_act = None if catalog_named else infer_volume(text)
         if volume_act:
             spoken = self._run_volume(volume_act, turn)
             ok = spoken not in {"这次没动成。", "音量我还调不了。"}
@@ -206,7 +258,7 @@ class DeskMixin:
             spoken = self._run_noise(noise_act, turn)
             ok = spoken not in _NOISE_FAIL_SPOKEN
             return spoken, [{"id": "noise", **noise_act, "ok": ok}]
-        music_act = infer_music(text)
+        music_act = None if catalog_named else infer_music(text)
         if music_act:
             spoken = self._run_music(music_act, turn)
             ok = spoken not in _NOISE_FAIL_SPOKEN
@@ -217,6 +269,9 @@ class DeskMixin:
         climate = self._run_temp(text, turn)
         if climate:
             return climate
+        catalog = self._run_catalog_set(text, turn)
+        if catalog:
+            return catalog
         return None
 
     def _run_slow_dim(
@@ -427,6 +482,79 @@ class DeskMixin:
             run_skill=self._run_skill,
             note=_latency,
         )
+
+    def _catalog_named(self, text: str) -> bool:
+        """原话里点名了米家目录里的哪台设备。目录没配就是 False。"""
+        get_entries = self._world.get("catalog_entries")
+        if not callable(get_entries):
+            return False
+        entries = get_entries()
+        if not entries:
+            return False
+        return bool(entries_mentioned(entries, text))
+
+    def _run_catalog_set(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """米家目录兜底：「空调二十四度」「空调制热」「洗衣机暂停」这类高频
+        口令不赌模型。
+
+        技能表（老路）没接住的温度/枚举/动作指令，按目录数据确定性落到
+        device_prop / device_action。没配目录或没命中就 None，让话继续走对话。
+        """
+        get_entries = self._world.get("catalog_entries")
+        if not callable(get_entries):
+            return None
+        entries = get_entries()
+        if not entries:
+            return None
+        wanted = infer_catalog_set(text, entries)
+        wanted_acts = infer_catalog_action(text, entries)
+        if not wanted and not wanted_acts:
+            return None
+        prop_runner = self._world.get("device_prop")
+        action_runner = self._world.get("device_action")
+        events: list[dict[str, Any]] = []
+        spoken = ""
+        if not callable(prop_runner) and not callable(action_runner):
+            return None
+        for entry, prop, value in wanted:
+            name = entry.name
+            if not callable(prop_runner):
+                break
+            try:
+                payload = prop_runner(entry.id, prop.name, value)
+            except HubError as exc:
+                _latency(turn, "skill_error", id=entry.id, what=prop.name, code=exc.code)
+                return f"{name}没动成。", [
+                    {"id": entry.id, "name": name, "what": prop.name, "ok": False, "code": exc.code}
+                ]
+            _latency(turn, "skill_ok", id=entry.id, what=prop.name)
+            events.append({"id": entry.id, "name": name, "what": prop.name, "ok": True})
+            if isinstance(payload, dict) and payload.get("value") is not None:
+                value = payload["value"]
+            if prop.type == "bool":
+                spoken = f"好，{name}{'开' if value else '关'}了。"
+            elif "temperature" in prop.name or "温度" in prop.desc:
+                spoken = f"好，{name}调到{value}度。"
+            elif value_list_desc(prop, value):
+                spoken = f"好，{name}调到{value_list_desc(prop, value)}。"
+            else:
+                spoken = f"好，{name}调好了。"
+        for entry, action in wanted_acts:
+            name = entry.name
+            label = action_label(action)
+            if not callable(action_runner):
+                break
+            try:
+                action_runner(entry.id, action.name)
+            except HubError as exc:
+                _latency(turn, "skill_error", id=entry.id, what=label, code=exc.code)
+                return f"{name}没动成。", [
+                    {"id": entry.id, "name": name, "what": label, "ok": False, "code": exc.code}
+                ]
+            _latency(turn, "skill_ok", id=entry.id, what=label)
+            events.append({"id": entry.id, "name": name, "what": label, "ok": True})
+            spoken = f"好，{name}{label}了。" if not label.endswith(("暂停", "结束")) else f"好，{name}{label}。"
+        return spoken, events
 
     def _run_media(self, action: str, turn: str) -> str:
         fn = self._world.get("media_command")

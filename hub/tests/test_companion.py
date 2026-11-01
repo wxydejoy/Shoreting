@@ -220,6 +220,71 @@ def _fake_ollama(content: str = "晚上好，漂泊者。", wav: bytes | None = 
 
 
 class CompanionLogicTest(unittest.TestCase):
+    def test_snapshot_reports_speaking_left_ms(self) -> None:
+        # F1/F2 的关键：快照带「还要说多久」，手机抑制/打断窗按剩余续。
+        # TTS 是 cue 完即返回的异步播放，旗标必须按 ETA 持有。
+        comp = Companion(CompanionConfig(enabled=True))
+        snap = comp.snapshot()
+        self.assertFalse(snap["speaking"])
+        self.assertEqual(snap["speaking_left_ms"], 0)
+        comp.set_speaking(True, eta_sec=1.0)
+        snap = comp.snapshot()
+        self.assertTrue(snap["speaking"])
+        self.assertGreater(snap["speaking_left_ms"], 0)
+        self.assertLessEqual(snap["speaking_left_ms"], 1000)
+        # ETA 过期＝她说完了，旗标不许再立着
+        with comp._lock:
+            comp._speaking_left_until = time.monotonic() - 0.1
+        snap = comp.snapshot()
+        self.assertFalse(snap["speaking"])
+        self.assertEqual(snap["speaking_left_ms"], 0)
+        comp.set_speaking(False)
+        self.assertFalse(comp.snapshot()["speaking"])
+
+    def test_reply_carries_listen_policy(self) -> None:
+        # F1 裁决权在大脑：问句开 20s 等回答，陈述句 8s，随回复下发
+        runs: list[tuple[str, bool]] = []
+
+        def run(ident: str, on: bool, **_: object) -> None:
+            runs.append((ident, on))
+
+        comp = Companion(CompanionConfig(enabled=True))
+        comp.set_skills([{"id": "lamp", "name": "台灯", "kind": "toggle"}], run)
+        asked = comp.chat({"text": "把它关掉", "id": "t1"})
+        listen = asked.get("listen") or {}
+        self.assertEqual(listen.get("open_ms"), 20_000)  # 「要关哪个？」是问句
+        self.assertGreater(listen.get("wait_ms", 0), 0)
+        done = comp.chat({"text": "台灯", "id": "t2"})
+        self.assertEqual(done["listen"]["open_ms"], 8_000)  # 「好。」是陈述句
+
+    def test_filler_input_is_silent(self) -> None:
+        # 自闻/噪音转出来的「嗯」不进大脑、不出声、不开新一轮——
+        # 「一直嗯」自激（喇叭出声→麦收走→乱码→她回「嗯。」→循环）的断路器
+        comp = Companion(CompanionConfig(enabled=True))
+        out = comp.chat({"text": "嗯", "id": "f1"})
+        self.assertEqual(out, {"text": "", "audio_id": None})
+        self.assertIsNone(comp._pending_clarify)
+
+    def test_filler_with_pending_clarify_still_processed(self) -> None:
+        # 澄清待答时「嗯」可能是正经回应，不许被 guard 吞掉
+        runs: list[tuple[str, bool]] = []
+
+        def run(ident: str, on: bool, **_: object) -> None:
+            runs.append((ident, on))
+
+        comp = Companion(CompanionConfig(enabled=True))
+        comp.set_skills(
+            [
+                {"id": "lamp", "name": "台灯", "kind": "toggle"},
+            ],
+            run,
+        )
+        comp.chat({"text": "把它关掉", "id": "t1"})
+        assert comp._pending_clarify is not None
+        with patch.object(Companion, "_complete", return_value="好。"):
+            out = comp.chat({"text": "嗯", "id": "t2"})
+        self.assertEqual(out.get("text"), "好。")
+
     def test_strips_think_and_action(self) -> None:
         raw = "<think>long</think>\n晚上好。\nACTION: lamp.on\n还早。"
         self.assertEqual(_clean_reply(raw), "晚上好。\n还早。")

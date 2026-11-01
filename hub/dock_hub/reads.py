@@ -46,7 +46,7 @@ class ReadHost(Protocol):
 
     def still_current(self, seq: int) -> bool: ...
 
-    def set_speaking(self, speaking: bool) -> None: ...
+    def set_speaking(self, speaking: bool, eta_sec: float | None = None) -> None: ...
 
     def keep_clip(self, ident: str, wav: bytes) -> None: ...
 
@@ -284,7 +284,12 @@ class ReadJobs:
             job["done"] = 0
         self.host.note(ident, "read_job_run", mode=mode, chunks=len(chunks))
         seq = self.host.next_seq()
-        self.host.set_speaking(True)
+        # play 模式是 cue 完即返回、TTS 服务器异步播：旗标必须按整篇预估
+        # 时长持有，不然手机永远看不到「她在说」（B2 抑制 / F2 打断全废）
+        self.host.set_speaking(
+            True,
+            eta_sec=estimate_read_seconds("".join(chunks)) + 2.0 if mode == "play" else None,
+        )
         try:
             if mode == "play":
                 self.host.stop_playback()
@@ -349,8 +354,15 @@ class ReadJobs:
                     current["error"] = None if interrupted else message
                     current.pop("_chunks", None)
             self.host.note(ident, "read_job_error" if not interrupted else "read_job_cancel")
+            if mode == "play":
+                # 播放中被打断/出错：抑制窗立刻收，别等 ETA 到点
+                self.host.set_speaking(False)
         finally:
-            self.host.set_speaking(False)
+            # play 模式的播放发生在 TTS 服务器侧（cue 完即返回），旗标按
+            # 整篇预估时长的 ETA 到点自动过期，不能在这儿摘；file 模式是
+            # 同步合成、无出声，走人就该摘
+            if mode != "play":
+                self.host.set_speaking(False)
 
     def _raise_if_stopped(self, ident: str, seq: int) -> None:
         with self._lock:
