@@ -802,7 +802,7 @@ paths:
           $ref: "#/components/responses/Error"
   /v1/companion/books/{id}/{action}:
     post:
-      summary: Start, pause, or bookmark reading for one book
+      summary: Start, pause, bookmark, or skip sentences while reading
       operationId: postCompanionBookAction
       parameters:
         - name: id
@@ -815,7 +815,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [play, pause, bookmark]
+            enum: [play, pause, bookmark, skip]
       requestBody:
         required: false
         content:
@@ -827,6 +827,10 @@ paths:
                   type: integer
                   minimum: 0
                   description: play 时从哪儿开始；bookmark 时记到哪儿
+                dir:
+                  type: integer
+                  enum: [1, -1]
+                  description: skip 用，1 跳过这句（缺省），-1 回上一句
       responses:
         "200":
           description: Story state after the action

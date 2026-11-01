@@ -613,6 +613,60 @@ class Books:
             thread.join(timeout=2)
         return self.story()
 
+    def _prev_readable_start(self, doc: Document, offset: int) -> int | None:
+        """offset 之前那个句子的起点：按播放用的同一套切法从头走一遍。"""
+        if offset <= 0:
+            return None
+        prev: int | None = None
+        cursor = 0
+        while True:
+            nxt = self._next_readable(doc, cursor)
+            if nxt is None:
+                return prev
+            piece_start, piece = nxt
+            if piece_start >= offset:
+                return prev
+            prev = piece_start
+            cursor = piece_start + len(piece)
+
+    def skip(self, book_id: str, direction: int) -> dict[str, Any]:
+        """句子级跳过（朗读页「上一句 / 跳过这句」）。
+
+        正在读时跳过去接着读（与 play 跳转同路，倒计时不重新给满）；
+        没在读时只挪书签不开口。已经是第一句或最后一句时原地不动。
+        """
+        try:
+            direction = int(direction)
+        except (TypeError, ValueError):
+            direction = 0
+        if direction not in (1, -1):
+            raise HubError("bad_request", "dir 只能是 1 或 -1")
+        book_id, _path = self._file(book_id)
+        doc = self._document(book_id)
+        with self._lock:
+            playing = self._playing and self._book_id == book_id
+            if playing:
+                cur_start, cur_piece = self._sentence_start, self._sentence
+                if not cur_piece:
+                    return self._story_locked()
+            else:
+                cur = self._next_readable(doc, self._bookmark(book_id, len(doc.text), persist=False))
+                if cur is None:
+                    return self._story_locked()
+                cur_start, cur_piece = cur
+            if direction == 1:
+                target = self._next_readable(doc, cur_start + len(cur_piece))
+            else:
+                prev_start = self._prev_readable_start(doc, cur_start)
+                target = (prev_start, "") if prev_start is not None else None
+            if target is None:
+                return self._story_locked()
+            target_offset = target[0]
+        _log("story_skip", id=book_id, dir=direction, offset=target_offset)
+        if playing:
+            return self.play(book_id, target_offset)
+        return self.bookmark(book_id, target_offset)
+
     def bookmark(self, book_id: str, offset: int) -> dict[str, Any]:
         book_id, _path = self._file(book_id)
         with self._lock:

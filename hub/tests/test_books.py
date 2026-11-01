@@ -395,6 +395,79 @@ class PlayTest(unittest.TestCase):
             self.books.play("空.txt")
         self.assertEqual(caught.exception.message, "没有可以读的字")
 
+    def test_skip_forward_moves_to_next_sentence(self) -> None:
+        self.books.play("雾海.txt")
+        self.assertTrue(self.clock.arrived())
+        first = self.books.story()["sentence"]
+        self.clock.release()
+        self.assertTrue(self.clock.arrived())
+        second = self.books.story()["sentence"]
+        self.assertNotEqual(first, second)
+        # 从第二句跳过：要么进下一句，要么读完
+        self.books.skip("雾海.txt", 1)
+        self.assertTrue(self.clock.arrived())
+        story = self.books.story()
+        self.assertNotEqual(story["sentence"], second)
+        self.books.pause()
+
+    def test_skip_back_returns_to_previous_sentence(self) -> None:
+        self.books.play("雾海.txt")
+        self.assertTrue(self.clock.arrived())
+        first_start = self.books.story()["sentence_start"]
+        first = self.books.story()["sentence"]
+        self.clock.release()
+        self.assertTrue(self.clock.arrived())
+        self.books.skip("雾海.txt", -1)
+        self.assertTrue(self.clock.arrived())
+        story = self.books.story()
+        self.assertTrue(story["playing"])
+        self.assertEqual(story["sentence"], first)
+        self.assertEqual(story["sentence_start"], first_start)
+        self.books.pause()
+
+    def test_skip_while_paused_moves_bookmark_only(self) -> None:
+        # 书签放第一章第二句开头（第一章有两句），才能往前跳
+        opened = self.books.open_book("雾海.txt")
+        ch_start = opened["chapters"][0]["start"]
+        first = next_slice(self.books.chapter("雾海.txt", 0)["text"], 0)
+        assert first is not None
+        target = ch_start + first[0] + len(first[1])
+        self.books.bookmark("雾海.txt", target)
+        cued_before = len(self.speaker.cued)
+        story = self.books.skip("雾海.txt", 1)
+        self.assertFalse(story["playing"])
+        self.assertEqual(self.speaker.cued, self.speaker.cued[:cued_before])
+        self.assertGreater(story["offset"], target)
+        back = self.books.skip("雾海.txt", -1)
+        self.assertEqual(back["offset"], target)
+        self.assertEqual(self.speaker.cued, self.speaker.cued[:cued_before])
+
+    def test_skip_at_edges_stays_put(self) -> None:
+        story = self.books.play("雾海.txt")
+        self.assertTrue(self.clock.arrived())
+        first_start = story["sentence_start"]
+        first = story["sentence"]
+        # 第一句再往上回，原地不动（不重进等待，也就不需要 arrived）
+        stayed = self.books.skip("雾海.txt", -1)
+        self.assertEqual(stayed["sentence"], first)
+        self.assertEqual(stayed["sentence_start"], first_start)
+        # 跳到最后一句（第二章只有一句）后往前跳：下一句没有，原地不动
+        opened = self.books.open_book("雾海.txt")
+        self.books.play("雾海.txt", offset=opened["chapters"][-1]["start"])
+        self.assertTrue(self.clock.arrived())
+        last = self.books.story()["sentence"]
+        stayed_last = self.books.skip("雾海.txt", 1)
+        self.assertEqual(stayed_last["sentence"], last)
+        self.assertTrue(stayed_last["playing"])
+        self.books.pause()
+
+    def test_skip_rejects_bad_direction(self) -> None:
+        with self.assertRaises(HubError) as caught:
+            self.books.skip("雾海.txt", 0)
+        self.assertEqual(caught.exception.status, 400)
+        with self.assertRaises(HubError):
+            self.books.skip("雾海.txt", "x")
+
 
 class TimerTest(PlayTest):
     def _wait_until_stopped(self) -> None:
@@ -554,6 +627,22 @@ class HttpTest(unittest.TestCase):
         self.assertEqual(paused["stopped_by"], "user")
         status, _bad = self._request("POST", "/v1/companion/story/timer", {"minutes": 10})
         self.assertEqual(status, 400)
+
+    def test_skip_over_http(self) -> None:
+        self._request(
+            "POST", "/v1/companion/books/" + quote("已有.txt") + "/play", {}
+        )
+        self.assertTrue(self.clock.arrived())
+        status, story = self._request(
+            "POST", "/v1/companion/books/" + quote("已有.txt") + "/skip", {"dir": 1}
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("playing", story)
+        status, bad = self._request(
+            "POST", "/v1/companion/books/" + quote("已有.txt") + "/skip", {"dir": 5}
+        )
+        self.assertEqual(status, 400)
+        self.hub.books.pause()
 
     def test_short_read_pauses_story_and_keeps_bookmark(self) -> None:
         self.hub.books.save_upload("雾海.txt", "第一章 雾\n\n海雾来了。".encode())
