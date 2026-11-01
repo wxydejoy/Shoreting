@@ -151,6 +151,46 @@ class SetupWizardTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 apply_voice(hub, {"volume": 140, "speed": 1})
 
+    def test_voice_get_gives_the_saved_pair_without_the_rest_of_state(self) -> None:
+        from unittest.mock import patch
+
+        from dock_hub.setup_ui import handle_setup_get
+
+        class FakeHandler:
+            status = None
+            payload = None
+
+            def _json(self, status, payload):
+                self.status = status
+                self.payload = payload
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "hub.yaml"
+            cfg = save_config_raw(
+                {
+                    "name": "study",
+                    "token": "secret-token-value",
+                    "devices": [],
+                    "companion": {
+                        "enabled": True,
+                        "voice": {"volume": 28, "speed": 1.15},
+                    },
+                },
+                path,
+            )
+            hub = DockHub(cfg)
+            self.addCleanup(hub.pc.stop)
+            self.addCleanup(hub.reporter.stop)
+            handler = FakeHandler()
+            # 没存过音量时回落系统音量；这里存过了，读盘就该给存的那份
+            with patch("dock_hub.system_volume.read_output_volume", return_value=70):
+                handled = handle_setup_get(hub, "/setup/api/voice", handler)
+        self.assertTrue(handled)
+        self.assertEqual(handler.status, 200)
+        self.assertTrue(handler.payload["ok"])
+        self.assertEqual(handler.payload["volume"], 28)
+        self.assertAlmostEqual(handler.payload["speed"], 1.15)
+
     def test_setup_api_localhost_only(self) -> None:
         cfg = parse_config(
             {

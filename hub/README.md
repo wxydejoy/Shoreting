@@ -187,6 +187,22 @@ curl -s -X POST http://127.0.0.1:17890/setup/api/features \
 - 写盘前会重新解析一遍：设备/场景引用不存在的 id、时刻写成 `25:00`、值超出范围，都会直接报错且不落盘。
 - 场景、定时任务、设备这些列表仍然在 yaml 或向导里编辑。
 
+## 声音（音量 / 语速）
+
+朗读页右上那一格音量、配置页的「声音」表单，读写的是同一对接口：
+
+```bash
+curl -s http://127.0.0.1:17890/setup/api/voice          # {volume, speed, saved}
+curl -s -X POST http://127.0.0.1:17890/setup/api/voice \
+  -H 'Content-Type: application/json' \
+  -d '{"volume": 35, "speed": 1.1}'
+```
+
+- `GET` 只回这一格，不拉 `/setup/api/state`（那份要读米家设备表，太沉）。
+- `POST` 写进 `hub.yaml` 的 `companion.voice`，**当场**改系统输出音量，并把语速推给 TTS 的 `/v1/settings`；
+  正在念的那本书不用停，下一句就是新音量。
+- 朗读页的滑块攒 180ms 再发一次请求，拖动时不会刷出一串写盘。
+
 
 ## 源码开发
 

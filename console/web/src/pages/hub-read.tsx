@@ -13,6 +13,8 @@ import {
   Square,
   Trash2,
   Upload,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -184,6 +186,52 @@ export function ReadPage() {
   const [bodyOpen, setBodyOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const bookRef = useRef<HTMLInputElement>(null);
+
+  // 音量：滑块先动，请求攒 180ms 再发 —— 拖动时不会一串 POST，
+  // 停下来那一刻系统音量就变了（Hub 收到就改系统输出音量）。
+  const [volume, setVolume] = useState<number | null>(null);
+  const volumeTimer = useRef<number | null>(null);
+  const volumeBeforeMute = useRef(45);
+  const speedRef = useRef(1);
+
+  useEffect(() => {
+    let dropped = false;
+    const take = (next: number, speed: number) => {
+      if (dropped) return;
+      setVolume(Math.max(0, Math.min(100, Math.round(next))));
+      speedRef.current = speed || 1;
+      if (next > 0) volumeBeforeMute.current = next;
+    };
+    // 老 Hub 没有这格专用接口，退回 state 里那份（只多拉一次，不轮询）
+    hubGet<{ volume: number; speed: number }>("/setup/api/voice")
+      .then((data) => take(data.volume, data.speed))
+      .catch(() =>
+        hubGet<{ voice: { volume: number; speed: number } }>("/setup/api/state")
+          .then((data) => take(data.voice.volume, data.voice.speed))
+          .catch(() => undefined),
+      );
+    return () => {
+      dropped = true;
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (volumeTimer.current) window.clearTimeout(volumeTimer.current);
+    },
+    [],
+  );
+
+  const pushVolume = (next: number) => {
+    setVolume(next);
+    if (next > 0) volumeBeforeMute.current = next;
+    if (volumeTimer.current) window.clearTimeout(volumeTimer.current);
+    volumeTimer.current = window.setTimeout(() => {
+      hubPost("/setup/api/voice", { volume: next, speed: speedRef.current }).catch((err) => {
+        toast.error(err instanceof Error ? err.message : String(err));
+      });
+    }, 180);
+  };
 
   const list = jobs.data?.items ?? [];
   const shelf = books.data?.items ?? [];
@@ -480,6 +528,35 @@ export function ReadPage() {
                   ) : null}
 
                   <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                    <div className="flex items-center gap-1.5 rounded-md border border-border/70 px-2 py-1">
+                      <button
+                        type="button"
+                        className="text-muted-foreground transition-colors hover:text-foreground"
+                        aria-label={volume ? "静音" : "恢复音量"}
+                        disabled={volume === null}
+                        onClick={() => pushVolume(volume ? 0 : volumeBeforeMute.current)}
+                      >
+                        {volume ? (
+                          <Volume2 className="size-3.5" />
+                        ) : (
+                          <VolumeX className="size-3.5" />
+                        )}
+                      </button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={volume ?? 0}
+                        disabled={volume === null}
+                        aria-label="音量"
+                        onChange={(event) => pushVolume(Number(event.target.value))}
+                        className="h-1 w-24 cursor-pointer accent-primary disabled:cursor-default"
+                      />
+                      <span className="w-6 text-right text-[11px] text-muted-foreground tabular-nums">
+                        {volume ?? "—"}
+                      </span>
+                    </div>
                     <span className="text-[11px] text-muted-foreground">定时停</span>
                     <Select
                       value={String(live?.timer_min ?? books.data?.timer_min ?? 30)}

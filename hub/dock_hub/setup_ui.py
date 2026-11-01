@@ -867,6 +867,10 @@ def handle_setup_get(hub: DockHub, path: str, handler: Any) -> bool:
     if path == "/setup/api/mijia-login/status":
         handler._json(200, mijia_login_status())  # noqa: SLF001
         return True
+    if path == "/setup/api/voice":
+        # 朗读页只要音量这一格，不该为了它把整个 state（含米家设备表）拉一遍
+        handler._json(200, {"ok": True, **current_voice(hub)})  # noqa: SLF001
+        return True
     if path == "/setup/api/features":
         from dock_hub.features import describe
 
