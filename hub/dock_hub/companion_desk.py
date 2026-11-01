@@ -37,7 +37,13 @@ from dock_hub.intents import (
     parse_volume_action,
     resolve_skill,
 )
-from dock_hub.mijia_catalog import entries_mentioned, infer_catalog_set, value_list_desc
+from dock_hub.mijia_catalog import (
+    action_label,
+    entries_mentioned,
+    infer_catalog_action,
+    infer_catalog_set,
+    value_list_desc,
+)
 from dock_hub.notify import parse_relay
 from dock_hub.persona import speak_timer
 from dock_hub.timers import speak_stopwatch_result
@@ -446,10 +452,11 @@ class DeskMixin:
         return bool(entries_mentioned(entries, text))
 
     def _run_catalog_set(self, text: str, turn: str) -> tuple[str, list[dict[str, Any]]] | None:
-        """米家目录兜底：「空调二十四度」「空调制热」这类高频口令不赌模型。
+        """米家目录兜底：「空调二十四度」「空调制热」「洗衣机暂停」这类高频
+        口令不赌模型。
 
-        技能表（老路）没接住的温度/枚举指令，按目录数据确定性落到
-        device_prop。没配目录或没命中就 None，让话继续走对话。
+        技能表（老路）没接住的温度/枚举/动作指令，按目录数据确定性落到
+        device_prop / device_action。没配目录或没命中就 None，让话继续走对话。
         """
         get_entries = self._world.get("catalog_entries")
         if not callable(get_entries):
@@ -458,17 +465,21 @@ class DeskMixin:
         if not entries:
             return None
         wanted = infer_catalog_set(text, entries)
-        if not wanted:
+        wanted_acts = infer_catalog_action(text, entries)
+        if not wanted and not wanted_acts:
             return None
-        runner = self._world.get("device_prop")
-        if not callable(runner):
-            return None
+        prop_runner = self._world.get("device_prop")
+        action_runner = self._world.get("device_action")
         events: list[dict[str, Any]] = []
         spoken = ""
+        if not callable(prop_runner) and not callable(action_runner):
+            return None
         for entry, prop, value in wanted:
             name = entry.name
+            if not callable(prop_runner):
+                break
             try:
-                payload = runner(entry.id, prop.name, value)
+                payload = prop_runner(entry.id, prop.name, value)
             except HubError as exc:
                 _latency(turn, "skill_error", id=entry.id, what=prop.name, code=exc.code)
                 return f"{name}没动成。", [
@@ -486,6 +497,21 @@ class DeskMixin:
                 spoken = f"好，{name}调到{value_list_desc(prop, value)}。"
             else:
                 spoken = f"好，{name}调好了。"
+        for entry, action in wanted_acts:
+            name = entry.name
+            label = action_label(action)
+            if not callable(action_runner):
+                break
+            try:
+                action_runner(entry.id, action.name)
+            except HubError as exc:
+                _latency(turn, "skill_error", id=entry.id, what=label, code=exc.code)
+                return f"{name}没动成。", [
+                    {"id": entry.id, "name": name, "what": label, "ok": False, "code": exc.code}
+                ]
+            _latency(turn, "skill_ok", id=entry.id, what=label)
+            events.append({"id": entry.id, "name": name, "what": label, "ok": True})
+            spoken = f"好，{name}{label}了。" if not label.endswith(("暂停", "结束")) else f"好，{name}{label}。"
         return spoken, events
 
     def _run_media(self, action: str, turn: str) -> str:

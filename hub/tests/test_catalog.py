@@ -13,12 +13,14 @@ from dock_hub.intents import (
     parse_set_actions,
 )
 from dock_hub.mijia_catalog import (
+    CatalogAction as CatalogActionT,
     CatalogEntry,
     CatalogProp,
     build_catalog,
     catalog_prompt,
     coerce_catalog_value,
     entries_mentioned,
+    infer_catalog_action,
     infer_catalog_set,
     read_plan,
     reading_lines,
@@ -407,6 +409,33 @@ class InferCatalogSetTest(unittest.TestCase):
         self.assertNotIn("electric-power", text)
         # 可写的排在只读前面
         self.assertLess(text.index("开关（on）"), text.index("循环定时参数1"))
+
+
+class InferCatalogActionTest(unittest.TestCase):
+    def test_washer_pause_by_short_name_and_desc(self) -> None:
+        washer = CatalogEntry(
+            id="m2",
+            name="米家洗衣机",
+            model="m",
+            did="2",
+            actions=[
+                CatalogActionT(name="start-wash", siid=2, aiid=1, desc="开始洗涤"),
+                CatalogActionT(name="pause", siid=2, aiid=2, desc="暂停"),
+                CatalogActionT(name="stop-washing", siid=2, aiid=3, desc="停止洗涤"),
+            ],
+        )
+        got = infer_catalog_action("帮我把洗衣机暂停", [washer])
+        self.assertEqual([(e.id, a.name) for e, a in got], [("m2", "pause")])
+
+    def test_no_desc_hit_no_action(self) -> None:
+        washer = CatalogEntry(
+            id="m2",
+            name="米家洗衣机",
+            model="m",
+            did="2",
+            actions=[CatalogActionT(name="start-wash", siid=2, aiid=1, desc="开始洗涤")],
+        )
+        self.assertEqual(infer_catalog_action("洗衣机脱水", [washer]), [])
 
 
 if __name__ == "__main__":

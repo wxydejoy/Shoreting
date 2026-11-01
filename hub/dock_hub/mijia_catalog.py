@@ -261,6 +261,7 @@ def catalog_prompt(entries: list[CatalogEntry]) -> str:
         *lines,
         "写属性：ACTION: <id>.set.<属性名>.<值>。bool 用 true/false；枚举用编号；数值在范围内。",
         "执行动作：ACTION: <id>.do.<动作名>。",
+        "对方要的若是清单里列出的属性或动作，必须另起一行写 ACTION 行——只口头答应、没写 ACTION 行等于没做。",
         "对方问某台设备的状态时（开了没/多少度/湿度/电量），用「设备实况」里的读数回答。",
         "清单里的设备同样短应一声再写 ACTION 行；闲聊不要写 ACTION。",
     ]
@@ -394,6 +395,35 @@ def value_list_desc(prop: CatalogProp, value: Any) -> str:
         if str(item_value) == str(value):
             return desc or ""
     return ""
+
+
+def action_label(action: CatalogAction) -> str:
+    """动作的中文说法（清过英文前缀）。"""
+    return _clean_desc(action.desc) or action.name
+
+
+def infer_catalog_action(
+    text: str,
+    entries: list[CatalogEntry],
+) -> list[tuple[CatalogEntry, CatalogAction]]:
+    """原话点名设备 + 动作的中文描述出现在原话 → [(设备, 动作)]。
+
+    「洗衣机暂停」对上 desc「暂停」的动作。一台设备只认一个动作，
+    按目录顺序取第一个命中的。
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return []
+    out: list[tuple[CatalogEntry, CatalogAction]] = []
+    for entry in entries:
+        if not any(needle in stripped for needle in _name_needles(entry)):
+            continue
+        for action in entry.actions[:MAX_ACTIONS_PER_DEVICE]:
+            desc = _clean_desc(action.desc) or action.name
+            if len(desc) >= 2 and desc in stripped:
+                out.append((entry, action))
+                break
+    return out
 
 
 # ---- 常规口令的确定性兜底 --------------------------------------------------
