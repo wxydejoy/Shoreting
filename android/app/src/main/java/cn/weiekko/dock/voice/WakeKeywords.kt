@@ -14,8 +14,8 @@ object WakeKeywords {
     const val ALT = "嘿守岸人"
 
     val LINES = listOf(
-        "sh ǒu àn r én :3.2 #0.12 @守岸人",
-        "h ēi sh ǒu àn r én :3.4 #0.10 @嘿守岸人",
+        "sh ǒu àn r én :3.2 #0.07 @守岸人",
+        "h ēi sh ǒu àn r én :3.4 #0.05 @嘿守岸人",
     )
 
     /** createStream 用 `/` 分隔多行关键词。 */

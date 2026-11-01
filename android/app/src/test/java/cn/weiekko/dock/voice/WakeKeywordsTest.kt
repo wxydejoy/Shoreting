@@ -9,7 +9,7 @@ class WakeKeywordsTest {
     fun shouAnRenUsesInitialFinalPinyin() {
         val line = WakeKeywords.LINES.first { it.contains("@守岸人") }
         assertTrue(line.startsWith("sh ǒu àn r én"))
-        assertTrue(line.contains("#0.12"))
+        assertTrue(line.contains("#0.07"))
     }
 
     @Test

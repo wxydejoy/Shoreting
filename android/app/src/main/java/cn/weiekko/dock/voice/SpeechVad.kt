@@ -14,7 +14,9 @@ import com.k2fsa.sherpa.onnx.VadModelConfig
  * 字与字之间的短停顿不会被当成一句说完了。
  *
  * 参数取各家默认值 / 调优区间的交集（不是拍脑袋）：
- * - threshold 0.5：TEN VAD 默认判定线。
+ * - threshold 0.42：TEN 默认 0.5，实测远场小声整轮过不了线（VAD 失明、
+ *   断句只能等兜底），压到 0.42 换回一点灵敏度；误报有 TextTail 的
+ *   「人声最近没报就不许抢断」守着，代价可控。
  * - minSilence 0.7s：静音多久才算「这句说完了」。pipecat 的调优区间 0.3–0.5s，
  *   LiveKit 默认 0.6s；摆件是远场拾音，取偏保守的 0.7。
  * - minSpeech 0.25s：比这短的「人声」按噪声丢（咳嗽、碰桌子）。
@@ -60,7 +62,7 @@ internal class SpeechVad private constructor(private val vad: Vad) {
     companion object {
         private const val TAG = "SpeechVad"
         private const val MODEL = "vad/ten-vad.onnx"
-        private const val THRESHOLD = 0.5f
+        private const val THRESHOLD = 0.42f
         private const val MIN_SILENCE_S = 0.7f
         private const val MIN_SPEECH_S = 0.25f
         private const val MAX_SPEECH_S = 20f
