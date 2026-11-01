@@ -21,6 +21,7 @@ import { SetupPage } from "@/pages/hub-setup";
 import { ChatsPage } from "@/pages/hub-chats";
 import { ReadPage } from "@/pages/hub-read";
 import { JournalPage } from "@/pages/hub-journal";
+import { MemoryPage } from "@/pages/hub-memory";
 import { LayoutPage } from "@/pages/hub-layout";
 import { AboutPage } from "@/pages/about";
 import { useConsole } from "@/lib/console-store";
@@ -211,6 +212,7 @@ export default function App() {
             {route.kind === "hub" && route.page === "chats" ? <ChatsPage /> : null}
             {route.kind === "hub" && route.page === "read" ? <ReadPage /> : null}
             {route.kind === "hub" && route.page === "journal" ? <JournalPage /> : null}
+            {route.kind === "hub" && route.page === "memory" ? <MemoryPage /> : null}
             {route.kind === "hub" && !HUB_PAGES.some((page) => page.id === route.page) ? (
               <UnknownHubPage page={route.page} />
             ) : null}

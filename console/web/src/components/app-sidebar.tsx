@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion } from "motion/react";
 import {
   BookOpen,
+  Brain,
   CalendarDays,
   ChevronRight,
   House,
@@ -70,6 +71,7 @@ export function AppSidebar({ route }: { route: Route }) {
       label: "日子",
       items: [
         { key: "chats", label: "聊天", to: { kind: "hub", page: "chats" }, icon: MessagesSquare },
+        { key: "memory", label: "记忆", to: { kind: "hub", page: "memory" }, icon: Brain },
         { key: "read", label: "朗读", to: { kind: "hub", page: "read" }, icon: BookOpen },
         { key: "journal", label: "周报", to: { kind: "hub", page: "journal" }, icon: CalendarDays },
       ],

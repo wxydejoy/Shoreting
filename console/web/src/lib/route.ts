@@ -24,6 +24,7 @@ export const HUB_PAGES: HubPage[] = [
   { id: "chats", path: "/chats", title: "聊天", desc: "和她说过的每一段，按天翻" },
   { id: "read", path: "/read", title: "朗读", desc: "丢一段文字，让 Mini 念出来" },
   { id: "journal", path: "/journal", title: "周报", desc: "这一周的账，和她自己记的那些天" },
+  { id: "memory", path: "/memory", title: "记忆", desc: "她记得关于你的事，和对你的印象" },
 ];
 
 /** 老的 #/hub/week、#/hub/diary 合并进 journal，别让收藏的链接 404。 */
