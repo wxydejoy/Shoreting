@@ -886,6 +886,9 @@ class DockHub:
                             "temp" in prop.id
                             or "temperature" in (prop.prop or "")
                         )
+                        # 色温（color-temperature）不是室温那种温度，别把台灯当空调
+                        and "color" not in prop.id
+                        and "color" not in (prop.prop or "")
                     ),
                     None,
                 )

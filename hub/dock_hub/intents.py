@@ -517,6 +517,10 @@ def infer_temp(
     else:
         if "空调" not in text and len(climate) != 1:
             return []
+        # 点名了空调但技能表里没有空调（它在米家目录里）：这是目录的活，
+        # 别把唯一的 climate 技能硬抓过来乱写。
+        if "空调" in text and "空调" not in chosen.get("name", ""):
+            return []
     lo = int(chosen.get("temp_min") or 16)
     hi = int(chosen.get("temp_max") or 30)
     if parsed < lo or parsed > hi:
