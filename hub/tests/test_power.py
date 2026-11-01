@@ -24,7 +24,16 @@ from dock_hub.probe import power_command
 
 class InferPowerTest(unittest.TestCase):
     def test_shutdown(self) -> None:
-        for text in ("关电脑", "关掉电脑", "把电脑关了", "电脑关机", "帮我关机吧", "关机"):
+        for text in (
+            "关电脑",
+            "关掉电脑",
+            "把电脑关了",
+            "把电脑关",  # B1：ASR 截断「掉/了」，意图还是关机
+            "把电脑关吧",
+            "电脑关机",
+            "帮我关机吧",
+            "关机",
+        ):
             with self.subTest(text=text):
                 self.assertEqual(infer_power(text), "shutdown")
 

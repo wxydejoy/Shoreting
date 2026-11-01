@@ -32,6 +32,15 @@ TTL_SEC = 120.0
 
 _CANCEL_RE = re.compile(r"算了|不用|取消|别弄|不弄|没事")
 
+# B1：ASR 截断的残句。整句只有一个「把」或「打/关」这类半截话，落进闲聊
+# 会让大脑回「嗯。」——半截话被当成了有效指令的应答。按规格 5.4 走：追问。
+_BA_FRAGMENT = re.compile(r"^(?:帮我把|给(?:我)?把|把)\S{0,2}$")
+"""把字句只蹦了个开头：把 / 把灯 / 把台灯 / 帮我把——没说清开还是关。"""
+_BA_TRAILING_TURN = re.compile(r"^把\S{0,3}[关开]$")
+"""把字句尾巴被截：把电脑关 / 把灯关——态度还在，就差一个「掉/了」。"""
+_LONE_TURN_VERB = re.compile(r"^(?:打|开|关)[一下吧。.!！]?$")
+"""开关动词只剩一个字：打（打开截断）/ 关（关掉截断）。「打瓦」「开黑」不在此列。"""
+
 
 @dataclass
 class PendingClarify:
@@ -70,9 +79,18 @@ def clarify_for(
     """
     if not skills:
         return None
-    on = turn_intent(text)
+    stripped = text.strip()
+    on = turn_intent(stripped)
     if on is None:
-        return None
+        # B1 残句兜底：没带上完整开关词的半截话也拦下来问，不往闲聊漏。
+        if _LONE_TURN_VERB.match(stripped):
+            on = not stripped.startswith("关")
+        elif _BA_TRAILING_TURN.match(stripped):
+            on = stripped.endswith("开")
+        elif _BA_FRAGMENT.match(stripped):
+            return PendingClarify(on=True, asked="把什么？开还是关？")
+        else:
+            return None
     if infer_control(text, skills, aliases):
         return None
     if infer_brightness(text, skills) or infer_temp(text, skills):
