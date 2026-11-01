@@ -92,14 +92,17 @@ class DuskRamp:
         if at is None:
             return DuskEvent("no_city")
         start = _today_at(now, at + max(0, cfg.offset_min))
-        until = _today_at(now, _hhmm_minutes(cfg.until))
-        if now >= until:
-            self._closed_day = now.date()
-            return DuskEvent("idle")
-        if until <= start:
-            # until 早于日落：这条配置永远不该动手，今天就算过完了
-            self._closed_day = now.date()
-            return DuskEvent("idle")
+        # until 留空 = 不设截止，一直接着爬到亮度到位
+        until_min = _hhmm_minutes(cfg.until)
+        if until_min is not None:
+            until = _today_at(now, until_min)
+            if now >= until:
+                self._closed_day = now.date()
+                return DuskEvent("idle")
+            if until <= start:
+                # until 早于日落：这条配置永远不该动手，今天就算过完了
+                self._closed_day = now.date()
+                return DuskEvent("idle")
         if now < start:
             return DuskEvent("waiting")
         if self._device_on is not None and not self._device_on(cfg.device):

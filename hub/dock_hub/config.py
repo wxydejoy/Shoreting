@@ -1132,6 +1132,15 @@ def _threshold(value: Any, default: int, label: str) -> int:
     return number
 
 
+def _quiet_pair(parts: list[str]) -> tuple[str, ...]:
+    """免打扰时段收成两个时刻。空 = 不设，也就是控制台上那个开关关着。"""
+    if not parts:
+        return ()
+    if len(parts) != 2:
+        raise ValueError("proactive.quiet 要两个时刻：开始和结束")
+    return (parse_clock(parts[0], "proactive.quiet"), parse_clock(parts[1], "proactive.quiet"))
+
+
 def _parse_proactive(raw: Any) -> ProactiveConfig:
     if raw is None or raw is False:
         return ProactiveConfig()
@@ -1147,16 +1156,21 @@ def _parse_proactive(raw: Any) -> ProactiveConfig:
     if limit < 0:
         raise ValueError("proactive.daily_limit 不能是负数")
 
+    # 免打扰时段：[] / "" / ["", ""] 都是「不设」——控制台上就是那个开关关掉
     quiet_raw = raw.get("quiet", ["23:00", "07:00"])
-    if isinstance(quiet_raw, str):
-        parts = [part.strip() for part in quiet_raw.split("-") if part.strip()]
+    if quiet_raw is None:
+        quiet = ()
+    elif isinstance(quiet_raw, str):
+        if not quiet_raw.strip():
+            quiet = ()
+        else:
+            parts = [part.strip() for part in quiet_raw.split("-") if part.strip()]
+            quiet = _quiet_pair(parts)
     elif isinstance(quiet_raw, (list, tuple)):
-        parts = [str(part).strip() for part in quiet_raw]
+        parts = [str(part).strip() for part in quiet_raw if str(part).strip()]
+        quiet = _quiet_pair(parts)
     else:
         raise ValueError('proactive.quiet 写成 ["23:00", "07:00"] 或 "23:00-07:00"')
-    if len(parts) != 2:
-        raise ValueError("proactive.quiet 要两个时刻：开始和结束")
-    quiet = (parse_clock(parts[0], "proactive.quiet"), parse_clock(parts[1], "proactive.quiet"))
 
     morning_raw = raw.get("morning") or {}
     if not isinstance(morning_raw, dict):
@@ -1633,7 +1647,12 @@ def _parse_dusk(raw: Any, devices: list[DeviceConfig]) -> DuskConfig:
     known = {item.id for item in devices}
     if device not in known:
         raise ValueError(f"dusk.device 指向的设备 {device!r} 不存在")
-    until = parse_clock(raw.get("until") or "22:00", "dusk.until")
+    # 写了 until: "" 当「不设」，不写才用默认的 22:00
+    if "until" in raw:
+        until_text = str(raw.get("until") or "").strip()
+        until = parse_clock(until_text, "dusk.until") if until_text else ""
+    else:
+        until = "22:00"
     return DuskConfig(
         enabled=True,
         device=device,
@@ -1726,10 +1745,13 @@ def _parse_diary(raw: Any) -> DiaryConfig:
     if raw is False:
         return DiaryConfig(enabled=False)
     if isinstance(raw, dict):
-        at_val = raw.get("at")
-        if at_val is None:
+        if "at" not in raw:
             return DiaryConfig()
-        return DiaryConfig(at=parse_clock(at_val, "diary.at"))
+        # at: "" = 不写（控制台上「日记几点写」那个开关关掉），不是回落默认
+        text = str(raw.get("at") or "").strip()
+        if not text:
+            return DiaryConfig(enabled=True, at="")
+        return DiaryConfig(at=parse_clock(text, "diary.at"))
     raise ValueError("diary 要是 false 或 {at: \"21:30\"}")
 
 

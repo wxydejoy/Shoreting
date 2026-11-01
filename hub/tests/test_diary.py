@@ -92,6 +92,23 @@ class CleanEntryTest(unittest.TestCase):
         self.assertEqual(len(clean_entry("字" * 500)), 400)
 
 
+class DiaryConfigTest(unittest.TestCase):
+    def test_blank_at_stays_blank(self) -> None:
+        # 「日记几点写」开关关掉写的是 at: ""，重解析不能回落成 21:30
+        cfg = parse_config(
+            {
+                "name": "study",
+                "token": "secret-token-value",
+                "devices": [],
+                "mini": False,
+                "diary": {"at": ""},
+            },
+            Path("/tmp/test-diary.yaml"),
+        )
+        self.assertTrue(cfg.diary.enabled)
+        self.assertEqual(cfg.diary.at, "")
+
+
 class DiaryDueTest(unittest.TestCase):
     def test_not_before_at(self) -> None:
         self.assertIsNone(diary_due(_at(21, 29), "21:30", None))
@@ -107,6 +124,11 @@ class DiaryDueTest(unittest.TestCase):
 
     def test_written_day_short_circuits(self) -> None:
         self.assertIsNone(diary_due(_at(22), "21:30", "2026-10-31"))
+
+    def test_blank_at_never_writes(self) -> None:
+        # 「日记几点写」的开关关掉 = 交空值，一天里任何时刻都不该写
+        for hour in (0, 9, 21, 23):
+            self.assertIsNone(diary_due(_at(hour), "", None))
 
 
 class DiaryStoreTest(unittest.TestCase):

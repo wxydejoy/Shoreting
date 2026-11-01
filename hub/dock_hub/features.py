@@ -96,7 +96,7 @@ FEATURES: tuple[Feature, ...] = (
         ("proactive", "quiet"),
         lambda cfg: list(cfg.proactive.quiet),
         kind="quiet",
-        hint="这段时间她一句都不主动说；被闸拦下的那天配额不算用掉。",
+        hint="这段时间她一句都不主动说；被闸拦下的那天配额不算用掉。开关关掉 = 不设时段。",
         default=["23:00", "07:00"],
     ),
     Feature(
@@ -107,8 +107,8 @@ FEATURES: tuple[Feature, ...] = (
         lambda cfg: cfg.proactive.morning.at,
         kind="time",
         optional=True,
-        hint="到点说一句天气、室温；留空 = 不播报。",
-        default="",
+        hint="到点说一句天气、室温；开关关掉 = 不播报。",
+        default="07:30",
     ),
     Feature(
         "proactive.weekly_at",
@@ -118,8 +118,8 @@ FEATURES: tuple[Feature, ...] = (
         lambda cfg: cfg.proactive.weekly_at,
         kind="time",
         optional=True,
-        hint="把这一周在桌、朗读、最晚、说了几句话念一句；留空 = 不念。",
-        default="",
+        hint="把这一周在桌、朗读、最晚、说了几句话念一句；开关关掉 = 不念。",
+        default="20:00",
     ),
     Feature(
         "proactive.alerts.weather",
@@ -229,8 +229,8 @@ FEATURES: tuple[Feature, ...] = (
         lambda cfg: cfg.alarm.at,
         kind="time",
         optional=True,
-        hint="到点屏幕渐亮、灯带爬亮，爬完轻声说一句；留空 = 关着。",
-        default="",
+        hint="到点屏幕渐亮、灯带爬亮，爬完轻声说一句；开关关掉 = 不叫。",
+        default="07:00",
     ),
     Feature(
         "alarm.weekdays_only",
@@ -309,7 +309,8 @@ FEATURES: tuple[Feature, ...] = (
         ("dusk", "until"),
         lambda cfg: cfg.dusk.until,
         kind="time",
-        hint="过了这个点就不再推，交给睡前场景接着降。",
+        optional=True,
+        hint="过了这个点就不再推，交给睡前场景接着降。开关关掉 = 不设截止，一直推到亮度到位。",
         default="22:00",
     ),
     Feature(
@@ -445,6 +446,8 @@ FEATURES: tuple[Feature, ...] = (
         ("diary", "at"),
         lambda cfg: cfg.diary.at,
         kind="time",
+        optional=True,
+        hint="到点写当天那一段；开关关掉 = 不写（想彻底关掉日记就关上面那个开关）。",
         default="21:30",
     ),
     Feature(
@@ -730,8 +733,11 @@ def coerce(feature: Feature, value: Any, config: HubConfig) -> Any:
         if isinstance(value, str):
             parts = [part.strip() for part in value.split("-") if part.strip()]
         else:
-            parts = [str(part).strip() for part in (value or [])]
-        if len(parts) != 2 or not all(parts):
+            parts = [str(part).strip() for part in (value or []) if str(part).strip()]
+        # 两个都清空 = 不设免打扰（控制台上那个开关关掉）
+        if not parts:
+            return []
+        if len(parts) != 2:
             raise ValueError("免打扰时段要两个时刻：开始和结束")
         return [parse_clock(parts[0], "免打扰开始"), parse_clock(parts[1], "免打扰结束")]
 
@@ -849,12 +855,23 @@ def _match_key(line: str, indent: int) -> re.Match[str] | None:
     return _TOP_KEY.match(line[indent:])
 
 
-def _block_end(lines: list[str], start: int, indent: int) -> int:
+def _block_end(lines: list[str], start: int, indent: int, flat_list: bool = False) -> int:
+    """这一块到哪一行为止。
+
+    YAML 的块列表可以跟键同缩进（`quiet:` 换行接 `- '23:00'`），这些 `- `
+    行属于上面的键，不是兄弟键——否则改值时会留下一串孤儿列表项，整篇变非法。
+    """
     index = start + 1
     while index < len(lines):
         line = lines[index]
-        if _is_content(line) and _indent(line) <= indent:
-            break
+        if _is_content(line):
+            line_indent = _indent(line)
+            if line_indent < indent:
+                break
+            if line_indent == indent and not (
+                flat_list and line.lstrip().startswith("-")
+            ):
+                break
         index += 1
     return index
 
@@ -918,7 +935,7 @@ def _set(
     rest = match.group("rest").strip()
     if len(path) == 1:
         _, comment = _split_comment(rest)
-        end = _block_end(lines, index, indent)
+        end = _block_end(lines, index, indent, flat_list=not rest)
         # 本来是块（diary:\n  at: ...），改成一个标量就把 children 一起收掉
         tail = end if not rest or rest.startswith("#") else index + 1
         while tail > index + 1 and not lines[tail - 1].strip():
@@ -956,7 +973,7 @@ def _remove(
     if index is None:
         return
     if len(path) == 1:
-        end = _block_end(lines, index, indent)
+        end = _block_end(lines, index, indent, flat_list=True)
         while end > index + 1 and not lines[end - 1].strip():
             end -= 1
         del lines[index:end]

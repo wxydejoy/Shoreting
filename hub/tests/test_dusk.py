@@ -75,6 +75,15 @@ class DuskRampTest(unittest.TestCase):
         self.assertEqual(ramp.tick(_at(18, 0)).action, "idle")
         self.assertEqual(len(commands), 1)
 
+    def test_until_off_keeps_ramping(self) -> None:
+        # 控制台上「推到几点为止」的开关关掉 = 不设截止，晚点也照推
+        ramp, commands = self._ramp(
+            {"device": "strip", "offset_min": 0, "ramp_min": 240, "until": ""}
+        )
+        self.assertEqual(ramp.tick(_at(17, 30)).action, "ramp")
+        self.assertEqual(ramp.tick(_at(21, 0)).action, "ramp")
+        self.assertTrue(commands)
+
     def test_manual_off_is_rejected_for_the_day(self) -> None:
         ramp, commands = self._ramp({"device": "strip"}, on=False)
         self.assertEqual(ramp.tick(_at(18, 10)).action, "rejected")
@@ -121,6 +130,12 @@ class DuskConfigTest(unittest.TestCase):
     def test_bad_until_rejected(self) -> None:
         with self.assertRaises(ValueError):
             _cfg({"dusk": {"device": "strip", "until": "25:00"}})
+
+    def test_until_can_be_switched_off(self) -> None:
+        # 写了空值就是「不设截止」，不能悄悄回落成 22:00
+        cfg = _cfg({"dusk": {"device": "strip", "until": ""}})
+        self.assertEqual(cfg.dusk.until, "")
+        self.assertTrue(cfg.dusk.enabled)
 
     def test_brightness_bounds(self) -> None:
         with self.assertRaises(ValueError):

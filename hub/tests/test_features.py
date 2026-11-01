@@ -134,11 +134,13 @@ class CoerceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             coerce(feature, "25:00", self.cfg)
 
-    def test_time_that_cannot_be_blank(self) -> None:
-        # 日记、日落「推到几点」没有「留空 = 关着」的语义，空着要报错而不是静默关掉
-        with self.assertRaises(ValueError) as caught:
-            coerce(BY_KEY["diary.at"], "", self.cfg)
-        self.assertIn("07:30", str(caught.exception))
+    def test_time_can_be_switched_off(self) -> None:
+        # 控制台上时刻前面那个开关一关，交的就是空值：日记「几点写」和日落
+        # 「推到几点」以前空着会报错，等于只能改 yaml
+        self.assertEqual(coerce(BY_KEY["diary.at"], "", self.cfg), "")
+        self.assertEqual(coerce(BY_KEY["dusk.until"], "", self.cfg), "")
+        with self.assertRaises(ValueError):
+            coerce(BY_KEY["dusk.until"], "25:00", self.cfg)
 
     def test_device_must_exist(self) -> None:
         feature = BY_KEY["dusk.device"]
@@ -159,6 +161,13 @@ class CoerceTest(unittest.TestCase):
         self.assertEqual(coerce(feature, ["22:00", "7:00"], self.cfg), ["22:00", "07:00"])
         with self.assertRaises(ValueError):
             coerce(feature, ["22:00"], self.cfg)
+
+    def test_quiet_can_be_switched_off(self) -> None:
+        # 开关关掉 = 不设免打扰，三种空写法都算
+        feature = BY_KEY["proactive.quiet"]
+        self.assertEqual(coerce(feature, [], self.cfg), [])
+        self.assertEqual(coerce(feature, ["", ""], self.cfg), [])
+        self.assertEqual(coerce(feature, "", self.cfg), [])
 
 
 class DescribeTest(unittest.TestCase):
@@ -285,6 +294,52 @@ class EndpointTest(unittest.TestCase):
         )
         self.assertEqual(handler.status, 400)
         self.assertFalse(handler.payload["ok"])
+
+
+OFF_RAW = {
+    "name": "study",
+    "token": "secret-token-value",
+    "devices": [
+        {"id": "desk-led", "name": "灯带", "type": "ws2812", "base_url": "http://192.168.14.33"}
+    ],
+    "proactive": {"enabled": True, "quiet": ["23:00", "07:00"]},
+    "dusk": {"device": "desk-led", "until": "22:00"},
+    "diary": {"at": "21:30"},
+}
+
+
+class SwitchOffTest(unittest.TestCase):
+    """时刻类开关关掉：写进 yaml 的空值重解析后还是空的，不回落默认。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "hub.yaml"
+        save_config_raw(dict(OFF_RAW), self.path)
+        self.hub = StubHub(parse_config(dict(OFF_RAW), self.path))
+
+    def test_quiet_off(self) -> None:
+        result = apply_feature(self.hub, "proactive.quiet", [])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.hub.config.proactive.quiet, ())
+
+    def test_dusk_until_off(self) -> None:
+        result = apply_feature(self.hub, "dusk.until", "")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.hub.config.dusk.until, "")
+        self.assertIn('until: ""', self.path.read_text(encoding="utf-8"))
+
+    def test_diary_at_off(self) -> None:
+        result = apply_feature(self.hub, "diary.at", "")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.hub.config.diary.at, "")
+        # 关的只是「几点写」，日记本身还开着
+        self.assertTrue(self.hub.config.diary.enabled)
+
+    def test_turning_back_on_restores_a_clock(self) -> None:
+        apply_feature(self.hub, "proactive.quiet", [])
+        apply_feature(self.hub, "proactive.quiet", ["23:00", "07:00"])
+        self.assertEqual(self.hub.config.proactive.quiet, ("23:00", "07:00"))
 
 
 if __name__ == "__main__":

@@ -107,30 +107,53 @@ function FeatureRow({ feature }: { feature: Feature }) {
       </div>
     );
   } else if (feature.kind === "time") {
+    // 时刻类一律带开关：手机上 time 输入框没地方「清空」，填进去就关不掉，
+    // 只能靠这个开关。关掉 = 交一个空值，Hub 那边当「不设这个时刻」。
+    const on = Boolean(draft);
+    const seed = typeof feature.default === "string" && feature.default ? feature.default : "07:30";
     control = (
       <div className="flex items-center gap-1.5">
+        <Switch
+          checked={on}
+          disabled={disabled || !feature.optional}
+          onCheckedChange={(checked) => {
+            const next = checked ? seed : "";
+            setDraft(next);
+            void commit(next);
+          }}
+        />
         <Input
           type="time"
           value={draft}
-          disabled={disabled}
+          disabled={disabled || !on}
           onChange={(event) => {
             setDraft(event.target.value);
             void commit(event.target.value);
           }}
           className="h-8 w-[132px] font-mono text-[12.5px]"
         />
-        {!draft && feature.optional ? (
-          <span className="text-[11.5px] text-muted-foreground">关着</span>
-        ) : null}
       </div>
     );
   } else if (feature.kind === "quiet") {
+    const on = Boolean(quiet[0] && quiet[1]);
+    const seed = Array.isArray(feature.default) && feature.default.length >= 2
+      ? [String(feature.default[0]), String(feature.default[1])]
+      : ["23:00", "07:00"];
     control = (
       <div className="flex items-center gap-1.5">
+        <Switch
+          checked={on}
+          disabled={disabled}
+          onCheckedChange={(checked) => {
+            const next: [string, string] = checked ? [seed[0], seed[1]] : ["", ""];
+            setQuiet(next);
+            void commit(checked ? seed : []);
+          }}
+        />
         <Input
           type="time"
           value={quiet[0]}
-          disabled={disabled}
+          disabled={disabled || !on}
           onChange={(event) => {
             const next: [string, string] = [event.target.value, quiet[1]];
             setQuiet(next);
@@ -142,7 +165,7 @@ function FeatureRow({ feature }: { feature: Feature }) {
         <Input
           type="time"
           value={quiet[1]}
-          disabled={disabled}
+          disabled={disabled || !on}
           onChange={(event) => {
             const next: [string, string] = [quiet[0], event.target.value];
             setQuiet(next);

@@ -52,6 +52,8 @@ export type Feature = {
   high?: number | null;
   step?: number | null;
   optional?: boolean;
+  /** 打开开关时预填的值（时刻类用它，别让空框直接提交空值） */
+  default?: unknown;
   options?: FeatureOption[];
 };
 
