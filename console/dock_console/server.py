@@ -36,6 +36,40 @@ _PHONE_ITEM = re.compile(r"/api/phone/backgrounds/([^/]+)")
 # 本机回环地址：这些来源免 Token（沿用 Hub 的规矩）
 _LOCAL_ADDRESSES = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 
+# 换版时这两个文件一起变；时间戳跟着走，URL 也就跟着变
+_SHELL_ASSETS = ("console.js", "console.css")
+
+
+def asset_stamp() -> int:
+    """静态资源的「版本」：取最新的构建时间。
+
+    index.html 里的 js/css 地址会带上它。固定文件名 + no-store 对大多数
+    浏览器够用，但手机「添加到主屏幕」的 WebView、微信内置浏览器，还有
+    链路上任何一层缓存，都可能把 /assets/console.js 留在本地 —— 那就成了
+    「改了、也刷新了，看到还是旧页面」。URL 变了，谁也留不住。
+    """
+    latest = 0
+    for name in _SHELL_ASSETS:
+        try:
+            latest = max(latest, int((ASSETS / name).stat().st_mtime))
+        except OSError:
+            continue
+    return latest
+
+
+def versioned_shell(html: str, stamp: int) -> str:
+    if not stamp:
+        return html
+    for name in _SHELL_ASSETS:
+        # 磁盘上的 index.html 可能已经被 stamp-index.mjs 写过一次版本号，
+        # 这里整段换掉，别叠成 ?v=1?v=2
+        html = re.sub(
+            rf"/assets/{re.escape(name)}(\?v=\d+)?",
+            f"/assets/{name}?v={stamp}",
+            html,
+        )
+    return html
+
 
 def check_access(
     client_ip: str,
@@ -104,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             # 单页应用：所有入口都发同一份壳，前端自己按 # 路由。
             # 带 ?key= 打开时顺手种 cookie，之后的 /api/* 同源请求自己带上。
             key = (parse_qs(urlparse(self.path).query).get("key") or [""])[0]
-            self._asset(ASSET, cookie=f"key={key}; Path=/; HttpOnly; SameSite=Lax" if key else None)
+            self._shell(cookie=f"key={key}; Path=/; HttpOnly; SameSite=Lax" if key else None)
             return
         if path in _STATIC:
             self._asset(*self._static(path))
@@ -297,6 +331,16 @@ class Handler(BaseHTTPRequestHandler):
         name, content_type = _STATIC[path]
         return ASSETS / name, content_type
 
+    def _shell(self, cookie: str | None = None) -> None:
+        """单页壳。js/css 地址带上构建时间戳，换版就不会被缓存留住。"""
+        try:
+            html = ASSET.read_text(encoding="utf-8")
+        except OSError as exc:
+            self._json(500, {"ok": False, "message": f"页面打不开：{exc}"})
+            return
+        body = versioned_shell(html, asset_stamp()).encode("utf-8")
+        self._bytes(200, "text/html; charset=utf-8", body, cookie=cookie)
+
     def _asset(
         self, path: Path, content_type: str = "text/html; charset=utf-8", cookie: str | None = None
     ) -> None:
@@ -338,11 +382,15 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode()
         self._bytes(code, "application/json; charset=utf-8", body)
 
-    def _bytes(self, code: int, content_type: str, body: bytes) -> None:
+    def _bytes(
+        self, code: int, content_type: str, body: bytes, cookie: str | None = None
+    ) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(body)
 

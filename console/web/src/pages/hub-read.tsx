@@ -434,6 +434,37 @@ export function ReadPage() {
         }
       />
 
+      {/* 音量放在页面顶上，不藏在书架卡片里 —— 不管是挑书、看正文还是
+          合成语音，调音量这一步都在手边（念的是 Mini 那台喇叭）。 */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border/60 px-3 py-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            className="text-muted-foreground transition-colors hover:text-foreground"
+            aria-label={volume ? "静音" : "恢复音量"}
+            disabled={volume === null}
+            onClick={() => pushVolume(volume ? 0 : volumeBeforeMute.current)}
+          >
+            {volume ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={volume ?? 0}
+            disabled={volume === null}
+            aria-label="音量"
+            onChange={(event) => pushVolume(Number(event.target.value))}
+            className="h-1 w-40 cursor-pointer accent-primary disabled:cursor-default sm:w-56"
+          />
+          <span className="w-6 text-right text-[11.5px] text-muted-foreground tabular-nums">
+            {volume ?? "—"}
+          </span>
+        </div>
+        <span className="text-[11px] text-muted-foreground">Mini 喇叭音量 · 拖动即刻生效</span>
+      </div>
+
       <Tabs value={tab} onValueChange={(value) => setTab(value as ReadTab)}>
         <TabsList className="h-8">
           {TABS.map((item) => (
@@ -528,35 +559,6 @@ export function ReadPage() {
                   ) : null}
 
                   <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                    <div className="flex items-center gap-1.5 rounded-md border border-border/70 px-2 py-1">
-                      <button
-                        type="button"
-                        className="text-muted-foreground transition-colors hover:text-foreground"
-                        aria-label={volume ? "静音" : "恢复音量"}
-                        disabled={volume === null}
-                        onClick={() => pushVolume(volume ? 0 : volumeBeforeMute.current)}
-                      >
-                        {volume ? (
-                          <Volume2 className="size-3.5" />
-                        ) : (
-                          <VolumeX className="size-3.5" />
-                        )}
-                      </button>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        step={1}
-                        value={volume ?? 0}
-                        disabled={volume === null}
-                        aria-label="音量"
-                        onChange={(event) => pushVolume(Number(event.target.value))}
-                        className="h-1 w-24 cursor-pointer accent-primary disabled:cursor-default"
-                      />
-                      <span className="w-6 text-right text-[11px] text-muted-foreground tabular-nums">
-                        {volume ?? "—"}
-                      </span>
-                    </div>
                     <span className="text-[11px] text-muted-foreground">定时停</span>
                     <Select
                       value={String(live?.timer_min ?? books.data?.timer_min ?? 30)}
