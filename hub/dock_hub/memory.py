@@ -109,6 +109,58 @@ def memory_prompt(entries: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# F30 记忆由大脑判断：每轮对话后拿一轮话问一遍「有没有值得记的」，
+# 正则抽取（extract_facts）继续留着当不花钱的兜底。
+MEMORY_EXTRACT_PROMPT = """你是守岸人。下面给你一轮对话（漂泊者说的、你回的），和你已经记住的事。
+判断这轮对话里有没有值得长期记住的、关于漂泊者的新信息：他的喜好、习惯、身份、身边的人或物、在进行的计划，或者明显的情绪倾向。
+已经记住的事不要重复记；纯设备口令（开灯关空调这类）和寒暄不用记，大多数轮次是什么都不用记的。
+但他带时间地点的计划要记——哪怕话里带着「帮我」，那是请你记住，不是让你现在就办。
+值得记就每行一条，格式严格是「key = value」：key 是两三个字的名目，value 是一句具体的、以后用得上的话，用中文。
+一条都没有就只回一个「无」字。材料里没有的事不许编。
+
+例：
+漂泊者说：我下周想去北京出差两天，帮我留意那边的天气 → 出差计划 = 下周要去北京出差两天
+漂泊者说：帮我把空调关了 → 无（口令）
+漂泊者说：以后周三晚上别找我，我要打球 → 每周安排 = 周三晚上打球，那会儿别打扰
+漂泊者说：现在几点了 → 无（随口一问）"""
+
+
+def memory_extract_messages(heard: str, spoken: str, known: str) -> list[dict[str, str]]:
+    known = known.strip() or "（还没记住什么）"
+    return [
+        {"role": "system", "content": MEMORY_EXTRACT_PROMPT},
+        {
+            "role": "user",
+            "content": f"漂泊者说：{heard}\n你回了：{spoken}\n\n已经记住的事：\n{known}",
+        },
+    ]
+
+
+def parse_extraction(raw: str) -> list[tuple[str, str]]:
+    """解析大脑吐出的「key = value」行。返回 (key, value) 列表，可能为空。
+
+    大脑不听话（回散文、回「无」）时尽量空手而归，不抛错。
+    """
+    facts: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in (raw or "").splitlines():
+        line = line.strip().lstrip("-*·• ").strip()
+        if not line or _clean(line) in ("无", "没有"):
+            continue
+        match = re.match(r"^([^=：:]{1,8})\s*[=：:]\s*(.+)$", line)
+        if not match:
+            continue
+        key = _clean(match.group(1))
+        value = _clean(match.group(2))
+        if not key or not value or len(value) < 2:
+            continue
+        if (key, value) in seen:
+            continue
+        seen.add((key, value))
+        facts.append((key, value))
+    return facts[:4]
+
+
 @dataclass
 class MemoryEntry:
     key: str

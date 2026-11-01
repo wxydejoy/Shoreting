@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -19,7 +20,8 @@ from dock_hub.errors import HubError
 from dock_hub import logs
 
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
-from dock_hub.memory import parse_forget as parse_memory_forget
+from dock_hub.memory import parse_extraction, parse_forget as parse_memory_forget
+from dock_hub.memory import memory_extract_messages
 from dock_hub.memory import parse_teach as parse_memory_teach
 from dock_hub.persona import (
     ack_after_skills,
@@ -459,6 +461,46 @@ class ChatFlowMixin:
                 return
             if learned:
                 _latency("-", "memory_learn", n=len(learned))
+            # F30：正则捞完再让大脑判断一遍值不值得记。放后台跑——
+            # 这是给明天的对话攒的，不占这轮回复的时延
+            if len(heard) >= 4:
+                self._memory_extract_bg(heard, spoken)
+
+    def _memory_extract_bg(self, heard: str, spoken: str) -> None:
+        if not self._memory_bg.acquire(blocking=False):
+            return  # 上一轮还没判完，这轮让路——记忆不差这几分钟
+        thread = threading.Thread(
+            target=self._memory_extract_run,
+            args=(heard, spoken),
+            name="memory-extract",
+            daemon=True,
+        )
+        thread.start()
+
+    def _memory_extract_run(self, heard: str, spoken: str) -> None:
+        try:
+            self._memory_extract_once(heard, spoken)
+        except Exception as exc:  # noqa: BLE001 - 大脑挂了记忆照旧空着，不连累别人
+            logs.swallowed("大脑记事", exc)
+        finally:
+            self._memory_bg.release()
+
+    def _memory_extract_once(self, heard: str, spoken: str) -> int:
+        """大脑判断一轮对话值不值得记。返回落下的条数；大脑不可用就抛。"""
+        if self._memory is None:
+            return 0
+        known = "\n".join(
+            f"- {item['key']}：{item['value']}" for item in self._memory.entries()
+        )
+        raw = self._complete(memory_extract_messages(heard, spoken, known), temperature=0.3)
+        facts = parse_extraction(raw)
+        landed = 0
+        for key, value in facts:
+            if self._memory.remember(key, value, source="chat"):
+                landed += 1
+        if landed:
+            _latency("-", "memory_ai_learn", n=landed)
+        return landed
 
     def _maybe_speak(self, spoken: str, turn: str) -> str | None:
         if not self.tts.configured:

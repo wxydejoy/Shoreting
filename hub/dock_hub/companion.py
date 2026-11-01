@@ -207,6 +207,8 @@ class Companion(ChatFlowMixin, DeskMixin, LlmMixin):
         self._story_books = None
         self.reads = ReadJobs(self)
         self._memory: MemoryStore | None = None
+        # F30 大脑记事的单飞闸：同一时刻只跑一个，挤不上就让路
+        self._memory_bg = threading.Semaphore(1)
         # F27：朗读任务念完的秒数往这儿送（service 接到周报台账）；None = 没接
         self.on_read_done = None
         # F3 追问澄清：问出去还没被认领的那句

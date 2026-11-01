@@ -7,10 +7,13 @@ import unittest
 from pathlib import Path
 
 from dock_hub.memory import (
+    MEMORY_EXTRACT_PROMPT,
     MEMORY_LIMIT,
     MemoryStore,
     extract_facts,
+    memory_extract_messages,
     memory_prompt,
+    parse_extraction,
     parse_forget,
     parse_teach,
 )
@@ -46,6 +49,35 @@ class ExtractFactsTest(unittest.TestCase):
     def test_teach_marker_goes_to_taught_channel(self) -> None:
         # 「记住」由 parse_teach 处理，不走启发式，免得记两次
         self.assertEqual(extract_facts("记住，我不喝冰的"), [])
+
+    def test_parse_extraction(self) -> None:
+        # F30：大脑吐的「key = value」行要接得住，带列表符、中文冒号都行
+        facts = dict(
+            parse_extraction("- 睡眠 = 他常熬夜到零点后\n* 音乐：喜欢深夜写代码时听后摇")
+        )
+        self.assertEqual(facts.get("睡眠"), "他常熬夜到零点后")
+        self.assertEqual(facts.get("音乐"), "喜欢深夜写代码时听后摇")
+
+    def test_parse_extraction_refuses_nonsense(self) -> None:
+        self.assertEqual(parse_extraction(""), [])
+        self.assertEqual(parse_extraction("无"), [])
+        self.assertEqual(parse_extraction("无。"), [])
+        # 散文没有 key = value 结构就空手而归
+        self.assertEqual(parse_extraction("他今天看起来挺累的，聊了几句就睡了。"), [])
+        # 太多的条目截到四条
+        raw = "\n".join(f"事{i} = 第{i}件事的具体描述" for i in range(8))
+        self.assertEqual(len(parse_extraction(raw)), 4)
+
+    def test_extract_messages_carry_material_and_known(self) -> None:
+        messages = memory_extract_messages("他说的", "她答的", "- 睡眠：常熬夜")
+        self.assertIn("守岸人", messages[0]["content"])
+        self.assertIn("不许编", messages[0]["content"])
+        self.assertIn("他说的", messages[1]["content"])
+        self.assertIn("- 睡眠：常熬夜", messages[1]["content"])
+
+    def test_extract_prompt_demands_sparing_judgment(self) -> None:
+        # 大多数轮次不该记东西——提示词要把「不记是常态」说清
+        self.assertIn("大多数轮次是什么都不用记", MEMORY_EXTRACT_PROMPT)
 
     def test_parse_teach(self) -> None:
         self.assertEqual(parse_teach("记住，我周三晚上打球"), "我周三晚上打球")
@@ -190,6 +222,29 @@ class HubWiringTest(unittest.TestCase):
         self.hub.companion._remember("我不喝冰的", "好，知道了。")
         items = self.hub.memory.entries()
         self.assertEqual(items, [{"key": "忌口", "value": "冰的", "source": "chat", "learned_at": items[0]["learned_at"] if items else ""}] if items else [])
+
+    def test_ai_extraction_lands_after_turn(self) -> None:
+        # F30：大脑判断出值得记的，落盘 source=chat；正则没覆盖的它也能记
+        self.hub.companion._complete = lambda messages, **_: "- 深夜精力 = 他习惯熬到零点后才睡\n他今天看起来挺累的，聊了几句就睡了。"
+        landed = self.hub.companion._memory_extract_once("今天又弄到半夜才睡", "早点休息。")
+        self.assertEqual(landed, 1)
+        items = self.hub.memory.entries()
+        self.assertEqual(items[0]["key"], "深夜精力")
+        self.assertEqual(items[0]["value"], "他习惯熬到零点后才睡")
+        self.assertEqual(items[0]["source"], "chat")
+
+    def test_ai_extraction_failure_leaves_memory_alone(self) -> None:
+        # 大脑挂了：不落盘、不抛出（后台线程里吞掉）
+        self.hub.memory.remember("称呼", "小明")
+
+        def boom(messages, **_):
+            raise TimeoutError("brain asleep")
+
+        self.hub.companion._complete = boom
+        self.hub.companion._memory_extract_run("他说的", "她答的")  # 不应抛
+        self.assertEqual(
+            [item["key"] for item in self.hub.memory.entries()], ["称呼"]
+        )
 
     def test_facts_flow_into_chat_prompt(self) -> None:
         self.hub.memory.remember("忌口", "冰的")
