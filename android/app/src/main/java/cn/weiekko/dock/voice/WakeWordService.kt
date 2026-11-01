@@ -334,6 +334,7 @@ class WakeWordService : Service() {
         var processedMs = 0L
         var skipMs = 0L
         var lastEmitted = ""
+        var prevText = ""
         var gate = UtteranceGate()
         var turnGate = VadTurnGate()
         var vadMs = 0L
@@ -400,6 +401,7 @@ class WakeWordService : Service() {
                     chimePending = false
                     processedMs = 0L
                     lastEmitted = ""
+                    prevText = ""
                     asrAt = 0L
                     loggedPartial = false
                     gate = UtteranceGate()
@@ -427,7 +429,12 @@ class WakeWordService : Service() {
                 val text = AsrModels.display(recognizer.getResult(stream).text)
                 if (text.isNotBlank()) {
                     gate.noteHeard()
-                    turnGate.onText(processedMs)
+                    // 只在转写真的长出新字时才报 onText——静音时识别器不清空结果，
+                    // getResult 每帧都是同一句非空文本，要是每帧都报，VadTurnGate 的
+                    // 「等转写收尾」永远凑不齐，每句话都得等 16s 上限（UtteranceGate
+                    // 注释里记过同一个坑，这里不能再见一次）
+                    if (text != prevText) turnGate.onText(processedMs)
+                    prevText = text
                     lastEmitted = text
                     // 只往后长 + 节流：字幕别抖，也别一句话重组十几次主屏
                     val fresh = partial.offer(text, now)

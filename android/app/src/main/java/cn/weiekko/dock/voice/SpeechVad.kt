@@ -24,8 +24,17 @@ import com.k2fsa.sherpa.onnx.VadModelConfig
  */
 internal class SpeechVad private constructor(private val vad: Vad) {
 
+    private var lastProbLogAt = 0L
+
     fun feed(samples: FloatArray) {
         vad.acceptWaveform(samples)
+        // 调试：每秒报一次状态。注意别在这里调 vad.compute()——那会再跑一遍
+        // 模型、把 TEN 的隐状态往前推一格，VAD 就被自己污染了
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastProbLogAt >= 1_000) {
+            lastProbLogAt = now
+            Log.d(TAG, "speech=%s segQueued=%s".format(vad.isSpeechDetected(), !vad.empty()))
+        }
     }
 
     /** 吃进这帧之后，VAD 是否处于「正在说话」状态。 */
