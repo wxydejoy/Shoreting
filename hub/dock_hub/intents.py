@@ -26,12 +26,27 @@ _ACTION_TEMP = re.compile(
     r"^\s*ACTION:\s*(\S+?)\.(?:temp|temperature)\.(\d{1,2})\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+_ACTION_SET = re.compile(
+    r"^\s*ACTION:\s*(\S+?)\.set\.([A-Za-z0-9_-]+)\.(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ACTION_DO = re.compile(
+    r"^\s*ACTION:\s*(\S+?)\.do\.([A-Za-z0-9_-]+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 _CONTROL_HINT = re.compile(
     r"(打开|关掉|关闭|关上|开启|开一下|关一下|开灯|关灯|开空调|关空调|启动|"
     r"无畏契约|valorant|打瓦|开黑|打游戏|玩游戏|启动游戏|开游戏|wegame|"
     r"抖音|亮一点|调亮|暗一点|调暗|调到|调成|设成|设为|设定|再亮|再暗|灯带|台灯|挂灯|"
     r"暂停|下一首|上一首|切歌|继续播放|继续放|静音|音量|声音大|声音小|"
     r"叫我|提醒我|喊我)"
+)
+# 全量米家设备目录放进来以后，控制的词面大了：空调温度/风速/模式、扫地机、
+# 加湿器这些都算控制。查状态（多少度/开着吗）不在此列，别把提问挡进执行器。
+_CONTROL_DEVICES = re.compile(
+    r"(空调|扫地机器人?|加湿器?|除湿器?|净化器|新风机?|电风扇?|塔扇|"
+    r"窗帘|晾衣机?|热水器|饮水机|电暖|暖气|投影仪?|电视机?|插座|"
+    r"风速|风量|摆风|扫风|风向|模式调|调.{0,4}模式)"
 )
 _QUERY_TIME = re.compile(r"(几点|几号|星期几|周几|礼拜几|什么日子|现在.*时间)")
 _QUERY_TEMP = re.compile(
@@ -140,6 +155,22 @@ def parse_temp_actions(raw: str) -> list[tuple[str, dict[str, int]]]:
     return found
 
 
+def parse_set_actions(raw: str) -> list[tuple[str, str, str]]:
+    """通用属性写：ACTION: <id>.set.<属性>.<值> → [(id, 属性, 原始值)]。"""
+    found: list[tuple[str, str, str]] = []
+    for match in _ACTION_SET.finditer(raw or ""):
+        found.append((match.group(1), match.group(2), match.group(3)))
+    return found
+
+
+def parse_do_actions(raw: str) -> list[tuple[str, str]]:
+    """通用动作：ACTION: <id>.do.<动作> → [(id, 动作)]。"""
+    found: list[tuple[str, str]] = []
+    for match in _ACTION_DO.finditer(raw or ""):
+        found.append((match.group(1), match.group(2)))
+    return found
+
+
 def fold_game_asr(text: str) -> str:
     """把打瓦 / 无畏契约 / 灯带台灯的常见口误折回技能能认的词。"""
     out = (text or "").strip()
@@ -159,7 +190,8 @@ def fold_game_asr(text: str) -> str:
 
 
 def looks_like_control(text: str) -> bool:
-    return bool(_CONTROL_HINT.search(fold_game_asr(text)))
+    folded = fold_game_asr(text)
+    return bool(_CONTROL_HINT.search(folded)) or bool(_CONTROL_DEVICES.search(folded))
 
 
 def turn_intent(text: str) -> bool | None:
@@ -225,7 +257,10 @@ def query_kind(text: str) -> str | None:
     if _QUERY_SCHEDULE.search(stripped):
         return "schedule"
     if _QUERY_TEMP.search(stripped):
-        return "temp"
+        # 点名了具体设备（空调/加湿器…）的温度湿度是那台设备的事，
+        # 不是室温——交给对话，让实况读数去答。
+        if not _CONTROL_DEVICES.search(stripped):
+            return "temp"
     if _QUERY_LIGHT.search(stripped) and ("灯" in stripped or "台灯" in stripped):
         return "light"
     return None

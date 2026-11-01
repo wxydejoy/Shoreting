@@ -224,9 +224,25 @@ class ChatFlowMixin:
         catalog = skill_prompt(self._skills)
         memory = recent_prompt(self._recent)
         desk_facts = desk_facts_prompt(_call_world(self._world.get("desk")))
+        # 全量米家目录 + 原话点到的设备实况读数（没点名就是空串，零开销）
+        mijia_catalog = _call_world(self._world.get("catalog")) or ""
+        readings = ""
+        if mijia_catalog:
+            readings = _call_world(self._world.get("catalog_read"), text)
+            if readings:
+                readings = "设备实况（仅自己看。对方问状态直接用这些数，不要说不知道）：\n" + readings
         extra = "\n".join(
             part
-            for part in (catalog, mood_extra, memory, facts, speaker_prompt(speaker), desk_facts)
+            for part in (
+                catalog,
+                mood_extra,
+                memory,
+                facts,
+                speaker_prompt(speaker),
+                desk_facts,
+                mijia_catalog,
+                readings,
+            )
             if part.strip()
         )
         messages = build_messages(text, extra, self.config.persona)

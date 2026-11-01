@@ -80,6 +80,15 @@ from dock_hub.mijia_bridge import (
     result_map,
     updated_at,
 )
+from dock_hub.mijia_catalog import (
+    CatalogEntry,
+    build_catalog,
+    catalog_prompt,
+    coerce_catalog_value,
+    entries_mentioned,
+    read_plan,
+    reading_lines,
+)
 
 
 class DockHub:
@@ -151,6 +160,8 @@ class DockHub:
         self._mijia_at = 0.0
         self._mijia_tried = 0.0
         self._refreshing_mijia = False
+        # 全量米家目录：账号里每台设备的能力清单，给大脑当「能干什么的说明书」
+        self._catalog: list[CatalogEntry] = []
         mini_cfg = config.mini or MiniLinkConfig(enabled=False)
         self.reporter = DeskReporter(mini_cfg, self._windows_payload)
         self._wire_companion()
@@ -230,6 +241,16 @@ class DockHub:
             with self._mijia_lock:
                 self.session = bind_from_config(client, self.config.devices, self.config.temperature)
             self._login_message = "请在配置向导中扫码登录米家"
+            try:
+                name_to_id = {
+                    cfg.mijia_name: cfg.id
+                    for cfg in self.config.devices
+                    if cfg.is_mijia and cfg.mijia_name
+                }
+                self._catalog = build_catalog(client, name_to_id=name_to_id)
+            except Exception as exc:  # noqa: BLE001 - 目录建不出来不该连累登录
+                self._catalog = []
+                print(f"[catalog] 设备目录构建失败：{exc}", flush=True)
             self._wire_companion()
         except Exception as exc:
             self.session = None
@@ -923,6 +944,10 @@ class DockHub:
                 "noise": self.companion_noise,
                 "music": self.companion_music,
                 "calendar": self._calendar_events,
+                "catalog": lambda: catalog_prompt(self._catalog),
+                "catalog_read": self._catalog_read,
+                "device_prop": self._run_device_prop,
+                "device_action": self._run_device_action,
                 "scenes": [
                     {
                         "id": item.id,
@@ -1033,6 +1058,120 @@ class DockHub:
         else:
             body["on"] = on
         self.command(device_id, body)
+
+    # ---- 全量米家目录：通用属性写 / 动作 / 实况读数 ---------------------------
+    # 大脑按目录写 ACTION: <id>.set.<属性>.<值> 或 <id>.do.<动作>，落到这里。
+    # 校验全按 spec 来：类型转换、值域钳制、离线与错误码，别让模型一句话就把
+    # 设备写坏。
+
+    def _find_catalog_entry(self, ident: str) -> CatalogEntry | None:
+        needle = (ident or "").strip().lower()
+        if not needle:
+            return None
+        for entry in self._catalog:
+            if entry.id.lower() == needle or entry.name.lower() == needle:
+                return entry
+        for entry in self._catalog:
+            if len(entry.name) >= 2 and entry.name.lower() in needle:
+                return entry
+        return None
+
+    def _mijia_ready(self) -> None:
+        status, _message = self._mijia_status()
+        if status == "login_required":
+            raise HubError("login_required", self._login_message)
+        if self.session is None:
+            raise HubError("mijia_error", "米家还没连上")
+
+    def _run_device_prop(self, ident: str, prop_name: str, raw_value: Any) -> dict[str, Any]:
+        entry = self._find_catalog_entry(ident)
+        if entry is None:
+            raise HubError("not_found", f"米家里没有「{ident}」这台设备")
+        prop = entry.find_prop(prop_name)
+        if prop is None:
+            raise HubError("unsupported", f"{entry.name} 没有属性 {prop_name}")
+        if not prop.writable:
+            label = prop.desc or prop.name
+            raise HubError("unsupported", f"{entry.name} 的{label}只能看，改不了")
+        try:
+            value = coerce_catalog_value(prop, raw_value)
+        except ValueError as exc:
+            raise HubError("bad_request", f"{entry.name} 的值不对：{exc}") from exc
+        self._mijia_ready()
+        assert self.session is not None
+        write = {"did": entry.did, "siid": prop.siid, "piid": prop.piid, "value": value}
+        try:
+            with self._mijia_lock:
+                result = self.session.api.set_devices_prop(write)
+        except Exception as exc:
+            raise HubError("mijia_error", f"米家调用失败：{exc}") from exc
+        rows = [result] if isinstance(result, dict) else list(result or [])
+        for row in rows:
+            code = int(row.get("code", -1))
+            if code in {0, 1}:
+                continue
+            if is_offline(row):
+                raise HubError("offline", f"{entry.name}离线")
+            raise HubError("mijia_error", error_message(row, f"{entry.name} 设置失败"))
+        # 书桌缓存里有这台就顺手把状态对齐，免得快照还画旧值
+        bound = self.session.devices.get(entry.id) if self.session else None
+        if bound is not None and prop.type == "bool":
+            if bound.on_prop is not None and (prop.siid, prop.piid) == (bound.on_prop.siid, bound.on_prop.piid):
+                bound.last_on = bool(value)
+        return {"id": entry.id, "name": entry.name, "prop": prop.name, "value": value}
+
+    def _run_device_action(self, ident: str, action_name: str) -> dict[str, Any]:
+        entry = self._find_catalog_entry(ident)
+        if entry is None:
+            raise HubError("not_found", f"米家里没有「{ident}」这台设备")
+        action = entry.find_action(action_name)
+        if action is None:
+            raise HubError("unsupported", f"{entry.name} 没有动作 {action_name}")
+        self._mijia_ready()
+        assert self.session is not None
+        call = {"did": entry.did, "siid": action.siid, "aiid": action.aiid}
+        try:
+            with self._mijia_lock:
+                result = self.session.api.run_action(call)
+        except Exception as exc:
+            raise HubError("mijia_error", f"米家调用失败：{exc}") from exc
+        rows = [result] if isinstance(result, dict) else list(result or [])
+        for row in rows:
+            code = int(row.get("code", -1))
+            if code in {0, 1}:
+                continue
+            if is_offline(row):
+                raise HubError("offline", f"{entry.name}离线")
+            raise HubError("mijia_error", error_message(row, f"{entry.name} 执行失败"))
+        return {"id": entry.id, "name": entry.name, "action": action.name}
+
+    def _catalog_read(self, text: str) -> str:
+        """实况读数：原话点名了哪台设备，就现读那几台的属性给大脑当事实。
+
+        没点名就返回空串（不花网络），所以闲聊零开销。
+        """
+        hits = entries_mentioned(self._catalog, text)
+        if not hits:
+            return ""
+        status, _message = self._mijia_status()
+        if status == "login_required" or self.session is None:
+            return ""
+        plan = read_plan(hits)
+        if not plan:
+            return ""
+        params = [param for _entry, group in plan for param in group]
+        try:
+            with self._mijia_lock:
+                rows = read_batch(self.session.api, params)
+        except Exception:  # noqa: BLE001 - 读数失败不该连累这一轮对话
+            return ""
+        by_did: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            did = str(row.get("did") or "")
+            if did:
+                by_did.setdefault(did, []).append(row)
+        lines = [reading_lines(entry, by_did.get(entry.did, [])) for entry, _group in plan]
+        return "\n".join(line for line in lines if line)
 
     def companion_chat(self, body: dict[str, Any] | None) -> dict[str, Any]:
         # F28：她早就记住的事随对话注入，自然用上

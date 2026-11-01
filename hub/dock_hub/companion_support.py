@@ -24,11 +24,11 @@ class _TurnCancelled(Exception):
     """这一轮已经被下一轮顶掉。别再写字幕、别再进记忆。"""
 
 
-def _call_world(fn: Any) -> Any:
+def _call_world(fn: Any, *args: Any) -> Any:
     if not callable(fn):
         return None
     try:
-        return fn()
+        return fn(*args)
     except Exception:
         return None
 
