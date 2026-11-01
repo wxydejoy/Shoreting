@@ -137,4 +137,20 @@ class ConversationBusTest {
         ConversationBus.close()
         assertFalse(ConversationBus.speaking(1_000)) // 关了就都不算
     }
+
+    @Test
+    fun storySuppressesUntilHubStopsReporting() {
+        // B2：朗读期间每次快照 speaking=true 都续一段保活窗（长轮询约 25s 一圈，
+        // 保活 30s），全程 kws 都不该把她自己的声音当唤醒词；停更之后窗自然过期。
+        ConversationBus.close()
+        var now = 0L
+        repeat(3) {
+            now += 25_800L // 长轮询一圈回到快照
+            ConversationBus.suppressUntil(now + 30_000)
+            assertTrue(ConversationBus.speaking(now + 1))
+        }
+        // 朗读停了：不再续窗，最后一段到点就放行
+        assertFalse(ConversationBus.speaking(now + 30_000))
+        ConversationBus.close()
+    }
 }

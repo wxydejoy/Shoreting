@@ -196,7 +196,7 @@ class WakeWordService : Service() {
         val wakeStream = spotter.createStream(WakeKeywords.STREAM)
         kwsStream = wakeStream
         // ASR 模型比唤醒词大一个量级，加载要几百毫秒。原来是在这里同步加载，
-        // 麦克风要等它加载完才开：开机头一秒喊「岸宝」是没人应的。
+        // 麦克风要等它加载完才开：开机头一秒喊「守岸人」是没人应的。
         // 现在先开麦，模型在后台线程里装，装好之前叫醒的那一句会等它一会儿。
         startAsrLoader()
 
@@ -382,7 +382,7 @@ class WakeWordService : Service() {
                     stream = recognizer.createStream()
                     asrStream = stream
                     utteranceAudio.clear()
-                    // 喊岸宝后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了。
+                    // 喊守岸人后要跳过提示音；对话窗口里直接听，不跳，别把开头几个字丢了。
                     // 只丢「音频」不按墙钟丢：等过模型之后队列里排着的是刚唤醒时的
                     // 音频，按墙钟会把用户的话丢掉。
                     skipMs = if (chimePending) CHIME_SKIP_MS else 0L
@@ -454,7 +454,7 @@ class WakeWordService : Service() {
                     spotter.reset(wakeStream)
                 }
             } else {
-                // 对话窗口内：不用喊岸宝，持续人声够 300ms 就直接进听写
+                // 对话窗口内：不用喊守岸人，持续人声够 300ms 就直接进听写
                 if (ConversationBus.bypass(now)) {
                     if (audioRms(samples) >= VAD_RMS) vadMs += dtMs else vadMs = 0L
                     if (vadMs >= VAD_TRIGGER_MS) {
@@ -476,32 +476,39 @@ class WakeWordService : Service() {
                     bargeMs = 0L
                 }
                 if (!capturing) {
-                    wakeStream.acceptWaveform(samples, SAMPLE_RATE)
-                    while (spotter.isReady(wakeStream)) {
-                        spotter.decode(wakeStream)
-                        val result = spotter.getResult(wakeStream)
-                        val keyword = result.keyword
-                        if (keyword.isBlank()) {
-                            // 诊断：`adb shell setprop log.tag.WakeWord DEBUG` 后每 5 秒
-                            // 报一次 KWS 手上听到了什么，用来区分「麦克风没声音」和
-                            // 「有声音但没命中关键词」——这两种在用户看来都是「喊了没反应」。
-                            if (now - kwsTraceAt >= KWS_TRACE_MS && Log.isLoggable(TAG, Log.DEBUG)) {
-                                kwsTraceAt = now
-                                Log.d(
-                                    TAG,
-                                    "kws listening rms=${audioRms(samples)} " +
-                                        "tokens=${result.tokens.size}",
-                                )
-                            }
-                            continue
-                        }
-                        if (now - lastDetectAt < COOLDOWN_MS) {
-                            spotter.reset(wakeStream)
-                            continue
-                        }
-                        lastDetectAt = now
+                    // B2：她正在说话（对话回复或朗读）时，kws 别把 Mini 喇叭里
+                    // 她自己的声音当成唤醒词——整段不喂波形、顺手 reset。
+                    // 插话（F2）走上面的 RMS 闸，跟这儿不搭界。
+                    if (ConversationBus.speaking(now)) {
                         spotter.reset(wakeStream)
-                        onDetected(keyword)
+                    } else {
+                        wakeStream.acceptWaveform(samples, SAMPLE_RATE)
+                        while (spotter.isReady(wakeStream)) {
+                            spotter.decode(wakeStream)
+                            val result = spotter.getResult(wakeStream)
+                            val keyword = result.keyword
+                            if (keyword.isBlank()) {
+                                // 诊断：`adb shell setprop log.tag.WakeWord DEBUG` 后每 5 秒
+                                // 报一次 KWS 手上听到了什么，用来区分「麦克风没声音」和
+                                // 「有声音但没命中关键词」——这两种在用户看来都是「喊了没反应」。
+                                if (now - kwsTraceAt >= KWS_TRACE_MS && Log.isLoggable(TAG, Log.DEBUG)) {
+                                    kwsTraceAt = now
+                                    Log.d(
+                                        TAG,
+                                        "kws listening rms=${audioRms(samples)} " +
+                                            "tokens=${result.tokens.size}",
+                                    )
+                                }
+                                continue
+                            }
+                            if (now - lastDetectAt < COOLDOWN_MS) {
+                                spotter.reset(wakeStream)
+                                continue
+                            }
+                            lastDetectAt = now
+                            spotter.reset(wakeStream)
+                            onDetected(keyword)
+                        }
                     }
                 }
             }

@@ -1589,6 +1589,13 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 // 设备名进 ASR 热词：主屏上叫什么，嘴上就该听得懂什么。
                 // 词表变了语音服务会在下一句之间重装识别器，这里只管喂名字。
                 AsrHotwords.setExtra(snapshot.devices.map { it.name })
+                // B2：她在说话/朗读（hub 端 speaking），亭子麦克风听到的是她自己的声音——
+                // 抑制窗一路续到下一次快照。停了之后窗到点自然过期，不用显式清。
+                if (snapshot.companion?.speaking == true) {
+                    ConversationBus.suppressUntil(
+                        SystemClock.elapsedRealtime() + SPEAK_SUPPRESS_MS,
+                    )
+                }
                 _ui.update {
                     it.copy(
                         snapshot = snapshot,
@@ -1803,6 +1810,9 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
         const val POLL_PC_MS = 3_000L
         const val LONG_POLL_SEC = 25
         const val LONG_POLL_MIN_GAP_MS = 800L
+
+        /** B2：hub 报「她在说」时的抑制保活窗。比最坏轮询间隔（长轮询 25s + 0.8s gap）宽。 */
+        const val SPEAK_SUPPRESS_MS = 30_000L
         const val PHONE_MEDIA_MS = 1_000L
         const val FRAME_PHOTO_MS = 45_000L
         const val WEATHER_OK_MS = 20 * 60 * 1000L
