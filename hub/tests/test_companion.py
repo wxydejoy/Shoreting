@@ -241,6 +241,34 @@ class CompanionLogicTest(unittest.TestCase):
         comp.set_speaking(False)
         self.assertFalse(comp.snapshot()["speaking"])
 
+    def test_filler_input_is_silent(self) -> None:
+        # 自闻/噪音转出来的「嗯」不进大脑、不出声、不开新一轮——
+        # 「一直嗯」自激（喇叭出声→麦收走→乱码→她回「嗯。」→循环）的断路器
+        comp = Companion(CompanionConfig(enabled=True))
+        out = comp.chat({"text": "嗯", "id": "f1"})
+        self.assertEqual(out, {"text": "", "audio_id": None})
+        self.assertIsNone(comp._pending_clarify)
+
+    def test_filler_with_pending_clarify_still_processed(self) -> None:
+        # 澄清待答时「嗯」可能是正经回应，不许被 guard 吞掉
+        runs: list[tuple[str, bool]] = []
+
+        def run(ident: str, on: bool, **_: object) -> None:
+            runs.append((ident, on))
+
+        comp = Companion(CompanionConfig(enabled=True))
+        comp.set_skills(
+            [
+                {"id": "lamp", "name": "台灯", "kind": "toggle"},
+            ],
+            run,
+        )
+        comp.chat({"text": "把它关掉", "id": "t1"})
+        assert comp._pending_clarify is not None
+        with patch.object(Companion, "_complete", return_value="好。"):
+            out = comp.chat({"text": "嗯", "id": "t2"})
+        self.assertEqual(out.get("text"), "好。")
+
     def test_strips_think_and_action(self) -> None:
         raw = "<think>long</think>\n晚上好。\nACTION: lamp.on\n还早。"
         self.assertEqual(_clean_reply(raw), "晚上好。\n还早。")

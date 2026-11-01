@@ -494,8 +494,11 @@ class WakeWordService : Service() {
                     spotter.reset(wakeStream)
                 }
             } else {
-                // 对话窗口内：不用喊守岸人，持续人声够 300ms 就直接进听写
-                if (ConversationBus.bypass(now)) {
+                // 对话窗口内：不用喊守岸人，持续人声够 300ms 就直接进听写。
+                // 她正在说话时此门必须关：自己的 TTS 出喇叭再进麦，转出来全是
+                // 「受害人/小安人」这类乱码，喂给大脑她回「嗯。」，出声又被
+                // 听到——自闻死循环。插话走下面的 barge 高门，别从这儿过。
+                if (ConversationBus.bypass(now) && !ConversationBus.speaking(now)) {
                     if (audioRms(samples) >= VAD_RMS) vadMs += dtMs else vadMs = 0L
                     if (vadMs >= VAD_TRIGGER_MS) {
                         vadMs = 0L

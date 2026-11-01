@@ -73,6 +73,18 @@ from dock_hub.companion_support import (
 MAX_CLIPS = 8
 MAX_READ_CHARS = 8000
 
+# 自闻/噪音转出来的无实义音节。真进大脑她就回「嗯。」，出喇叭又被麦收走，
+# 转出来还是这种东西——「一直嗯」的自激就是这么烧起来的。
+_FILLER_WORDS = {
+    "嗯", "嗯嗯", "嗯呐", "啊", "啊啊", "哦", "哦哦", "噢", "喔",
+    "诶", "欸", "喂", "嘿", "哈", "哈哈", "呃", "唔",
+}
+
+
+def _is_filler(text: str) -> bool:
+    t = text.strip().strip("。，,．.?？!！~… ").lower()
+    return not t or t in _FILLER_WORDS
+
 
 class ChatFlowMixin:
     """混合进 Companion：一轮对话的流程与出声的缝。"""
@@ -88,6 +100,12 @@ class ChatFlowMixin:
         if not heard:
             raise HubError("bad_request", "text 不能为空")
         text = fold_game_asr(heard)
+        # 无实义输入直接吞掉：不进大模型、不出声、不开新一轮（也就不停她
+        # 正在说的话）。澄清待答时例外——「嗯」「没有」都可能是正经答案。
+        pending_now = self._pending_clarify
+        if (pending_now is None or pending_now.expired()) and _is_filler(text):
+            _latency(_turn_id(body), "chat_filler", chars=len(heard))
+            return {"text": "", "audio_id": None}
         speaker = _clean_speaker(body.get("speaker"))
         turn = _turn_id(body)
         started = time.monotonic()
