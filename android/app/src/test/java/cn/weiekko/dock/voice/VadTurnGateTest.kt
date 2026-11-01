@@ -70,4 +70,39 @@ class VadTurnGateTest {
         assertNull(gate.shouldStop(1_200L))
         assertEquals(VadTurnGate.StopReason.Tail, gate.shouldStop(1_600L))
     }
+
+    @Test
+    fun vadBlindButTextHeardFallsBackToTextTail() {
+        // 2026-11-01 实机形态：TEN VAD 整轮没报人声（远场小声过不了 0.5 线），
+        // ASR 却转出了「帮我打开空调」——不兜底就只能等 16s 的 Max。
+        // 文字停止长字 1.8s 后按 TextTail 断。
+        val gate = VadTurnGate()
+        gate.onText(1_300L) // 「帮」
+        gate.onText(2_100L) // 「帮我打开空调」
+        assertNull(gate.shouldStop(3_500L))
+        assertEquals(VadTurnGate.StopReason.TextTail, gate.shouldStop(3_900L))
+        assertFalse(gate.shouldStop(3_900L) == VadTurnGate.StopReason.Max)
+    }
+
+    @Test
+    fun textTailNeverFiresWhileVadStillSeesSpeech() {
+        // VAD 活着且最近还报人声（用户还在说）：不许按文字安静抢断，
+        // 那会把正常长句从中间切断，交给段路径。
+        val gate = VadTurnGate()
+        gate.onText(500L)
+        gate.onSpeech(2_000L)
+        assertNull(gate.shouldStop(2_400L))
+        assertNull(gate.shouldStop(3_700L)) // 距文字 3.2s，但 VAD 1.7s 前刚报人声
+    }
+
+    @Test
+    fun textTailWaitsForVadSilenceToo() {
+        // VAD 报过人声之后失明：安静计时从「最后一次人声或文字」里较晚者起算，
+        // 保证真的静了一轮再断。
+        val gate = VadTurnGate()
+        gate.onText(600L)
+        gate.onSpeech(3_000L) // 之后 VAD 失明
+        assertNull(gate.shouldStop(4_500L))
+        assertEquals(VadTurnGate.StopReason.TextTail, gate.shouldStop(4_800L))
+    }
 }
