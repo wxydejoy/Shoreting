@@ -268,6 +268,8 @@ class ChatFlowMixin:
             )
         catalog = skill_prompt(self._skills)
         memory = recent_prompt(self._recent)
+        # 派发结果当时没抢到嘴，这一轮补一句（拿完就清，免得反复念）
+        dispatch_note = self._take_dispatch_note()
         desk_facts = desk_facts_prompt(_call_world(self._world.get("desk")))
         # 当前时间必须告诉她：问「明天穿什么」「今天几号」全指着这个，
         # 也不知道现在几点的话，人设里的时效话术都填不上
@@ -291,6 +293,11 @@ class ChatFlowMixin:
                 mood_extra,
                 memory,
                 facts,
+                (
+                    f"刚刚交给泰缇斯的事有结果了（自然带一句，别照念）：{dispatch_note}"
+                    if dispatch_note
+                    else ""
+                ),
                 speaker_prompt(speaker),
                 desk_facts,
                 mijia_catalog,
@@ -655,6 +662,30 @@ class ChatFlowMixin:
         return self._finish_spoken(
             text, turn, seq, started, cue_llm=False, user="（微信）"
         )
+
+    def idle_to_speak(self) -> bool:
+        """现在能不能插一句：没在念整本书，嘴上也没剩话。
+
+        派发结果是子线程回来的，直接调 speak_up 会跟朗读抢同一个喇叭——
+        TTS 同时只该有一个声音。抢不到就落成一条 note，下一轮对话补。
+        """
+
+        with self._lock:
+            if self._reading:
+                return False
+            return self._speaking_left_until <= time.monotonic()
+
+    def note_dispatch(self, text: str) -> None:
+        """派发结果没抢到嘴：记一句，下一轮对话里自然带出来。"""
+
+        with self._lock:
+            self._dispatch_note = str(text or "").strip()[:400]
+
+    def _take_dispatch_note(self) -> str:
+        with self._lock:
+            note = self._dispatch_note
+            self._dispatch_note = ""
+        return note
 
     def speak_up(self, text: str) -> bool:
         """主动开口：到点说一句。被三道闸拦下（手机不在、在打游戏、伴侣没开）

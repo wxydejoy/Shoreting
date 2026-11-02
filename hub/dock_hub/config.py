@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from dock_hub import DEFAULT_PORT
+from dock_hub.dispatch import PLACEHOLDER
 from dock_hub.errors import HubError
 from dock_hub.guest import DEFAULT_HOURS as _GUEST_DEFAULT_HOURS
 from dock_hub.guest import clamp_hours as _guest_clamp_hours
@@ -549,6 +550,25 @@ class CalendarConfig:
 
 
 @dataclass
+class DispatchConfig:
+    """泰缇斯派发（F40）：把一件事交给外部 AI CLI 跑，跑完她回一句。
+
+    ``runner`` 是 argv 模板，``{task}`` 会被任务原文替换（单占位、不过 shell）。
+    默认指向本机装好的 dsh headless；换成 ``["/bin/echo","{task}"]`` 就能在没有
+    模型凭据的机器上把整条链路（路由/状态机/超时/播报）验一遍。
+    不写这一段 = 整条关着，``/v1/dispatch`` 回 404。
+    """
+
+    enabled: bool = False
+    runner: list[str] = field(
+        default_factory=lambda: ["/opt/homebrew/bin/dsh", "--profile", "headless", "{task}"]
+    )
+    timeout_seconds: int = 180
+    result_max_chars: int = 4000
+    max_tasks_kept: int = 200
+
+
+@dataclass
 class SceneConfig:
     """一组「一起动」的设备，可以带一句话和一个语音口令。"""
 
@@ -601,6 +621,8 @@ class HubConfig:
     wallpaper: WallpaperConfig = field(default_factory=WallpaperConfig)
     diary: DiaryConfig = field(default_factory=DiaryConfig)
     guest: GuestConfig = field(default_factory=GuestConfig)
+    # 泰缇斯派发（F40）：不写这一段 = 关着
+    dispatch: DispatchConfig = field(default_factory=DispatchConfig)
     # 日程订阅（F13）；None = 没配，「今天有什么事」就照实说不知道
     calendar: CalendarConfig | None = None
     # 回忆相框（F37）的图库目录；None = 没显式配（false 时 photos_off = True）
@@ -722,6 +744,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
     wallpaper = _parse_wallpaper(raw.get("wallpaper"))
     diary = _parse_diary(raw.get("diary"))
     guest = _parse_guest(raw.get("guest"))
+    dispatch = _parse_dispatch(raw.get("dispatch"))
     calendar = _parse_calendar(raw.get("calendar"))
     photos, photos_off = _parse_photos(raw.get("photos"), path)
 
@@ -752,6 +775,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         wallpaper=wallpaper,
         diary=diary,
         guest=guest,
+        dispatch=dispatch,
         calendar=calendar,
         photos=photos,
         photos_off=photos_off,
@@ -1768,6 +1792,53 @@ def _parse_guest(raw: Any) -> GuestConfig:
     raise ValueError("guest 要是 false 或 {hours: 6}")
 
 
+def _parse_dispatch(raw: Any) -> DispatchConfig:
+    """泰缇斯派发（F40）：不写或 false 关；写成一个对象就开，可改 runner 等。
+
+    ``runner`` 里必须有一个 ``{task}``——没有占位就是「永远跑同一条命令」，
+    派了十次十次一样，属于写错了，直接报出来比默默跑更省事。
+    """
+
+    if raw is None or raw is False:
+        return DispatchConfig()
+    if raw is True:
+        return DispatchConfig(enabled=True)
+    if not isinstance(raw, dict):
+        raise ValueError("dispatch 要是 false 或 {enabled, runner, timeout_seconds}")
+
+    runner_raw = raw.get("runner")
+    if runner_raw is None:
+        runner = DispatchConfig().runner
+    elif isinstance(runner_raw, str):
+        runner = [part for part in runner_raw.split() if part]
+    elif isinstance(runner_raw, list):
+        runner = [str(part) for part in runner_raw if str(part).strip()]
+    else:
+        raise ValueError("dispatch.runner 要是 argv 列表，如 [\"/bin/echo\", \"{task}\"]")
+    if not runner:
+        raise ValueError("dispatch.runner 不能为空")
+    if not any(PLACEHOLDER in part for part in runner):
+        raise ValueError(f"dispatch.runner 里得有 {PLACEHOLDER}（任务往哪儿放）")
+
+    def _int(key: str, default: int, low: int, high: int) -> int:
+        value = raw.get(key)
+        if value is None:
+            return default
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"dispatch.{key} 要是整数") from exc
+        return min(max(number, low), high)
+
+    return DispatchConfig(
+        enabled=bool(raw.get("enabled", True)),
+        runner=runner,
+        timeout_seconds=_int("timeout_seconds", 180, 5, 3600),
+        result_max_chars=_int("result_max_chars", 4000, 200, 20000),
+        max_tasks_kept=_int("max_tasks_kept", 200, 10, 5000),
+    )
+
+
 def _parse_calendar(raw: Any) -> CalendarConfig | None:
     """日程订阅（F13）：不写或 false 关，字符串就是 ICS 链接，对象可带名字。"""
     if raw is None or raw is False:
@@ -2005,6 +2076,14 @@ def hub_config_to_raw(config: HubConfig, *, mask_secrets: bool = False) -> dict[
         raw["guest"] = False
     elif config.guest.hours != GuestConfig().hours:
         raw["guest"] = {"hours": config.guest.hours}
+    if config.dispatch.enabled:
+        # 派发没有设置页表单，但向导保存是「整份导出再覆盖」，不写回就会被洗掉
+        raw["dispatch"] = {
+            "runner": list(config.dispatch.runner),
+            "timeout_seconds": config.dispatch.timeout_seconds,
+            "result_max_chars": config.dispatch.result_max_chars,
+            "max_tasks_kept": config.dispatch.max_tasks_kept,
+        }
     if config.calendar is not None:
         # 日程订阅（F13）：配了才写回，没配不占 yaml 一行。
         entry: dict[str, Any] = {"url": config.calendar.url}

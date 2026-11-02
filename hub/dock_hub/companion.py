@@ -201,6 +201,8 @@ class Companion(ChatFlowMixin, DeskMixin, LlmMixin):
         self._mood: dict[str, Any] = default_mood()
         self._world: dict[str, Any] = {}
         self._chat_log: ChatLog | None = None
+        # 派发结果没抢到嘴时先存在这儿，下一轮对话里补一句（F40）
+        self._dispatch_note = ""
         self._recent: deque[tuple[str, str]] = deque(maxlen=5)
         self._timer: threading.Timer | None = None
         self.timers = TimerBoard()

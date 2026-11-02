@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import time
 from datetime import datetime, timedelta
@@ -10,6 +11,7 @@ import urllib.request
 from typing import Any
 
 from dock_hub import PROTOCOL, logs
+from dock_hub import dispatch as dispatch_mod
 from dock_hub.chat_log import ChatLog, chat_log_path
 from dock_hub.companion import Companion
 
@@ -136,6 +138,11 @@ class DockHub:
             (config.path or default_config_path()).with_name("companion-memory.yaml")
         )
         self.companion.set_memory(self.memory)
+        # F40 泰缇斯派发：任务台账落 hub.yaml 同目录，跨重启还能对上账
+        self.dispatch_store = dispatch_mod.DispatchStore(
+            dispatch_mod.dispatch_path(config.path or default_config_path()),
+            max_kept=config.dispatch.max_tasks_kept,
+        )
         # F27 桌面周报：对话/朗读/在桌/开关机的边沿按天记账，周日晚她自己总结
         self.ledger = DailyLedger(
             (config.path or default_config_path()).with_name("companion-stats.jsonl")
@@ -2530,3 +2537,127 @@ class DockHub:
     def _lock_for(self, device_id: str) -> threading.Lock:
         with self._device_locks_guard:
             return self._device_locks.setdefault(device_id, threading.Lock())
+
+    # ---- F40 泰缇斯派发：把一件事交给外部 AI CLI，跑完她回一句 ----
+
+    def dispatch_task(self, body: dict[str, Any]) -> dict[str, Any]:
+        """派一件事出去，立刻返回 202。
+
+        这一层只做校验 + 记账 + 起线程，不等子进程：HTTP 线程最多占几十毫秒，
+        现有对话那条同步链路和 90 秒超时完全不受影响。
+        """
+
+        cfg = self.config.dispatch
+        if not cfg.enabled:
+            raise HubError("not_found", "未开启派发")
+        task = str(body.get("task") or "").strip()
+        if not task:
+            raise HubError("bad_request", "task 不能为空")
+        if len(task) > dispatch_mod.MAX_TASK_CHARS:
+            raise HubError("bad_request", f"task 最多 {dispatch_mod.MAX_TASK_CHARS} 字")
+        workspace = str(body.get("workspace") or "").strip()
+        cwd = Path(workspace).expanduser() if workspace else Path.home()
+        if not cwd.is_dir():
+            raise HubError("bad_request", "workspace 不是一个目录")
+        argv = dispatch_mod.build_argv(cfg.runner, task)
+        task_id = f"d-{secrets.token_hex(4)}"
+        self.dispatch_store.put(
+            {
+                "task_id": task_id,
+                "status": "queued",
+                "task": task[:200],
+                "argv": argv,
+                "cwd": str(cwd),
+                "created_at": dispatch_mod.now_iso(),
+            }
+        )
+        threading.Thread(
+            target=self._run_dispatch,
+            args=(task_id, argv, str(cwd)),
+            name=f"dispatch-{task_id}",
+            daemon=True,
+        ).start()
+        METRICS.inc("hub_dispatch_total", status="queued")
+        return {"task_id": task_id, "status": "queued"}
+
+    def dispatch_status(self, task_id: str) -> dict[str, Any]:
+        """查一件派出去的事。没这个 id 就 404，不编一个「不知道」。"""
+
+        if not self.config.dispatch.enabled:
+            raise HubError("not_found", "未开启派发")
+        record = self.dispatch_store.get(task_id)
+        if record is None:
+            raise HubError("not_found", "没有这个任务")
+        return {
+            "task_id": record.get("task_id"),
+            "status": record.get("status") or "",
+            "exit_code": record.get("exit_code"),
+            "result": record.get("result") or "",
+            "result_truncated": bool(record.get("result_truncated")),
+            "error": record.get("error") or "",
+            "started_at": record.get("started_at") or "",
+            "finished_at": record.get("finished_at") or "",
+        }
+
+    def _run_dispatch(self, task_id: str, argv: list[str], cwd: str) -> None:
+        cfg = self.config.dispatch
+        try:
+            proc = dispatch_mod.start(argv, cwd)
+        except OSError as exc:
+            self._finish_dispatch(task_id, "failed", None, f"起不来：{exc}", False)
+            return
+        self.dispatch_store.put(
+            {
+                "task_id": task_id,
+                "status": "running",
+                "pid": proc.pid,
+                "started_at": dispatch_mod.now_iso(),
+            }
+        )
+        status, code, text, truncated = dispatch_mod.collect(
+            proc, timeout_seconds=cfg.timeout_seconds, max_chars=cfg.result_max_chars
+        )
+        self._finish_dispatch(task_id, status, code, text, truncated)
+
+    def _finish_dispatch(
+        self, task_id: str, status: str, code: int | None, text: str, truncated: bool
+    ) -> None:
+        self.dispatch_store.put(
+            {
+                "task_id": task_id,
+                "status": status,
+                "exit_code": code,
+                "result": text,
+                "result_truncated": truncated,
+                "finished_at": dispatch_mod.now_iso(),
+            }
+        )
+        METRICS.inc("hub_dispatch_total", status=status)
+        if not text:
+            return
+        say = f"泰缇斯回来了：{text[:200]}"
+        # 她嘴上有活（念书、刚说完一句）就先不抢：记下来，下一轮对话补一句
+        if self.companion.idle_to_speak() and self.companion.speak_up(say):
+            return
+        self.companion.note_dispatch(say)
+
+    def sweep_dispatch(self) -> int:
+        """hub 重启收尾：上次还没结束的任务没人收结果了，杀掉并记账。"""
+
+        if not self.config.dispatch.enabled:
+            return 0
+        marks = 0
+        for record in self.dispatch_store.unfinished():
+            pid = record.get("pid")
+            if isinstance(pid, int) and pid > 0:
+                dispatch_mod.kill_pid(pid)
+            self.dispatch_store.put(
+                {
+                    "task_id": record.get("task_id"),
+                    "status": "killed",
+                    "reason": "hub_restart",
+                    "finished_at": dispatch_mod.now_iso(),
+                }
+            )
+            marks += 1
+        return marks

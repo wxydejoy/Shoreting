@@ -473,6 +473,79 @@ paths:
                       pattern: '^\d{4}-\d{2}-\d{2}$'
         "401":
           $ref: "#/components/responses/Error"
+  /v1/dispatch:
+    post:
+      summary: 泰缇斯派发（F40）：把一件事交给外部 AI CLI（默认 dsh headless）跑。
+      description: >
+        立刻回 202，不等结果。子进程跑完写进 dispatch-tasks.jsonl，
+        状态用 GET /v1/dispatch/status 查，结果好的话她会顺口说一句。
+        yaml 里没配 dispatch 段时，两条路由都 404。
+      operationId: postDispatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task]
+              properties:
+                task:
+                  type: string
+                  maxLength: 2000
+                  description: 要它做的事，原话丢过去
+                workspace:
+                  type: string
+                  description: 子进程的工作目录，不写就是 hub 进程的 HOME
+      responses:
+        "202":
+          description: 已派出，结果另查
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string, example: "d-9f3c1a2b" }
+                  status: { type: string, enum: [queued] }
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/dispatch/status:
+    get:
+      summary: 查一件派出去的事（F40）。
+      operationId: getDispatchStatus
+      parameters:
+        - name: task_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 任务快照。queued → running → done | failed | timeout | killed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string }
+                  status:
+                    type: string
+                    enum: [queued, running, done, failed, timeout, killed]
+                  exit_code: { type: integer, nullable: true }
+                  result:
+                    type: string
+                    description: stdout；没吐字时是 stderr 最后一段
+                  result_truncated: { type: boolean }
+                  error: { type: string }
+                  started_at: { type: string }
+                  finished_at: { type: string }
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /v1/notify/phone:
     post:
       summary: 往手机递一句话（F33 反向 / F4 语音留言共用）。安卓经 snapshot.notify 收。

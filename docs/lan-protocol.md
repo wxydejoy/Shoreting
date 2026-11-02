@@ -153,6 +153,8 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `POST` | `/v1/leave` | 是 | 离家总控：能关的全关，报告没关掉的（F18） |
 | `POST` | `/v1/presence` | 是 | 在场上报：手机连上 / 离开家里 WiFi（F25） |
 | `POST` | `/v1/at-desk` | 是 | 在桌上报：摄像头本地检测的「有人/没人」（F24） |
+| `POST` | `/v1/dispatch` | 是 | 泰缇斯派发（F40）：一件事交给外部 AI CLI 跑，立刻回 202。**安卓不打** |
+| `GET` | `/v1/dispatch/status` | 是 | 查那件事跑到哪了。**安卓不打** |
 
 没有单独的「读温度」「读电脑性能」「跑脚本」「读正在播放」接口。米家温度、logo、电脑监控、正在播放、伴侣是否就绪都在 snapshot 里；点击 logo 和播放键走同一个 command；说话走 companion/chat，再喊唤醒词打断走 companion/stop，声音走 companion/audio。
 
@@ -1078,6 +1080,59 @@ Content-Type: application/json
 - 关着时是 `null`。`until` 到点 Hub 自己恢复，不需要任何人操作；重复开是顺延，不重算。
 - 访客期间 `/chats` `/diary` `/week` `/memory` 连页面带接口（含 DELETE）一律 **404**——对访客来说这些页「不存在」，不是「无权访问」。对话不写 jsonl、闲聊不捞事实，「记住／忘掉」当场婉拒。
 - `guest: false`（hub.yaml）时整条口令不认识，快照里永远 `null`。状态只在内存，Hub 重启即清场。
+
+---
+
+### 6.18 `POST /v1/dispatch` · `GET /v1/dispatch/status`
+
+泰缇斯派发（F40）。**安卓不打**——这是给自己（脚本、控制台、别的 agent）用的口子。
+
+一次派发 = 起一个子进程跑一件外部任务（默认 `dsh --profile headless "<task>"`），
+不等结果，立刻回 202。任务台账在 `hub.yaml` 同目录的 `dispatch-tasks.jsonl`，
+一行一个快照，同一个 `task_id` 后写的覆盖前面的。
+
+**请求**
+
+```json
+{"task": "把这份日志里的报错归类", "workspace": "/Users/me/logs"}
+```
+
+- `task` 必填，≤2000 字；`workspace` 不写就是 hub 进程的 HOME。
+- 子进程 argv 来自 yaml 的 `dispatch.runner` 模板，`{task}` 是唯一占位。
+  **不过 shell**：任务原文里带 `;` `$()` 也不会被执行，只当普通参数。
+- 新会话 + 新进程组起（`start_new_session=True`），收尸时 `killpg` 只杀这一棵树。
+
+**202**
+
+```json
+{"task_id": "d-9f3c1a2b", "status": "queued"}
+```
+
+**`GET /v1/dispatch/status?task_id=d-9f3c1a2b` → 200**
+
+```json
+{
+  "task_id": "d-9f3c1a2b",
+  "status": "done",
+  "exit_code": 0,
+  "result": "报错分三类：证书、磁盘、上游 502。",
+  "result_truncated": false,
+  "error": "",
+  "started_at": "2026-11-02T15:31:02+08:00",
+  "finished_at": "2026-11-02T15:33:41+08:00"
+}
+```
+
+- 状态取值：`queued → running → done | failed | timeout | killed`。
+- `done` 的条件是「退 0 **且** stdout 有字」。缺模型凭据时 CLI 会空跑完退 0，
+  那种情况记 `failed`，不算成功。
+- 超时（`timeout_seconds`，默认 180）先 `SIGTERM` 给 5 秒体面退出，再 `SIGKILL`，记 `timeout`。
+- hub 重启时，上次还没结束的任务记 `killed`（`reason: hub_restart`），子进程按组杀掉。
+- 结果超过 `result_max_chars`（默认 4000）截断并置 `result_truncated`。
+- 没配 `dispatch` 段时两条路由都 **404**；未知 `task_id` 也是 **404**。
+
+**结果怎么回到她嘴里**：跑完先看她忙不忙（在念整本书、嘴上还有话就不抢），
+不忙就 `speak_up("泰缇斯回来了：…")`；忙就记一条 note，下一轮对话里自然带一句。
 
 ---
 

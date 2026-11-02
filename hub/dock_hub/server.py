@@ -136,6 +136,14 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                         self._require_auth()
                     self._text(200, hub.metrics_text(), "text/plain; version=0.0.4; charset=utf-8")
                     return
+                if path == "/v1/dispatch/status":
+                    # F40：查一件派出去的事。状态机 queued→running→done/failed/timeout/killed
+                    self._require_auth()
+                    self._limit("read")
+                    query = parse_qs(parsed.query)
+                    task_id = (query.get("task_id") or [""])[0].strip()
+                    self._json(200, hub.dispatch_status(task_id))
+                    return
                 if path == "/v1/companion/diary":
                     # F29：日记列表。鉴权口径与 /chats 相同——本机免 token
                     self._guard_guest()
@@ -299,6 +307,12 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._limit("announce")
                     body = self._read_json()
                     self._json(200, hub.companion_announce(body))
+                    return
+                if path == "/v1/dispatch":
+                    # F40 泰缇斯派发：派一件事出去，立刻回 202，结果另查
+                    self._require_auth()
+                    self._limit("command")
+                    self._json(202, hub.dispatch_task(self._read_json()))
                     return
                 if path == "/v1/notify/phone":
                     # F33 反向 / F4：往手机递一句话（脚本、电脑都能用）
@@ -696,6 +710,8 @@ def _reject_busy(request: Any) -> None:
 
 
 def serve(hub: DockHub, *, blocking: bool = True) -> GuardedHTTPServer:
+    # 上次退出时还没收尾的派发任务，子进程可能还在跑（新会话不会被 hub 带走）
+    swept = hub.sweep_dispatch()
     handler = make_handler(hub)
     server = GuardedHTTPServer((hub.config.host, hub.config.port), handler)
     ips = lan_ips()
@@ -708,6 +724,8 @@ def serve(hub: DockHub, *, blocking: bool = True) -> GuardedHTTPServer:
     print(f"守岸人日记   http://127.0.0.1:{hub.config.port}/diary  （本机直接开；局域网要 Token）", flush=True)
     if hub.config.path:
         print(f"配置         {hub.config.path}", flush=True)
+    if swept:
+        print(f"派发台账     上次有 {swept} 个任务没收尾，已标记 killed", flush=True)
     access = AccessLog.from_config(hub.config)
     if access.directory is not None:
         print(f"访问日志     {access.directory}/access-YYYY-MM-DD.log（留 {access.keep_days} 天）", flush=True)

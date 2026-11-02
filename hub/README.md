@@ -131,6 +131,34 @@ Windows 端更没更新，`curl http://win.lan:17892/health` 看一眼就知道�
 
 上游不给面子时的两条兜底：429 / 500 / 502 / 503 / 504 按 0.5s、1.5s 退避重试（`Retry-After` 说了等多久就照它，封顶 3s），且只在还没念出第一句时重试——已经念出去的句子不能重来。模型连着两遍没吐出话（只出思考、`num_predict` 被吃光）不再回 502，改说一句「我这会儿走神了，你再说一遍？」，聊天记录里标 `大脑没有说出话（已兜底）`。
 
+## 泰缇斯派发（F40）
+
+「把这件事交给别的 AI 去跑」的一条链路。`hub.yaml` 里加一段就开，不加就是关着（两条路由都 404）：
+
+```yaml
+dispatch:
+  enabled: true
+  runner: ["/opt/homebrew/bin/dsh", "--profile", "headless", "{task}"]
+  timeout_seconds: 180      # 到点先 TERM 后 KILL，连子进程树一起收
+  result_max_chars: 4000
+  max_tasks_kept: 200
+```
+
+```bash
+TOKEN=$(python3 -c "import yaml;print(yaml.safe_load(open('$HOME/.config/dock-hub/hub.yaml'))['token'])")
+curl -s -X POST http://127.0.0.1:17890/v1/dispatch -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"task":"把这份日志里的报错归类","workspace":"/tmp"}'
+# {"task_id":"d-9f3c1a2b","status":"queued"}
+curl -s "http://127.0.0.1:17890/v1/dispatch/status?task_id=d-9f3c1a2b" -H "Authorization: Bearer $TOKEN"
+```
+
+- `runner` 是 argv 模板，`{task}` 是唯一占位，**不过 shell**——任务原文里带 `;`、`$()` 只当普通参数。
+- 立刻回 202，不等结果；子进程在新会话里跑，收尸时 `killpg` 只杀它那一棵树。
+- 状态：`queued → running → done | failed | timeout | killed`。`done` 要求「退 0 **且** stdout 有字」——dsh 缺 key 时会空跑完退 0，那种记 `failed`。
+- 台账在 `hub.yaml` 同目录的 `dispatch-tasks.jsonl`；Hub 重启时把上次没结束的记 `killed`。
+- 结果回嘴：她没在念书、嘴上没话就直接说一句「泰缇斯回来了：…」；在忙就记下来，下一轮对话里补。
+- 没有模型凭据时把 `runner` 换成 `["/bin/echo", "{task}"]`，整条链路照样能验。
+
 ## 定时任务
 
 `hub.yaml` 里加 `schedules`，Hub 每 15 秒看一次表，到点执行：
