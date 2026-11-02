@@ -1,34 +1,36 @@
-# 发版手册：从预演线到真机（0.9.0）
+# 发版手册：从 main 到真机（0.9.0）
 
-> 写在前面：0.5.0 – 0.9 的全部功能一直在预演分支上验证，**main 还停在 13cf86f，
-> Hub 没重启过、App 没重新打包过**。真机要看到这一切，走的就是这一页。
+> 写在前面：0.5.0 – 0.9 的全部功能已经逐条并入 main（预演线用完即删，
+> 本机 75 条分支已清到 3 条），**但 Hub 还是老进程、App 还是老包**。
+> 真机要看到这一切，走的就是这一页——代码侧已就绪，剩下的是重启与装包。
 > 全程约 30–40 分钟，其中「真机验收」占一半，别省。
 
 ## 0. 前置机械检查（5 分钟，全绿才继续）
 
 ```bash
-uv run python scripts/check_rehearsal.py        # 分支覆盖：所有补丁都在预演线上
-uv run python scripts/bump_version.py --check   # 版本号五处一致
-cd hub && uv run python -m unittest discover -s tests      # hub 全量（~1006 条）
-cd mini && uv run python -m unittest discover -s tests     # mini（10 条）
-cd console && uv run python -m unittest discover -s tests  # console（21 条）
-cd android && ./gradlew testDebugUnitTest                  # 安卓（163 条）
-uv run python scripts/check_protocol.py       # 路由 ↔ 文档一致
+python3 scripts/bump_version.py --check         # 版本号五处一致（现为 0.9.0 / code 28）
+cd hub && python3 -m pytest tests -q            # hub 全量（~1141 条）
+cd mini && python3 -m pytest tests -q           # mini
+cd console && python3 -m pytest tests -q        # console（85 条）
+cd android && ./gradlew testDebugUnitTest       # 安卓（197 条）
+python3 scripts/check_protocol.py               # 路由 ↔ 文档一致
 ```
+
+跑 hub 测试前先 `env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy`：
+代理变量会把回环请求带出去，测出一堆假红。
 
 安卓首次构建注意：`app/libs/sherpa-onnx-*.aar` 和 `app/src/main/assets/` 下的
 模型不进 git，新机器先跑 `android/fetch-voiceprint.sh`、`fetch-wake-word.sh`，
 ASR 模型从老机器拷或按 README 拉取。
 
-## 1. 合并进 main（2 分钟）
+## 1. main 已经齐了（原来这一步是合并预演线）
 
 ```bash
-git checkout main
-git merge --ff-only rehearsal/integration-hub    # ff-only：预演线必须是 main 的直系后代
-git push origin main
+git log --oneline -1        # 确认在 main 上、工作区干净
+git status --short
 ```
 
-`--ff-only` 失败说明 main 上有预演线没有的东西——先停下来看，不要制造合并提交。
+要推远端再 `git push origin main`（仓库是公开的，推之前扫一眼有没有不该公开的东西）。
 
 ## 2. 重启 Hub（3 分钟）
 
@@ -103,8 +105,11 @@ adb install -r app-release-signed.apk
 ## 5. 发版收尾（3 分钟）
 
 ```bash
-scripts/release.sh 0.9.0 docs/releases/0.9.0.md   # 改版本 → 跑测试 → 打包 → GitHub Release
+scripts/release.sh 0.9.0 docs/releases/0.9.0.md --no-upload   # 只改版本→测试→打包，不碰远端
+scripts/release.sh 0.9.0 docs/releases/0.9.0.md               # 加上传 GitHub Release（会推）
 ```
+
+仓库是公开的：`--no-upload` 先在本地把包和 tag 备好，确认没问题再决定要不要发到 GitHub。
 
 Windows 的 Hub exe 只能在 Windows 上打，Mac 会自动跳过并提醒——补打一次。
 发完把预演线留在原地不动：它是下一轮的工作基线。

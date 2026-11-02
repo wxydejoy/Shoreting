@@ -32,6 +32,8 @@ android/app/src/main/assets/voiceprint/*.onnx
 
 # 工作区杂物（勿入库）
 .workbuddy/
+# plan/ 是本机的工作笔记（bug 记录里有原话摘录），仓库是公开的，所以不入库；
+# 别处已备一份：~/Documents/dock-plan-backup/，要版本化就先把仓库改私有。
 /plan/
 hub/_revision.txt
 hub/hub.yaml.*-bak
