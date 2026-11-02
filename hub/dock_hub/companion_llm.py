@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -27,6 +28,61 @@ from dock_hub.llm import (
 from dock_hub.speech import cut_sentences
 
 from dock_hub.companion_support import _TurnCancelled, _latency
+
+# 上游限流与抖动的重试节奏：0.5s、1.5s 各再来一趟。429 的 Retry-After 说了
+# 要等多久就照它（封顶 3s）——一次一次性限流不该让整句话丢掉，
+# 用户听到的只会是「她没说话」。
+LLM_RETRY_DELAYS = (0.5, 1.5)
+LLM_RETRY_AFTER_CAP = 3.0
+# 这几类状态码是「再来一次可能就好了」：限流、过载、网关抖动
+_RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
+def retriable_error(exc: BaseException) -> bool:
+    return isinstance(exc, HubError) and bool(getattr(exc, "retriable", False))
+
+
+def retry_delay(exc: BaseException, fallback: float) -> float:
+    headers = getattr(exc, "headers", None) or {}
+    for key, value in headers.items():
+        if str(key).lower() != "retry-after":
+            continue
+        try:
+            return min(LLM_RETRY_AFTER_CAP, max(0.0, float(value)))
+        except (TypeError, ValueError):
+            break
+    return fallback
+
+
+def with_retry(attempt, *, delays: tuple[float, ...] = LLM_RETRY_DELAYS, sleep=time.sleep):
+    """跑一次 attempt()；只有可重试的 HubError 才按 delays 再来几趟。
+
+    超时、连不上、4xx 一律直接抛：前两个是人已经等了一轮，后者再试也没用。
+    """
+    remaining = list(delays)
+    while True:
+        try:
+            return attempt()
+        except HubError as exc:
+            if not retriable_error(exc) or not remaining:
+                raise
+            sleep(retry_delay(exc, remaining.pop(0)))
+
+
+def _llm_http_error(exc: urllib.error.HTTPError) -> HubError:
+    try:
+        detail = exc.read().decode("utf-8", errors="replace")[:200]
+    except Exception:  # noqa: BLE001 - 读不到正文不影响报错
+        detail = ""
+    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+    headers = {"Retry-After": str(retry_after)} if retry_after else {}
+    message = f"大脑拒绝请求：{exc.code} {detail}".strip() if detail else f"大脑拒绝请求：{exc.code}"
+    return HubError(
+        "companion_unavailable",
+        message,
+        headers=headers,
+        retriable=exc.code in _RETRIABLE_STATUS,
+    )
 
 
 class LlmMixin:
@@ -97,6 +153,26 @@ class LlmMixin:
         seq: int,
         cancel: threading.Event | None = None,
     ) -> str:
+        # 已经念出去的句子不能重来（会重复念），所以只有在还没开口时才允许重试
+        cued = [0]
+        remaining = list(LLM_RETRY_DELAYS)
+        while True:
+            try:
+                return self._stream_once(messages, turn, seq, cancel, cued)
+            except HubError as exc:
+                if cued[0] or not retriable_error(exc) or not remaining:
+                    raise
+                _latency(turn, "llm_retry", detail=exc.message[:60])
+                time.sleep(retry_delay(exc, remaining.pop(0)))
+
+    def _stream_once(
+        self,
+        messages: list[dict[str, str]],
+        turn: str,
+        seq: int,
+        cancel: threading.Event | None,
+        cued: list[int],
+    ) -> str:
         openai = openai_mode(self.config)
         path = "/chat/completions" if openai else "/api/chat"
         accept = "text/event-stream" if openai else "application/x-ndjson"
@@ -143,20 +219,23 @@ class LlmMixin:
                         spoken = _clean_reply(sent)
                         if spoken and not allow and re.search(r"[？?]", spoken):
                             continue
-                        if spoken and self._cue_sentence(spoken, turn, seq) and first:
-                            _latency(turn, "tts_first_sentence", chars=len(spoken))
-                            first = False
+                        if spoken and self._cue_sentence(spoken, turn, seq):
+                            cued[0] += 1
+                            if first:
+                                _latency(turn, "tts_first_sentence", chars=len(spoken))
+                                first = False
         except TimeoutError as exc:
             raise HubError("companion_unavailable", "大脑响应超时") from exc
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:200]
-            raise HubError("companion_unavailable", f"大脑拒绝请求：{exc.code} {detail}") from exc
+            raise _llm_http_error(exc) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise HubError("companion_unavailable", "连不上大脑") from exc
         tail = _clean_reply(buf)
         if tail and not (not bool(self._mood.get("allow_ask")) and re.search(r"[？?]", tail)):
-            if tail and self._cue_sentence(tail, turn, seq) and first:
-                _latency(turn, "tts_first_sentence", chars=len(tail))
+            if self._cue_sentence(tail, turn, seq):
+                cued[0] += 1
+                if first:
+                    _latency(turn, "tts_first_sentence", chars=len(tail))
         return "".join(pieces)
 
     def _cue_sentence(self, spoken: str, turn: str, seq: int) -> bool:
@@ -223,6 +302,17 @@ class LlmMixin:
         stream: bool,
         temperature: float | None = None,
     ) -> dict[str, Any]:
+        return with_retry(
+            lambda: self._chat_response_once(messages, stream=stream, temperature=temperature)
+        )
+
+    def _chat_response_once(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        stream: bool,
+        temperature: float | None = None,
+    ) -> dict[str, Any]:
         path = "/chat/completions" if openai_mode(self.config) else "/api/chat"
         url = _join(self.config.llm_base_url, path)
         req = urllib.request.Request(
@@ -237,8 +327,7 @@ class LlmMixin:
         except TimeoutError as exc:
             raise HubError("companion_unavailable", "大脑响应超时") from exc
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:200]
-            raise HubError("companion_unavailable", f"大脑拒绝请求：{exc.code} {detail}") from exc
+            raise _llm_http_error(exc) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise HubError("companion_unavailable", "连不上大脑") from exc
         try:

@@ -60,6 +60,7 @@ from dock_hub.companion import (
     speak_timer,
     unsolicited_block_reason,
 )
+from dock_hub.companion_flow import DEFAULT_EMPTY_REPLY
 from dock_hub.config import CompanionConfig, hub_config_to_raw, parse_config
 from dock_hub.config import hub_config_to_raw, parse_config
 from dock_hub.errors import HubError
@@ -255,6 +256,22 @@ class CompanionLogicTest(unittest.TestCase):
         with comp._lock:
             comp._reading_until = time.monotonic() - 0.1
         self.assertFalse(comp.snapshot()["reading"])
+
+    def test_empty_reply_retries_once_then_speaks(self) -> None:
+        # 「大脑没有说出话」是聊天记录里最大的一类错误：空回复不许直接把 502
+        # 甩给手机，先再问一遍——很多时候第二遍就有话了
+        comp = Companion(CompanionConfig(enabled=True))
+        with patch.object(Companion, "_complete", side_effect=["", "晚上好。"]) as fake:
+            out = comp.chat({"text": "晚上好。", "id": "e1"})
+        self.assertEqual(out["text"], "晚上好。")
+        self.assertEqual(fake.call_count, 2)
+
+    def test_empty_twice_speaks_fallback_instead_of_error(self) -> None:
+        # 两遍都没话：说一句认错，不抛 companion_unavailable（那会让 App 弹错误）
+        comp = Companion(CompanionConfig(enabled=True))
+        with patch.object(Companion, "_complete", return_value=""):
+            out = comp.chat({"text": "晚上好。", "id": "e2"})
+        self.assertEqual(out["text"], DEFAULT_EMPTY_REPLY)
 
     def test_reply_carries_listen_policy(self) -> None:
         # F1 裁决权在大脑：问句开 20s 等回答，陈述句 8s，随回复下发

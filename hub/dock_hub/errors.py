@@ -22,6 +22,7 @@ class HubError(Exception):
         message: str,
         status: int | None = None,
         headers: dict[str, str] | None = None,
+        retriable: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -29,6 +30,9 @@ class HubError(Exception):
         self.status = status if status is not None else STATUS_BY_CODE.get(code, 502)
         # 目前只有 429 用得上（Retry-After），但接口留在这里比将来加个特例干净。
         self.headers = headers or {}
+        # 上游限流/抖动这类「同一请求再来一次大概率能成」的错误才置真。
+        # 超时不置真：人已经等了一整轮，再来一趟是让人等两倍。
+        self.retriable = retriable
 
     def body(self) -> dict:
         return {"error": {"code": self.code, "message": self.message}}

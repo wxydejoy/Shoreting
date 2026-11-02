@@ -81,6 +81,10 @@ MAX_READ_CHARS = 8000
 # 比 speaking 的 30s 保活宽一档——小说句子长，句间还有合成耗时。
 READING_KEEPALIVE_SEC = 60.0
 
+# 大脑连着两遍没吐出话时的兜底。宁可说一句「走神了」，也别把 502 甩给手机——
+# 那会让 App 弹错误，人听到的是报错音，比一句认错难听得多。
+DEFAULT_EMPTY_REPLY = "嗯……我这会儿走神了，你再说一遍？"
+
 # 自闻/噪音转出来的无实义音节。真进大脑她就回「嗯。」，出喇叭又被麦收走，
 # 转出来还是这种东西——「一直嗯」的自激就是这么烧起来的。
 _FILLER_WORDS = {
@@ -297,13 +301,24 @@ class ChatFlowMixin:
         messages = build_messages(text, extra, self.config.persona)
         llm_at = time.monotonic()
         cue_as_we_go = self.tts.configured and not self.tts.deliver
+        # 空回复很常见（模型只吐了 think、或 num_predict 被思考用光）：一遍不行
+        # 就再问一遍，问不出来才认输。边念边合的流式不再重问——那一路可能已经
+        # 念出去半句，重来会把话重复一遍。
+        empty_round = 0
         try:
-            if cue_as_we_go:
-                raw = self._stream_and_cue(messages, turn, seq, cancel)
-            else:
-                raw = self._complete(messages)
-            if cancel.is_set():
-                raise _TurnCancelled()
+            while True:
+                if cue_as_we_go:
+                    raw = self._stream_and_cue(messages, turn, seq, cancel)
+                else:
+                    raw = self._complete(messages)
+                if cancel.is_set():
+                    raise _TurnCancelled()
+                spoken = _clean_reply(raw)
+                spoken = enforce_ask_budget(spoken, bool(self._mood.get("allow_ask")))
+                if spoken or cue_as_we_go or empty_round >= 1:
+                    break
+                empty_round += 1
+                _latency(turn, "ollama_empty_retry", attempt=empty_round)
         except _TurnCancelled:
             _latency(turn, "barge_in", ms=_ms(llm_at))
             self._record_turn(turn, heard, "", _ms(started), [], "被下一轮顶掉", speaker=speaker)
@@ -312,23 +327,33 @@ class ChatFlowMixin:
             _latency(turn, "ollama_error", ms=_ms(llm_at))
             self._record_turn(turn, heard, "", _ms(started), [], exc.message, speaker=speaker)
             raise
-        spoken = _clean_reply(raw)
-        spoken = enforce_ask_budget(spoken, bool(self._mood.get("allow_ask")))
         applied, skills = self._apply_device_skills(text, raw, turn)
         spoken = ack_after_skills(spoken, skills)
         spoken = ack_ledstrip(text, spoken, skills)
         filled = False
+        empty_error: str | None = None
         if not spoken and applied:
             spoken = "好。"
             filled = True
         if not spoken:
+            # 两遍都没话：不再把 502 甩给手机（用户只会听到一声报错），
+            # 换一句兜底话术，把这一轮当成「她走神了」过去。
             _latency(turn, "ollama_empty", ms=_ms(llm_at))
-            self._record_turn(turn, heard, "", _ms(started), skills, "大脑没有说出话", speaker=speaker)
-            raise HubError("companion_unavailable", "大脑没有说出话")
+            spoken = DEFAULT_EMPTY_REPLY
+            filled = True
+            empty_error = "大脑没有说出话（已兜底）"
         _latency(turn, "ollama_done", ms=_ms(llm_at), chars=len(spoken))
         self._commit_reply(spoken)
         return self._finish_spoken(
-            spoken, turn, seq, started, filled=filled, user=heard, speaker=speaker, skills=skills
+            spoken,
+            turn,
+            seq,
+            started,
+            filled=filled,
+            user=heard,
+            speaker=speaker,
+            skills=skills,
+            error=empty_error,
         )
 
     def _finish_spoken(
@@ -343,6 +368,7 @@ class ChatFlowMixin:
         user: str = "",
         speaker: str = "",
         skills: list[dict[str, Any]] | None = None,
+        error: str | None = None,
     ) -> dict[str, Any]:
         self._ready = True
         self._ready_at = time.monotonic()
@@ -353,7 +379,15 @@ class ChatFlowMixin:
             with self._lock:
                 if seq != self._seq:
                     _latency(turn, "barge_in", ms=_ms(started))
-                    self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
+                    self._record_turn(
+                        turn,
+                        user,
+                        spoken,
+                        _ms(started),
+                        skills or [],
+                        error=error,
+                        speaker=speaker,
+                    )
                     return {"text": spoken, "audio_id": None, "listen": listen}
             audio_id = self._maybe_speak(spoken, turn)
         else:
@@ -364,7 +398,9 @@ class ChatFlowMixin:
             elif filled or not cue_llm:
                 self._cue_sentence(spoken, turn, seq)
         _latency(turn, "chat_total", ms=_ms(started), audio=1 if audio_id else 0)
-        self._record_turn(turn, user, spoken, _ms(started), skills or [], speaker=speaker)
+        self._record_turn(
+            turn, user, spoken, _ms(started), skills or [], error=error, speaker=speaker
+        )
         self._remember(user, spoken)
         return {"text": spoken, "audio_id": audio_id, "listen": listen}
 

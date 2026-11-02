@@ -12,6 +12,7 @@ import sys
 import unittest
 from pathlib import Path
 
+from dock_hub.companion_llm import LLM_RETRY_AFTER_CAP, retry_delay, with_retry
 from dock_hub.config import parse_config
 from dock_hub.errors import HubError
 from dock_hub.llm import (
@@ -165,6 +166,75 @@ class IndependenceTest(unittest.TestCase):
             check=True,
         )
         self.assertEqual(out.stdout.strip(), "False", out.stderr)
+
+
+class LlmRetryTest(unittest.TestCase):
+    """429/5xx 的退避重试：一次限流不该让整句话丢掉。"""
+
+    def test_retries_rate_limit_then_succeeds(self) -> None:
+        calls: list[int] = []
+        sleeps: list[float] = []
+
+        def attempt() -> str:
+            calls.append(1)
+            if len(calls) == 1:
+                raise HubError("companion_unavailable", "大脑拒绝请求：429", retriable=True)
+            return "好。"
+
+        out = with_retry(attempt, delays=(0.2, 0.7), sleep=sleeps.append)
+        self.assertEqual(out, "好。")
+        self.assertEqual(sleeps, [0.2])
+        self.assertEqual(len(calls), 2)
+
+    def test_retry_after_header_wins(self) -> None:
+        # 上游说了等 2 秒就等 2 秒，别按我们自己的节奏撞第二下
+        sleeps: list[float] = []
+        state = {"n": 0}
+
+        def attempt() -> str:
+            state["n"] += 1
+            if state["n"] == 1:
+                raise HubError(
+                    "companion_unavailable",
+                    "大脑拒绝请求：429",
+                    headers={"Retry-After": "2"},
+                    retriable=True,
+                )
+            return "好。"
+
+        with_retry(attempt, delays=(0.2,), sleep=sleeps.append)
+        self.assertEqual(sleeps, [2.0])
+
+    def test_retry_after_is_capped(self) -> None:
+        self.assertEqual(
+            retry_delay(
+                HubError("companion_unavailable", "x", headers={"Retry-After": "90"}),
+                0.5,
+            ),
+            LLM_RETRY_AFTER_CAP,
+        )
+
+    def test_non_retriable_error_raises_at_once(self) -> None:
+        calls: list[int] = []
+
+        def attempt() -> str:
+            calls.append(1)
+            raise HubError("companion_unavailable", "大脑拒绝请求：403", retriable=False)
+
+        with self.assertRaises(HubError):
+            with_retry(attempt, delays=(0.2,), sleep=lambda _s: None)
+        self.assertEqual(len(calls), 1)
+
+    def test_gives_up_after_all_delays(self) -> None:
+        calls: list[int] = []
+
+        def attempt() -> str:
+            calls.append(1)
+            raise HubError("companion_unavailable", "大脑拒绝请求：503", retriable=True)
+
+        with self.assertRaises(HubError):
+            with_retry(attempt, delays=(0.1, 0.2), sleep=lambda _s: None)
+        self.assertEqual(len(calls), 3)  # 首发 + 两趟重试
 
 
 if __name__ == "__main__":
