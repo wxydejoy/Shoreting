@@ -22,6 +22,9 @@ from dock_hub.service import DockHub
 from dock_hub.setup_ui import is_local_client
 
 MAX_BODY = 64 * 1024
+# 控制台的端口：和 console/dock_console/__main__.py、console/menubar/main.swift 保持一致。
+# 启动横幅只报这一个地址——页面全在控制台，Hub 自己不再出 HTML。
+CONSOLE_PORT = 17880
 MAX_WAIT = 30.0
 _DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")  # F30 时间线：chats 的 day 参数
 GZIP_MIN = 512
@@ -718,10 +721,9 @@ def serve(hub: DockHub, *, blocking: bool = True) -> GuardedHTTPServer:
     print(f"岸亭 Hub v1  http://{ips[0]}:{hub.config.port}", flush=True)
     for extra in ips[1:]:
         print(f"             http://{extra}:{hub.config.port}", flush=True)
-    print(f"配置向导     http://127.0.0.1:{hub.config.port}/setup  （本机直接开；局域网要 Token）", flush=True)
-    print(f"聊天记录     http://127.0.0.1:{hub.config.port}/chats  （本机直接开；局域网要 Token）", flush=True)
-    print(f"朗读         http://127.0.0.1:{hub.config.port}/read   （本机直接开；局域网要 Token）", flush=True)
-    print(f"守岸人日记   http://127.0.0.1:{hub.config.port}/diary  （本机直接开；局域网要 Token）", flush=True)
+    # 配置、聊天记录、朗读、日记这些页面都搬到控制台了（hub 自己那套 HTML 已删），
+    # 这里要是还打 /setup、/chats 就是四个 404 —— 看着像 Hub 挂了。
+    print(f"控制台       http://127.0.0.1:{CONSOLE_PORT}/  （配置、聊天、记忆、朗读、日记都在这儿）", flush=True)
     if hub.config.path:
         print(f"配置         {hub.config.path}", flush=True)
     if swept:
