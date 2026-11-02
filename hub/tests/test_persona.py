@@ -14,9 +14,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from dock_hub.persona import (
+    NEW_LABEL_INTENSITY,
     ack_after_skills,
     allow_ask,
     appraise_user,
+    bump_intensity,
     cn_clock,
     cn_num,
     decay_mood,
@@ -129,6 +131,110 @@ class MoodFileTest(unittest.TestCase):
             self.assertEqual(load_mood(path), default_mood())
             path.write_text("这不是 yaml: [", encoding="utf-8")
             self.assertEqual(load_mood(path), default_mood())
+
+    def test_old_mood_yaml_without_intensity_loads(self) -> None:
+        # 升级前写下的文件没有 user_intensity：标签照读，强度当 0
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mood.yaml"
+            path.write_text("last_ask: true\nself: concerned\nuser: tired\n", encoding="utf-8")
+            back = load_mood(path)
+            self.assertEqual(back["user"], "tired")
+            self.assertEqual(back["user_intensity"], 0.0)
+
+    def test_intensity_and_ask_flag_survive_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mood.yaml"
+            save_mood(
+                path,
+                {"user": "tired", "self": "concerned", "last_ask": True, "user_intensity": 0.6},
+            )
+            back = load_mood(path)
+            self.assertTrue(back["last_ask"])
+            self.assertAlmostEqual(back["user_intensity"], 0.6)
+            self.assertFalse(allow_ask(back, control=False))
+
+
+class MoodIntensityTest(unittest.TestCase):
+    def _now(self) -> datetime:
+        return datetime(2026, 11, 2, 21, 0, tzinfo=datetime.now().astimezone().tzinfo)
+
+    def test_negation_blocks_tired_on_bu_lei(self) -> None:
+        self.assertEqual(appraise_user("我不累"), "calm")
+
+    def test_negation_blocks_tired_on_bu_tai_lei(self) -> None:
+        self.assertEqual(appraise_user("我不太累，还行"), "calm")
+
+    def test_negation_keeps_tired_when_second_hit_unnegated(self) -> None:
+        # 困被否定、累没被否定：照样是累
+        self.assertEqual(appraise_user("不困，但是有点累"), "tired")
+
+    def test_negation_does_not_swallow_positive(self) -> None:
+        self.assertEqual(appraise_user("我不烦了，哈哈"), "bright")
+
+    def test_decay_half_life_after_one_hour(self) -> None:
+        now = self._now()
+        mood = {
+            "user": "tired",
+            "self": "concerned",
+            "user_intensity": 1.0,
+            "updated_at": (now - timedelta(hours=1)).isoformat(),
+        }
+        faded = decay_mood(mood, now)
+        self.assertAlmostEqual(faded["user_intensity"], 0.5, places=2)
+        # 一小时只是半程，标签还在——不再一刀切
+        self.assertEqual(faded["user"], "tired")
+
+    def test_low_intensity_falls_back_to_calm(self) -> None:
+        now = self._now()
+        mood = {
+            "user": "tired",
+            "self": "concerned",
+            "user_intensity": 1.0,
+            "updated_at": (now - timedelta(hours=3)).isoformat(),
+        }
+        faded = decay_mood(mood, now)
+        self.assertEqual(faded["user"], "calm")
+        self.assertEqual(faded["user_intensity"], 0.0)
+
+    def test_new_label_starts_above_zero(self) -> None:
+        mood = default_mood()
+        self.assertAlmostEqual(
+            bump_intensity(mood, "calm", "tired", self._now()), NEW_LABEL_INTENSITY
+        )
+
+    def test_same_label_accumulates(self) -> None:
+        now = self._now()
+        mood = {"user": "tired", "user_intensity": 0.45}
+        self.assertAlmostEqual(bump_intensity(mood, "tired", "tired", now), 0.60)
+        again = {"user": "tired", "user_intensity": 0.60}
+        self.assertAlmostEqual(bump_intensity(again, "tired", "tired", now), 0.75)
+
+    def test_same_label_cooldown_60s(self) -> None:
+        now = self._now()
+        mood = {
+            "user": "tired",
+            "user_intensity": 0.45,
+            "intensity_at": (now - timedelta(seconds=10)).isoformat(),
+        }
+        # 十秒内重进同一个判定（重试、一轮判两次）不再加，防一句话刷满
+        self.assertAlmostEqual(bump_intensity(mood, "tired", "tired", now), 0.45)
+
+    def test_intensity_capped_at_one(self) -> None:
+        mood = {"user": "frustrated", "user_intensity": 0.95}
+        self.assertEqual(bump_intensity(mood, "frustrated", "frustrated", self._now()), 1.0)
+
+    def test_calm_resets_intensity(self) -> None:
+        mood = {"user": "tired", "user_intensity": 0.9}
+        self.assertEqual(bump_intensity(mood, "tired", "calm", self._now()), 0.0)
+
+    def test_strategy_uses_intensity(self) -> None:
+        light = mood_prompt({"user": "tired", "self": "quiet", "user_intensity": 0.3}, 21)
+        heavy = mood_prompt({"user": "tired", "self": "quiet", "user_intensity": 0.8}, 21)
+        self.assertIn("先应人，短一些。", light)
+        self.assertNotIn("她这次是真的", light)
+        self.assertIn("她这次是真的", heavy)
+        # 强度上去了就不再叠原来那句轻的
+        self.assertNotIn("先应人，短一些。", heavy)
 
 
 class SpokenCopyTest(unittest.TestCase):

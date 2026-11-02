@@ -27,6 +27,7 @@ from dock_hub.persona import (
     ack_after_skills,
     allow_ask,
     appraise_user,
+    bump_intensity,
     decay_mood,
     enforce_ask_budget,
     mood_prompt,
@@ -443,9 +444,16 @@ class ChatFlowMixin:
     def _prepare_mood(self, text: str, *, control: bool) -> str:
         now = datetime.now().astimezone()
         mood = decay_mood(dict(self._mood), now)
+        previous = str(mood.get("user") or "calm")
         user = appraise_user(text)
         mood["user"] = user
         mood["self"] = next_self(str(mood.get("self") or "quiet"), user, now.hour)
+        # 强度：换标签从头算，同标签往上加，久了由 decay_mood 按半衰削
+        before = float(mood.get("user_intensity") or 0.0)
+        intensity = bump_intensity(mood, previous, user, now)
+        if intensity > before:
+            mood["intensity_at"] = now.isoformat(timespec="seconds")
+        mood["user_intensity"] = intensity
         mood["updated_at"] = now.isoformat(timespec="seconds")
         mood["allow_ask"] = allow_ask(mood, control)
         mood["last_user_at"] = now.isoformat(timespec="seconds")

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,16 @@ _USER_TIRED = re.compile(r"(累|困|乏|不想动|好累|疲惫)")
 _USER_FRUSTRATED = re.compile(r"(烦|气死|吵|够了|烦死)")
 _USER_BRIGHT = re.compile(r"(开心|谢谢|哈哈|好呀|不错)")
 _USER_GREET = re.compile(r"^(守岸人|小岸|岸宝|晚上好|早上好|中午好|下午好|晚安|嗨|你好)[。！？.?]*$")
+# 情绪词前面这一小段里有否定词，这次命中就不算数：「我不累」不是累
+_NEG = re.compile(r"(不|没|没有|别|无|未|并不|才不|不太|不怎么|一点也不)$")
+_NEG_WINDOW = 4
+
+# 心情强度：说一次加一点，久了按半衰往下掉；掉到这个数以下才真的换标签
+HALF_LIFE_SECONDS = 3600.0
+INTENSITY_FLOOR = 0.15
+NEW_LABEL_INTENSITY = 0.45
+INTENSITY_STEP = 0.15
+INTENSITY_COOLDOWN = 60.0
 
 
 _CN_SMALL = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
@@ -67,15 +77,30 @@ def period_label(hour: int) -> str:
     return "深夜"
 
 
+def _hit(text: str, pattern: re.Pattern[str]) -> bool:
+    """pattern 命中了，而且不是被否定的那一次。
+
+    「不困，但是有点累」：困被否定跳过，累没被否定 → 照样判累。逐个命中看，
+    不是一句一刀。已知放宽：「管他多累」这种反话会被判成累——反讽不做。
+    """
+
+    for match in pattern.finditer(text):
+        window = text[max(0, match.start() - _NEG_WINDOW) : match.start()]
+        if _NEG.search(window):
+            continue
+        return True
+    return False
+
+
 def appraise_user(text: str) -> str:
     stripped = (text or "").strip()
     if _USER_GREET.match(stripped):
         return "greeting"
-    if _USER_TIRED.search(stripped):
+    if _hit(stripped, _USER_TIRED):
         return "tired"
-    if _USER_FRUSTRATED.search(stripped):
+    if _hit(stripped, _USER_FRUSTRATED):
         return "frustrated"
-    if _USER_BRIGHT.search(stripped):
+    if _hit(stripped, _USER_BRIGHT):
         return "bright"
     return "calm"
 
@@ -108,7 +133,23 @@ def allow_ask(mood: dict[str, Any], control: bool) -> bool:
     return True
 
 
+def _clamp01(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return min(1.0, max(0.0, number))
+
+
 def decay_mood(mood: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """按半衰削强度，削到快没了才换标签。
+
+    以前是「满一小时两维一起重置」：聊得正沉的时候去倒杯水，回来她就
+    重新认识你一遍。现在强度按 ``exp(-ln2·Δt/3600)`` 往下掉，标签只有掉到
+    ``INTENSITY_FLOOR`` 以下才回落——一小时只是半程，不是一刀。
+    ``last_ask`` 仍然满一小时清（「一天一问」的旧语义靠这一下，不清就再也问不了）。
+    """
+
     raw = mood.get("updated_at")
     if not raw:
         return mood
@@ -118,13 +159,51 @@ def decay_mood(mood: dict[str, Any], now: datetime) -> dict[str, Any]:
         return mood
     if then.tzinfo is None:
         then = then.replace(tzinfo=now.tzinfo)
-    if now - then < timedelta(hours=1):
+    seconds = (now - then).total_seconds()
+    if seconds <= 0:
         return mood
     out = dict(mood)
-    out["self"] = "quiet"
-    out["user"] = "calm"
+    factor = 0.5 ** (seconds / HALF_LIFE_SECONDS)
+    out["user_intensity"] = _clamp01(mood.get("user_intensity")) * factor
+    if seconds < HALF_LIFE_SECONDS:
+        return out
     out["last_ask"] = False
+    if out["user_intensity"] < INTENSITY_FLOOR:
+        # 强度掉到快没了：两个维度一起回落（他的情绪、她的担心是一件事）
+        out["user"] = "calm"
+        out["self"] = "quiet"
+        out["user_intensity"] = 0.0
     return out
+
+
+def bump_intensity(
+    mood: dict[str, Any], previous: str, current: str, now: datetime
+) -> float:
+    """这一轮的情绪有多重。
+
+    换了标签：从头算一个不小的值（0.45）。
+    同标签反复说：一次加 0.15，顶到 1.0 为止——连着说三句「烦」就是 0.75，
+    而不是第一句就到顶（到顶之后说什么都一样重，等于没信息）。
+    60 秒内的重入不再加：同一句话被重试、或一轮里判断了两次，不该刷满。
+    """
+
+    if current in ("calm", "greeting"):
+        return 0.0
+    base = _clamp01(mood.get("user_intensity"))
+    if current != previous:
+        return NEW_LABEL_INTENSITY
+    last_at = mood.get("intensity_at")
+    if last_at:
+        try:
+            mark = datetime.fromisoformat(str(last_at))
+        except ValueError:
+            mark = None
+        if mark is not None:
+            if mark.tzinfo is None:
+                mark = mark.replace(tzinfo=now.tzinfo)
+            if (now - mark).total_seconds() < INTENSITY_COOLDOWN:
+                return base
+    return min(1.0, base + INTENSITY_STEP)
 
 
 def unsolicited_block_reason(
@@ -140,7 +219,13 @@ def unsolicited_block_reason(
 
 
 def default_mood() -> dict[str, Any]:
-    return {"user": "calm", "self": "quiet", "last_ask": False, "allow_ask": False}
+    return {
+        "user": "calm",
+        "self": "quiet",
+        "last_ask": False,
+        "allow_ask": False,
+        "user_intensity": 0.0,
+    }
 
 
 _USER_CN = {
@@ -163,10 +248,15 @@ def mood_prompt(mood: dict[str, Any], hour: int) -> str:
     rules: list[str] = []
     user = str(mood.get("user") or "calm")
     self_tag = str(mood.get("self") or "quiet")
-    if user == "tired":
-        rules.append("先应人，短一些。")
-    if user == "frustrated":
-        rules.append("少说话，先办事，不要讲道理。")
+    intense = _clamp01(mood.get("user_intensity"))
+    if user in {"tired", "frustrated"}:
+        # 强度进「策略」这一行：轻的时候照旧，重的时候不再只靠同一个口气
+        if intense >= 0.6:
+            rules.append("她这次是真的，少说多应，别讲道理。")
+        elif user == "tired":
+            rules.append("先应人，短一些。")
+        else:
+            rules.append("少说话，先办事，不要讲道理。")
     if self_tag == "weary":
         rules.append("更短，少堆诗意。")
     if mood.get("allow_ask"):
@@ -479,6 +569,10 @@ def load_mood(path: Path | None) -> dict[str, Any]:
     if raw.get("self") in _SELF_CN:
         mood["self"] = raw["self"]
     mood["last_ask"] = bool(raw.get("last_ask"))
+    # 老文件没有这两个键：当成 0，标签还是读得出来的那个标签
+    mood["user_intensity"] = _clamp01(raw.get("user_intensity"))
+    if raw.get("intensity_at"):
+        mood["intensity_at"] = str(raw["intensity_at"])
     if raw.get("updated_at"):
         mood["updated_at"] = str(raw["updated_at"])
     if raw.get("last_user_at"):
@@ -494,7 +588,10 @@ def save_mood(path: Path | None, mood: dict[str, Any]) -> None:
         "user": mood.get("user") or "calm",
         "self": mood.get("self") or "quiet",
         "last_ask": bool(mood.get("last_ask")),
+        "user_intensity": round(_clamp01(mood.get("user_intensity")), 4),
     }
+    if mood.get("intensity_at"):
+        body["intensity_at"] = mood["intensity_at"]
     if mood.get("updated_at"):
         body["updated_at"] = mood["updated_at"]
     if mood.get("last_user_at"):
