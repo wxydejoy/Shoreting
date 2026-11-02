@@ -1,6 +1,6 @@
 # 岸亭控制台
 
-Mac 本机的服务控制台：浏览器里启停 Hub / Mini 监控 / 守岸人 TTS 三个 LaunchAgent，看健康与日志，确认 Windows 在不在线，顺手把配置向导、聊天记录、朗读、周报与日记也都收在同一个页面里。只监听 `127.0.0.1`、无鉴权，不要暴露到局域网。
+Mac 本机的服务控制台：浏览器里启停 Hub / Mini 监控 / 守岸人 TTS 三个 LaunchAgent，看健康与日志，确认 Windows 在不在线，顺手把配置向导、聊天记录、朗读、周报与日记也都收在同一个页面里。默认监听 `0.0.0.0`，本机免鉴权、局域网要 `?key=<hub.yaml 的 token>`；读不到 token 就自动退回只听本机，不会裸奔。
 
 ![岸亭控制台](../docs/screenshots/console.png)
 
@@ -11,7 +11,25 @@ cd console
 ./dock-console
 ```
 
-纯 Python 标准库，不需要装依赖。会自动开浏览器；`--port` 换端口（默认 17880），`--no-browser` 不开。Ctrl+C 只退出控制台，不会停服务本身。
+纯 Python 标准库，不需要装依赖。会自动开浏览器；`--port` 换端口（默认 17880），`--host` 换监听地址（默认 `0.0.0.0`，只想本机就给 `127.0.0.1`），`--no-browser` 不开。Ctrl+C 只退出控制台，不会停服务本身。
+
+## 局域网打开
+
+手机、平板、另一台电脑都能用，一次带上 key，之后靠 cookie：
+
+```bash
+grep '^token:' ~/.config/dock-hub/hub.yaml      # 取出 token
+# 浏览器打开（换成自己的网段地址）
+# http://10.14.14.117:17880/?key=<token>
+```
+
+几条实测过的规矩：
+
+- 只有第一次要带 `?key=`，控制台会种一个 `HttpOnly` cookie，之后再开 `http://<ip>:17880/` 就直接进。
+- **cookie 按主机名算**，换 IP（`10.14.14.117` 换 `192.168.12.188`）或换 mDNS 名（`weiekkodeMac-mini-6.local`）都要重新带一次 key。
+- 不想让人从局域网开，就 `--host 127.0.0.1`；不想联网又不放心，把 token 换了即可。
+- 防火墙是放行状态：`/opt/homebrew/.../Python.framework` 已在「允许传入连接」名单里，控制台走的就是它。
+- 控制台能启停服务、改配置，token 等于整台机器的钥匙，别往群里发。
 
 需要 3.10 以上：页面转发那些代码用了 `dict[str, Any] | None`，macOS 自带的 `/usr/bin/python3` 是 3.9，会直接 `TypeError`。装过 Homebrew python 就没问题——app 拉起时 `PATH` 里 `/opt/homebrew/bin` 排最前，就是这个原因。
 
