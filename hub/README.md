@@ -159,6 +159,16 @@ curl -s "http://127.0.0.1:17890/v1/dispatch/status?task_id=d-9f3c1a2b" -H "Autho
 - 结果回嘴：她没在念书、嘴上没话就直接说一句「泰缇斯回来了：…」；在忙就记下来，下一轮对话里补。
 - 没有模型凭据时把 `runner` 换成 `["/bin/echo", "{task}"]`，整条链路照样能验。
 
+### 本机接 dsh 的三个坑（macOS）
+
+派发真正跑起来那天踩的，记下来省下一次：
+
+1. **`env: node: No such file or directory`（退出 127）**：Hub 由 launchd 拉起，PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，而 dsh 的 bin 是 `#!/usr/bin/env node`，node 在 `/opt/homebrew/bin`。要么在 runner 前垫一层壳脚本（本机是 `~/.config/dock-hub/bin/dsh-task.sh`）自己 `export PATH`，要么改 plist 的 `EnvironmentVariables`。
+2. **模型 key 只能走环境变量**：headless profile 明确把凭据库禁掉（一次性任务只认启动时的 env），所以 `ZHIPU_API_KEY` / `DEEPSEEK_API_KEY` 得在启动 dsh 的那个环境里。壳脚本顺便把它 `export` 掉，key 不落 `hub.yaml`。
+3. **沙盒在 macOS 上没有后端**：`workspace-write` 和 `read-only` 都会报「当前环境不支持」（后端只有 linux 的 bubblewrap/landlock 与 windows-acl）。要么接受模型只能干说不会动手，要么挂一份 `danger-full-access` 的 patch——而且 `sandbox-policy` 和 `permission` 两处都要写，只写前者会报 `composed sandbox and approval defaults match no preset`，permission 服务起不来、bash 工具挂不上，模型就把命令当文字吐出来。本机只在派发这条链路上放宽（`~/.config/dock-hub/bin/dsh-full-access.yml`），手动跑 dsh 仍是默认档。
+
+补充：能用的模型决定成果质量。本机只有智谱免费档 `glm-4-flash-250414` 有额度（`glm-4.6`/`air`/`plus` 都回「余额不足」），它能读文件、能跑命令，但挑目录（会钻 `.venv`）、答非所问都发生过。要它真能干细活，得换 DeepSeek 官方 key 或充额度。
+
 ## 定时任务
 
 `hub.yaml` 里加 `schedules`，Hub 每 15 秒看一次表，到点执行：
