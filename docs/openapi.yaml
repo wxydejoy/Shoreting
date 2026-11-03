@@ -581,6 +581,89 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
+  /v1/caption:
+    post:
+      summary: 推/清 k20 字幕（T2 协议增补提案）。安卓经 snapshot.caption 消费（按 at 去重）。
+      operationId: postCaption
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  description: 字幕文本（≤200 字，超长截断）
+                clear:
+                  type: boolean
+                  description: 清掉当前字幕
+                scale:
+                  type: integer
+                  minimum: 60
+                  maximum: 140
+                  description: 字号缩放百分比，缺省用屏上当前值
+      responses:
+        "200":
+          description: 已受理，随 snapshot 下发
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/phone/layout:
+    post:
+      summary: 写入主屏布局覆盖（T2 协议增补提案）。服务端递增 layout.rev，安卓按 rev 变大才套用。
+      operationId: postPhoneLayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [layout]
+              properties:
+                layout:
+                  type: object
+                  required: [modules]
+                  properties:
+                    modules:
+                      type: object
+                      description: 槽位 id → {x,y,w,h(0–1 画布比例), visible(bool)}
+                      additionalProperties: true
+      responses:
+        "200":
+          description: 已受理，layout.rev 已递增
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/lock:
+    post:
+      summary: 熄屏请求（T2 协议增补提案，高危）。安卓边缘触发执行设备管理员锁屏。
+      operationId: postLock
+      responses:
+        "200":
+          description: 已受理，随 snapshot.lock 下发
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "401":
+          $ref: "#/components/responses/Error"
   /v1/wechat:
     post:
       summary: 微信机器人转发一句过来，她念出来（F34）。单向播报，不做双向对话。

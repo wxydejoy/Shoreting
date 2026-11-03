@@ -155,6 +155,9 @@ Hub 可选注册 mDNS，方便以后自动发现：
 | `POST` | `/v1/at-desk` | 是 | 在桌上报：摄像头本地检测的「有人/没人」（F24） |
 | `POST` | `/v1/dispatch` | 是 | 泰缇斯派发（F40）：一件事交给外部 AI CLI 跑，立刻回 202。**安卓不打** |
 | `GET` | `/v1/dispatch/status` | 是 | 查那件事跑到哪了。**安卓不打** |
+| `POST` | `/v1/caption` | 是 | 推/清 k20 字幕（T2 协议增补提案）：随 snapshot.caption 下发，安卓按 `at` 去重 |
+| `POST` | `/v1/phone/layout` | 是 | 写主屏布局覆盖（T2 提案）：服务端递增 `layout.rev`，安卓按 rev 变大才套用 |
+| `POST` | `/v1/lock` | 是 | 熄屏请求（T2 提案，高危）：随 snapshot.lock 下发，安卓边缘触发执行 |
 
 没有单独的「读温度」「读电脑性能」「跑脚本」「读正在播放」接口。米家温度、logo、电脑监控、正在播放、伴侣是否就绪都在 snapshot 里；点击 logo 和播放键走同一个 command；说话走 companion/chat，再喊唤醒词打断走 companion/stop，声音走 companion/audio。
 

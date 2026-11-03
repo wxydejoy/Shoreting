@@ -18,6 +18,7 @@ from dock_hub.accesslog import AccessLog
 from dock_hub.books import MAX_BOOK_BYTES
 from dock_hub.config import HubConfig
 from dock_hub.errors import HubError
+from dock_hub.retire import RETIRE_404_CODE, retired_group_for
 from dock_hub.service import DockHub
 from dock_hub.setup_ui import is_local_client
 
@@ -122,6 +123,15 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or "/"
             try:
+                retire_group = retired_group_for(path, hub.config.retire)
+                if retire_group:
+                    self._json(404, {
+                        "error": {
+                            "code": RETIRE_404_CODE,
+                            "message": f"该功能已退役（hub.yaml retire.{retire_group}=true）；回滚请翻回 false",
+                        }
+                    })
+                    return
                 if path.startswith("/setup"):
                     from dock_hub import setup_ui
 
@@ -280,6 +290,15 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or "/"
             try:
+                retire_group = retired_group_for(path, hub.config.retire)
+                if retire_group:
+                    self._json(404, {
+                        "error": {
+                            "code": RETIRE_404_CODE,
+                            "message": f"该功能已退役（hub.yaml retire.{retire_group}=true）；回滚请翻回 false",
+                        }
+                    })
+                    return
                 if path.startswith("/setup"):
                     from dock_hub import setup_ui
 
@@ -322,6 +341,27 @@ def make_handler(hub: DockHub) -> type[BaseHTTPRequestHandler]:
                     self._require_auth()
                     self._limit("announce")
                     self._json(200, hub.notify_phone(self._read_json()))
+                    return
+                if path == "/v1/caption":
+                    # T2 协议增补提案：推/清字幕。安卓经 snapshot.caption 消费（按 at 去重）
+                    # body 先读后鉴权：401 若不消费请求体，keep-alive 下一个请求会解析到残体
+                    body = self._read_json()
+                    self._require_auth()
+                    self._json(200, hub.set_caption(body))
+                    return
+                if path == "/v1/phone/layout":
+                    # T2 协议增补提案：布局覆盖（服务端递增 layout.rev，安卓按 rev 变大才套用）
+                    body = self._read_json()
+                    self._require_auth()
+                    self._limit("announce")
+                    self._json(200, hub.apply_phone_layout(body))
+                    return
+                if path == "/v1/lock":
+                    # T2 协议增补提案：熄屏请求（高危；host 侧审批接线见 T2 任务书）
+                    body = self._read_json()
+                    self._require_auth()
+                    self._limit("announce")
+                    self._json(200, hub.request_lock())
                     return
                 if path == "/v1/wechat":
                     # F34：微信机器人转发一句过来，她念出来。单向播报，不做对话

@@ -308,3 +308,14 @@ devices:
 #   device: desk-led
 #   timer_brightness: 60     # 专注档
 #   reading_brightness: 15   # 睡前档
+
+# ── T7 退役回滚开关（Shorekeeper 迁移期）──────────────────────────
+# 默认全不写 = 维持 0.9.0 现行为。替代件验收就位后把对应组翻 true（路由 → 404 retired），
+# 回滚翻回 false 即可；每批翻动必须同步 docs/openapi.yaml（scripts/check_protocol.py 对账）。
+# 组名与语义见 hub/dock_hub/retire.py；盘点依据 docs/t7-route-dependency-matrix.md。
+# retire:
+#   mijia: true            # 米家面（T1 dsh-mihome 验收后）
+#   companion: true        # 伴侣面（T3/T4/T5 就位后）
+#   music: true            # 音乐面（@doitian/dsh-music 验收后）
+#   calendar_diary: true   # 日历/日记存储面（dsh-calendar 件迁移后）
+#   monitoring: true       # 监控上报面（dsh-vitals 验收后）

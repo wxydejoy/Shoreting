@@ -37,6 +37,7 @@ from dock_hub.theme import birthday_text, occasions_for
 from dock_hub.wallpaper import wallpaper_line
 from dock_hub.photos import list_photos, photo_bytes as read_photo, resolve_photos_dir
 from dock_hub.errors import HubError
+from dock_hub.screen_state import ScreenState
 from dock_hub.guest import GuestMode, parse_guest
 from dock_hub.memory import MEMORY_LIMIT, MemoryStore
 from dock_hub.metrics import METRICS
@@ -99,6 +100,11 @@ class DockHub:
         self.config = config
         self._change_cond = threading.Condition()
         self._change_seq = 0
+        # k20 屏网关增补路由（T2 提案）：caption / layout 覆盖 / lock 请求
+        self._screen = ScreenState(
+            base_layout_rev=self.config.phone.layout.rev,
+            base_modules=self.config.phone.layout.modules,
+        )
         self.session: MijiaSession | None = None
         self._mijia_lock = threading.Lock()
         self._device_locks: dict[str, threading.Lock] = {}
@@ -293,9 +299,34 @@ class DockHub:
         yaml 一个字都不动。手机只在对应 rev 变大时才套用，所以这条路径也不会
         跟手机上的手改打架。
         """
-        if self.config.phone.rev <= 0 and self.config.phone.layout.rev <= 0:
+        screen = getattr(self, "_screen", None)  # 测试夹具用 SimpleNamespace 造假 self，可能没有这块状态
+        has_layout_override = screen is not None and screen.layout_rev() > 0
+        if self.config.phone.rev <= 0 and self.config.phone.layout.rev <= 0 and not has_layout_override:
             return None
-        return self.config.phone.payload()
+        payload = self.config.phone.payload()
+        if has_layout_override:
+            # /v1/phone/layout 的运行时覆盖压过配置文件里的 layout（rev 由覆盖线自己递增）
+            payload["layout"] = screen.layout_payload()
+        return payload
+
+    def set_caption(self, body: dict[str, Any]) -> dict[str, bool]:
+        """POST /v1/caption：推/清字幕（T2 协议增补提案）。"""
+        result = self._screen.set_caption(body)
+        self.note_change()
+        return result
+
+    def apply_phone_layout(self, body: dict[str, Any]) -> dict[str, bool]:
+        """POST /v1/phone/layout：写入布局覆盖（T2 协议增补提案）。"""
+        patch = body.get("layout") if isinstance(body, dict) else None
+        result = self._screen.apply_layout(patch)
+        self.note_change()
+        return result
+
+    def request_lock(self) -> dict[str, bool]:
+        """POST /v1/lock：熄屏请求（T2 协议增补提案；安卓边缘触发执行）。"""
+        result = self._screen.request_lock()
+        self.note_change()
+        return result
 
     def _theme_payload(self) -> dict[str, list[str]] | None:
         """今天是什么日子（F36）。没配生日和考试周、又不是节日，就不用带。"""
@@ -2206,6 +2237,9 @@ class DockHub:
             "theme": self._theme_payload(),
             "photos": self._photos_payload(),
             "wallpaper": self._wallpaper_payload(),
+            # k20 屏网关增补提案（T2）：字幕与熄屏请求随 snapshot 下发
+            "caption": self._screen.caption_payload(),
+            "lock": self._screen.lock_payload(),
             # 手机端外观/电源/天气：控制台改的权威副本，rev 变了手机才套用
             "phone": self._phone_payload(),
         }

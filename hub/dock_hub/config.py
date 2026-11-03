@@ -13,6 +13,7 @@ from dock_hub.dispatch import PLACEHOLDER
 from dock_hub.errors import HubError
 from dock_hub.guest import DEFAULT_HOURS as _GUEST_DEFAULT_HOURS
 from dock_hub.guest import clamp_hours as _guest_clamp_hours
+from dock_hub.retire import parse_retire
 
 ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -628,6 +629,8 @@ class HubConfig:
     # 回忆相框（F37）的图库目录；None = 没显式配（false 时 photos_off = True）
     photos: Path | None = None
     photos_off: bool = False
+    # T7 退役回滚开关（retire.py）：默认空 = 全部维持 0.9.0 行为；替代件就位后才逐组翻 true
+    retire: dict[str, bool] = field(default_factory=dict)
     path: Path | None = None
 
     def auth_values(self) -> tuple[str, ...]:
@@ -779,6 +782,7 @@ def parse_config(raw: dict[str, Any], path: Path | None = None) -> HubConfig:
         calendar=calendar,
         photos=photos,
         photos_off=photos_off,
+        retire=parse_retire(raw.get("retire")),
         path=path,
     )
 
