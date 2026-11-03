@@ -1,6 +1,8 @@
 """Mini 上的守岸人 TTS。独立进程，不要 import dock_hub。
 
 Hub 当客户端：POST /v1/speak、POST /v1/stop。安卓不直连本服务。
+dsh 插件（dsh-keeper-voice，T4）走 OpenAI 兼容 POST /v1/audio/speech：
+只回音频字节、不占本机喇叭，打断仍走 /v1/stop。
 
 默认：Qwen3-TTS 1.7B Base 8bit + 守岸人 ref_audio 克隆。
 Serena / CustomVoice 用 --no-clone 和对应 --model 切回去。
@@ -24,6 +26,7 @@ import subprocess
 import sys
 import threading
 import time
+import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -65,6 +68,12 @@ def clamp_speed(value: object, default: float = 1.0) -> float:
     except (TypeError, ValueError):
         return default
     return min(SPEED_MAX, max(SPEED_MIN, speed))
+
+
+def wav_to_pcm(data: bytes) -> bytes:
+    """OpenAI 风格 pcm：裸 16bit LE 帧。从 wav 容器里剥出来，不假设头长。"""
+    with wave.open(io.BytesIO(data)) as reader:
+        return reader.readframes(reader.getnframes())
 
 
 def stretch_audio(audio: np.ndarray, speed: float) -> np.ndarray:
@@ -597,6 +606,56 @@ def make_handler(
                         return
                     self._json(200, {"ok": True, **state})
                     return
+                if path == "/v1/audio/speech":
+                    # OpenAI 兼容 TTS（T4）：input/voice/speed/response_format。
+                    # 只回字节不出声（allow_play=False），打断复用 /v1/stop 的 generation 计数。
+                    if not engine.ready():
+                        self._json(
+                            503,
+                            {"error": {"code": "not_ready", "message": engine.error or "模型加载中"}},
+                        )
+                        return
+                    spoken = str(body.get("input") or "").strip()
+                    if not spoken:
+                        self._json(400, {"error": {"code": "bad_request", "message": "input 不能为空"}})
+                        return
+                    fmt = str(body.get("response_format") or "wav").strip().lower()
+                    if fmt not in ("wav", "pcm"):
+                        self._json(
+                            400,
+                            {"error": {"code": "unsupported_format", "message": f"response_format 只支持 wav / pcm，收到 {fmt}"}},
+                        )
+                        return
+                    voice = body.get("voice")
+                    language = body.get("language")
+                    speed = clamp_speed(body.get("speed"), engine.speed) if "speed" in body else None
+                    t0 = time.monotonic()
+                    try:
+                        wav, first_ms = engine.speak(
+                            spoken,
+                            str(voice) if voice else None,
+                            str(language) if language else None,
+                            allow_play=False,
+                            speed=speed,
+                        )
+                    except InterruptedError:
+                        self._json(502, {"error": {"code": "stopped", "message": "已被 /v1/stop 打断"}})
+                        return
+                    payload = wav if fmt == "wav" else wav_to_pcm(wav)
+                    ms = max(0, int((time.monotonic() - t0) * 1000))
+                    print(
+                        f"tts latency turn=openai stage=speech_done first_ms={first_ms} "
+                        f"ms={ms} bytes={len(payload)} chars={len(spoken)} fmt={fmt}",
+                        flush=True,
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/wav" if fmt == "wav" else "audio/pcm")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-First-Audio-Ms", str(first_ms))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
                 if path != "/v1/speak":
                     self._json(404, {"error": {"code": "not_found", "message": "未知接口"}})
                     return
@@ -814,7 +873,7 @@ def main() -> None:
     )
     extra = "  本机播放" if args.play else ""
     auth = "  Bearer" if token else "  本机免口令"
-    print(f"TTS 听 {args.host}:{args.port}  POST /v1/speak /v1/stop{extra}{auth}", flush=True)
+    print(f"TTS 听 {args.host}:{args.port}  POST /v1/speak /v1/stop /v1/audio/speech{extra}{auth}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
