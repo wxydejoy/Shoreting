@@ -192,10 +192,15 @@ private fun CompanionCaption(
     text: String,
     modifier: Modifier = Modifier,
 ) {
+    // 字幕跟日期同一档（TypeLook.contentSize），别写死 14sp：
+    // 否则把「磁贴字」调小之后，日期反而比她说的话还大，层级就反了。
+    val type = LocalTypeLook.current
     Text(
         text,
         color = Color.White.copy(alpha = 0.92f),
-        fontSize = 14.sp,
+        fontFamily = type.font.toFamily(),
+        fontSize = type.contentSize.sp,
+        lineHeight = (type.contentSize * 1.35f).sp,
         fontWeight = FontWeight.Medium,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
@@ -210,6 +215,7 @@ private fun MirrorBanner(
     text: String,
     modifier: Modifier = Modifier,
 ) {
+    val type = LocalTypeLook.current
     Surface(
         modifier = modifier,
         color = Color.Black.copy(alpha = 0.55f),
@@ -222,7 +228,8 @@ private fun MirrorBanner(
             Text(
                 text,
                 color = Color.White.copy(alpha = 0.88f),
-                fontSize = 12.sp,
+                fontFamily = type.font.toFamily(),
+                fontSize = type.metaSize.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = TextStyle(shadow = StatShadow),
@@ -236,6 +243,7 @@ private fun MirrorBanner(
 private fun GuestBadge(
     modifier: Modifier = Modifier,
 ) {
+    val type = LocalTypeLook.current
     Surface(
         modifier = modifier,
         color = Color.Black.copy(alpha = 0.45f),
@@ -245,7 +253,8 @@ private fun GuestBadge(
             "访客",
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             color = Color.White.copy(alpha = 0.6f),
-            fontSize = 11.sp,
+            fontFamily = type.font.toFamily(),
+            fontSize = type.badgeSize.sp,
             style = TextStyle(shadow = StatShadow),
         )
     }

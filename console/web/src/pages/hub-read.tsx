@@ -36,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState, PageHeader } from "@/components/page";
 import { HubNotice } from "@/pages/hub-notice";
@@ -447,35 +448,20 @@ export function ReadPage() {
           >
             {volume ? <Volume2 className="size-5" /> : <VolumeX className="size-5" />}
           </button>
-          {/* 滑块自己做：原生 range 的滑轨只有 4px 高、拇指十来像素，
-              手机上既看不清也捏不住。这里把可点区域撑到 36px 高，
-              底下画 8px 的轨道和已选部分，拇指单独放大到 22px。 */}
-          <div className="relative flex h-9 min-w-0 flex-1 items-center sm:max-w-[420px]">
-            <div className="pointer-events-none absolute inset-x-0 h-2 rounded-full bg-secondary" />
-            <div
-              className="pointer-events-none absolute h-2 rounded-full bg-primary"
-              style={{
-                left: 0,
-                // 拇指中心的路程是 [11px, 宽度-11px]（拇指直径 22），
-                // 进度条跟着拇指中心走，看起来才是「到这儿了」
-                width: `calc(11px + (100% - 22px) * ${(volume ?? 0) / 100})`,
-              }}
-            />
-            <input
-              type="range"
+          {/* 滑块换成 Radix Slider（和项目里其他控件同一家）：可点区域整条 36px，
+              拖拽命中、键盘方向键、aria 都由组件兜住。轨道放大到 8px、拇指 22px。 */}
+          <div className="min-w-0 flex-1 sm:max-w-[420px]">
+            <Slider
+              value={[volume ?? 0]}
               min={0}
               max={100}
               step={1}
-              value={volume ?? 0}
               disabled={volume === null}
               aria-label="音量"
-              onChange={(event) => pushVolume(Number(event.target.value))}
-              className="relative h-9 w-full cursor-pointer appearance-none bg-transparent disabled:cursor-default
-                [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:bg-transparent
-                [&::-webkit-slider-thumb]:size-[22px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-background [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:active:scale-110
-                [&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-secondary
-                [&::-moz-range-progress]:h-2 [&::-moz-range-progress]:rounded-full [&::-moz-range-progress]:bg-primary
-                [&::-moz-range-thumb]:size-[22px] [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-background [&::-moz-range-thumb]:bg-primary"
+              onValueChange={(values) => pushVolume(values[0] ?? 0)}
+              className="h-9 w-full
+                [&_[data-slot=slider-track]]:h-2
+                [&_[data-slot=slider-thumb]]:size-[22px]"
             />
           </div>
           <span className="w-7 shrink-0 text-right text-[12.5px] text-muted-foreground tabular-nums">

@@ -25,6 +25,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -122,9 +123,11 @@ fun HomeScreen(
             // 编辑态收起来，别挡拖拽；hubSleeping 时屏幕本来就很暗，无所谓
             val wallpaperLine = state.snapshot?.wallpaper?.text
             if (!editing && !wallpaperLine.isNullOrBlank()) {
+                val type = LocalTypeLook.current
                 Text(
                     text = wallpaperLine,
-                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = type.font.toFamily(),
+                    fontSize = type.metaSize.sp,
                     color = colors.onBackground.copy(alpha = 0.42f),
                     maxLines = 1,
                     modifier = Modifier

@@ -107,17 +107,23 @@ export function AppSidebar({ route }: { route: Route }) {
           const open = !collapsed[section.id];
           const bare = section.id === "today";
           return (
-            <div key={section.id} className="mb-1">
+            <div key={section.id} className="mb-2">
               {bare ? null : (
+                // 分组标题：跟子项同一个字号，靠字重、色温和右边那条细线分层。
+                // 早先是 11px + 字距，中文一缩小就显得像注脚，「日子」反而比「聊天」轻。
                 <button
                   type="button"
                   onClick={() => toggle(section.id)}
-                  className="group flex h-7 w-full items-center gap-1 rounded-md px-2 text-[11px] font-medium tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+                  className="group flex h-8 w-full items-center gap-2 rounded-md px-2 text-[13px] font-medium text-foreground/60 transition-colors hover:text-foreground/90"
                 >
                   <ChevronRight
-                    className={cn("size-3 transition-transform", open ? "rotate-90" : "rotate-0")}
+                    className={cn(
+                      "size-3.5 shrink-0 text-muted-foreground/70 transition-transform",
+                      open ? "rotate-90" : "rotate-0",
+                    )}
                   />
-                  <span className="flex-1 text-left">{section.label}</span>
+                  <span className="shrink-0">{section.label}</span>
+                  <span className="ml-2 h-px flex-1 bg-border" aria-hidden />
                 </button>
               )}
 

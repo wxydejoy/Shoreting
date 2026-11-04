@@ -47,7 +47,9 @@ internal fun ClockModule(
     onOpenSettings: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val family = LocalTypeLook.current.font.toFamily()
+    val type = LocalTypeLook.current
+    val family = type.font.toFamily()
+    val dateSp = type.contentSize
     val timeSp = min(frameW * 0.50f, frameH * 0.68f) * (clockScalePercent / 100f)
     val now = rememberNow()
     Box(
@@ -97,7 +99,7 @@ internal fun ClockModule(
                 Text(
                     now.format(DateFmt),
                     fontFamily = family,
-                    fontSize = (LocalTypeLook.current.chipSize + 1).sp,
+                    fontSize = dateSp.sp,
                     fontWeight = FontWeight.Medium,
                     color = Color.White.copy(alpha = 0.86f),
                     maxLines = 1,
@@ -107,7 +109,7 @@ internal fun ClockModule(
                     Text(
                         "  ·  ",
                         fontFamily = family,
-                        fontSize = (LocalTypeLook.current.chipSize + 1).sp,
+                        fontSize = dateSp.sp,
                         fontWeight = FontWeight.Medium,
                         color = Color.White.copy(alpha = 0.46f),
                         style = TextStyle(shadow = timeShadow),
@@ -115,7 +117,7 @@ internal fun ClockModule(
                     Text(
                         weatherLine,
                         fontFamily = family,
-                        fontSize = (LocalTypeLook.current.chipSize + 1).sp,
+                        fontSize = dateSp.sp,
                         fontWeight = FontWeight.Medium,
                         color = Color.White.copy(alpha = 0.86f),
                         maxLines = 1,
