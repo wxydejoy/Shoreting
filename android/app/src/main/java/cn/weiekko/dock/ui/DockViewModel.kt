@@ -1383,6 +1383,23 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
     /** 通知镜像（F35）在屏上停多久：临时浮层 ≤30 秒，主屏信息层级的硬规矩。 */
     private val mirrorVisibleMs = 30_000L
 
+    /**
+     * 熔屏请求（协议增补提案）：网关审批过（lockEnabled）的 /v1/lock 会进快照。
+     * 同一个 requested_at 只执行一次（见过就记，不比大小）；执行走
+     * [ScreenCommand.LockNow] 让 MainActivity 在前台线程做设备管理员锁屏。
+     */
+    private fun consumeLock(snapshot: Snapshot) {
+        val lock = snapshot.lock ?: return
+        if (lock.requestedAt.isBlank()) return
+        viewModelScope.launch {
+            val seen = prefs.lastLockRequestedAt.first()
+            if (lock.requestedAt == seen) return@launch
+            prefs.saveLastLockRequestedAt(lock.requestedAt)
+            Log.i("DockVM", "hub lock request: firing LockNow (at=${lock.requestedAt})")
+            _screenCommands.tryEmit(ScreenCommand.LockNow)
+        }
+    }
+
     private suspend fun sendAnnounce(message: String) {
         val connection = _ui.value.connection
         if (!currentLink().pollsHub || !connection.isConfigured) return
@@ -1596,6 +1613,7 @@ class DockViewModel(application: Application) : AndroidViewModel(application) {
                 presenceReporter.onPoll(onWifi = onWifi(), reachable = true, nowMs = SystemClock.elapsedRealtime())
                 consumeRelay(snapshot)
                 consumeMirror(snapshot)
+                consumeLock(snapshot)
                 applyPhoneConfig(snapshot.phone)
                 // 设备名进 ASR 热词：主屏上叫什么，嘴上就该听得懂什么。
                 // 词表变了语音服务会在下一句之间重装识别器，这里只管喂名字。

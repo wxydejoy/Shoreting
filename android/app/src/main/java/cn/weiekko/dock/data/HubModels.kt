@@ -32,8 +32,16 @@ data class Snapshot(
     val wallpaper: WallpaperStatus? = null,
     /** 控制台改的手机端外观/电源/天气；rev 没变就不用管。 */
     val phone: PhoneSettings? = null,
+    /** 熄屏请求（协议增补提案）：POST /v1/lock 后网关并入快照；见 consumeLock。 */
+    val lock: LockState? = null,
     /** Hub 的状态版本号；旧版 Hub 没有这个字段，就用不了长轮询。 */
     val seq: Int? = null,
+)
+
+/** 熄屏请求（协议增补提案）：requested_at 只用「见过就执行并记住」去重，不比大小。 */
+@Serializable
+data class LockState(
+    @SerialName("requested_at") val requestedAt: String = "",
 )
 
 /** hub.yaml 里的一组开关（F7）；点一下就是一次 [SceneRun]。 */

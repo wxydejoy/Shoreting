@@ -193,6 +193,17 @@ class HubPreferences(private val context: Context) {
         }
     }
 
+    /** 熔屏去重（协议增补提案）：已执行过的 requested_at。字符串原样记，不比大小。 */
+    val lastLockRequestedAt: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_LAST_LOCK_REQUESTED_AT] ?: ""
+    }
+
+    suspend fun saveLastLockRequestedAt(at: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_LAST_LOCK_REQUESTED_AT] = at
+        }
+    }
+
     suspend fun save(connection: HubConnection) {
         context.dataStore.edit { prefs ->
             prefs[KEY_HOST] = connection.host.trim()
@@ -376,6 +387,7 @@ class HubPreferences(private val context: Context) {
         private val KEY_MIRROR_ENABLED = booleanPreferencesKey("mirror_enabled")
         private val KEY_MIRROR_APPS = stringPreferencesKey("mirror_apps")
         private val KEY_LAST_MIRROR_ID = intPreferencesKey("last_mirror_id")
+        private val KEY_LAST_LOCK_REQUESTED_AT = stringPreferencesKey("last_lock_requested_at")
 
         const val DEFAULT_HUB_SLEEP_DELAY_SEC = 60
         const val DEFAULT_HUB_RECONNECT_SEC = 15
