@@ -35,7 +35,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -52,7 +51,7 @@ import cn.weiekko.dock.data.TimerStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 
-/** 主屏最上面那层浮层：护暗、字幕、镜像、访客角标、睡眠黑幕、对话呼吸光、听写胶囊。 */
+/** 主屏最上面那层浮层：护暗、字幕、镜像、访客角标、睡眠黑幕、听写胶囊。 */
 @Composable
 internal fun BoxScope.ScreenOverlays(
     state: DockUiState,
@@ -121,18 +120,6 @@ internal fun BoxScope.ScreenOverlays(
         )
     }
 
-    // 免唤醒连续对话：底部中央一颗呼吸光球——「我在听」。
-    // 老版是屏幕边缘一圈描边，圆角跟屏幕物理圆角对不齐，观感很怪；
-    // 换成 Siri / Gemini 那类 orb：柔光晕 + 双色渐变核，不贴边就没有圆角问题。
-    if (state.conversationOpen && !state.hubSleeping && !editing) {
-        ConversationOrb(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 34.dp)
-                .zIndex(18f),
-        )
-    }
-
     if (voiceListening) {
         LiveWakeListeningChip(
             voice = voice,
@@ -141,49 +128,6 @@ internal fun BoxScope.ScreenOverlays(
                 .padding(start = 20.dp, bottom = 16.dp, end = 80.dp)
                 .zIndex(30f),
         )
-    }
-}
-
-/**
- * 免唤醒对话的呼吸光球：外层柔光晕随呼吸胀缩、透明度起伏，
- * 内核是主题色→辅助色的渐变小圆。窗口开着就一直呼吸，位置在底部中央——
- * 字幕在左下、听写胶囊在左下，右下是设备卡，中间这块是空的。
- */
-@Composable
-private fun ConversationOrb(modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
-    val infinite = rememberInfiniteTransition(label = "orb")
-    val breath = infinite.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "breath",
-    )
-    Box(modifier = modifier.size(68.dp), contentAlignment = Alignment.Center) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            // 呼吸：光晕 0.78–1.0 倍径向胀缩，透明度 0.14–0.32 起伏
-            val breathe = 0.78f + 0.22f * breath.value
-            val glowAlpha = 0.14f + 0.18f * breath.value
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        colors.primary.copy(alpha = glowAlpha),
-                        Color.Transparent,
-                    ),
-                ),
-                radius = size.minDimension / 2f * breathe,
-            )
-            drawCircle(
-                brush = Brush.sweepGradient(
-                    listOf(colors.primary, colors.tertiary, colors.primary),
-                ),
-                radius = size.minDimension * 0.19f * breathe,
-                alpha = 0.60f + 0.35f * breath.value,
-            )
-        }
     }
 }
 
