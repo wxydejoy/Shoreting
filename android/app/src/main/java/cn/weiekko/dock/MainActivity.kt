@@ -124,6 +124,12 @@ class MainActivity : ComponentActivity() {
                         exitHubSleep()
                         DockPower.wake(this@MainActivity)
                     }
+                    ScreenCommand.LockNow -> {
+                        // 协议增补提案 /v1/lock 的端上执行：设备管理员锁屏（真熄屏）。
+                        // 网关侧 lockEnabled 是第一道闸，这里不做二次确认——请求能到
+                        // 这里说明已过审批（见 DockViewModel.consumeLock 的去重）。
+                        DockPower.sleep(this@MainActivity)
+                    }
                 }
             }
         }
